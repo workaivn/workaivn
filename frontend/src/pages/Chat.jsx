@@ -1057,7 +1057,7 @@ async function runTool(item) {
   Nâng cấp ngay
 </button>
 
- button
+<button
   className="paywallClose"
   onClick={() => {
     setPaywallDismissed(true);   // 👈 thêm dòng này
