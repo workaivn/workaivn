@@ -6,10 +6,16 @@ import routes from "./routes.js";
 import { planGuard } from "./middleware/planGuard.js";
 
 app.use(cors({
-  origin: "*",
+  origin: [
+    "https://app.workaivn.com",
+    "https://workaivn.com",
+    "http://localhost:5173"
+  ],
   methods: ["GET","POST","PUT","DELETE","OPTIONS"],
   allowedHeaders: ["Content-Type","Authorization"]
 }));
+
+// 👇 BẮT BUỘC PHẢI CÓ
 app.options("*", cors());
 
 const app = express();
