@@ -1069,40 +1069,41 @@ router.get(
         filter.status = status;
       }
 
+      // 🔥 LẤY PAYMENT
       const list = await Payment.find(filter)
         .sort({ createdAt: -1 })
-        .limit(100);
+        .limit(100)
+        .lean(); // 👈 QUAN TRỌNG
 
-      // 🔥 FIX EMAIL Ở ĐÂY (QUAN TRỌNG NHẤT)
-      const result = await Promise.all(
-        list.map(async (p) => {
-          let email = "";
+      // 🔥 LẤY TẤT CẢ USER 1 LẦN (TRÁNH N+1)
+      const userIds = list.map(p => p.userId);
 
-          try {
-            const user = await User.findById(p.userId);
-            email = user?.email || "";
-          } catch {}
+      const users = await User.find({
+        _id: { $in: userIds }
+      }).lean();
 
-          return {
-            _id: p._id,
-            userId: p.userId,
-            email,
-            amount: p.amount || 0,
-            plan: p.plan || "free",
-            status: p.status || "pending",
-            createdAt: p.createdAt
-          };
-        })
-      );
+      // 🔥 TẠO MAP
+      const userMap = {};
+      users.forEach(u => {
+        userMap[String(u._id)] = u.email;
+      });
+
+      // 🔥 GHÉP EMAIL
+      const result = list.map(p => ({
+        _id: p._id,
+        userId: p.userId,
+        email: userMap[String(p.userId)] || "",
+        amount: p.amount || 0,
+        plan: p.plan || "free",
+        status: p.status || "pending",
+        createdAt: p.createdAt
+      }));
 
       return res.json(result);
 
     } catch (err) {
       console.log("ADMIN BILLINGS ERROR:", err);
-
-      return res.status(500).json({
-        error: "load fail"
-      });
+      return res.status(500).json({ error: "load fail" });
     }
   }
 );
