@@ -8,8 +8,9 @@ import Composer from "../components/Composer";
 import MessageList from "../components/MessageList";
 
 import { apiGet, apiPost } from "../services/api";
-const [paywallDismissed, setPaywallDismissed] = useState(false);
+
 export default function Chat({ tab, setTab }) {
+const [paywallDismissed, setPaywallDismissed] = useState(false);
 const [usage, setUsage] =
   useState(null);
   const [messages, setMessages] = useState([]);
@@ -173,20 +174,16 @@ const [usage, setUsage] =
   if (!prompt.trim()) return;
 
   /* PAYWALL CHECK */
-  if (
-    usage?.plan ===
-      "free" &&
-    (usage?.used?.chat ||
-      0) >=
-      (usage?.limits
-        ?.chatPerDay ||
-        0)
-  ) {
-    setShowPaywall(
-      true
-    );
-    return;
+ if (
+  usage?.plan === "free" &&
+  (usage?.used?.chat || 0) >=
+  (usage?.limits?.chatPerDay || 0)
+) {
+  if (!paywallDismissed) {
+    setShowPaywall(true);
   }
+  return;
+}
 
   const imgTool =
     detectImageIntent(
