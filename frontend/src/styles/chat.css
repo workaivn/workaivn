@@ -2906,3 +2906,29 @@ UPGRADE MODAL
 .paywallClose {
   flex: 1;
 }
+.paywallActions {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.paywallBtn,
+.paywallClose {
+  flex: 1;
+  padding: 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+/* nút chính */
+.paywallBtn {
+  background: #4f46e5;
+  color: white;
+  border: none;
+}
+
+/* nút phụ */
+.paywallClose {
+  background: #f1f5f9;
+  border: none;
+}
