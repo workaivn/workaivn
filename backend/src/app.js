@@ -5,6 +5,13 @@ import path from "path";
 import routes from "./routes.js";
 import { planGuard } from "./middleware/planGuard.js";
 
+app.use(cors({
+  origin: "*",
+  methods: ["GET","POST","PUT","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type","Authorization"]
+}));
+app.options("*", cors());
+
 const app = express();
 
 /* =========================
@@ -20,12 +27,6 @@ app.use(
     limit: "50mb"
   })
 );
-
-app.use(cors({
-  origin: "*",
-  methods: ["GET","POST","PUT","DELETE","OPTIONS"],
-  allowedHeaders: ["Content-Type","Authorization"]
-}));
 
 app.use(
   express.urlencoded({
