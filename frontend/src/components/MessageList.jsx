@@ -5,6 +5,18 @@ useState
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+function fixCodeBlock(text = "") {
+  const count = (text.match(/```/g) || []).length;
+
+  // nếu số ``` là lẻ → thiếu đóng
+  if (count % 2 !== 0) {
+    return text + "\n```";
+  }
+
+  return text;
+}
+
+
 function CodeBlock({
 inline,
 className,
@@ -155,15 +167,13 @@ className="chatImg"
 />
 ):(
 <ReactMarkdown
-remarkPlugins={[
-remarkGfm
-]}
-components={{
-code:CodeBlock,
-a:LinkRenderer
-}}
+  remarkPlugins={[remarkGfm]}
+  components={{
+    code: CodeBlock,
+    a: LinkRenderer
+  }}
 >
-{content}
+  {fixCodeBlock(content)}
 </ReactMarkdown>
 )}
 
