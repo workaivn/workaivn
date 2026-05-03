@@ -409,7 +409,7 @@ router.post(
           Buffer.from(b64, "base64")
         );
 
-        imageUrl = fileUrl(fileName);
+        imageUrl = fileUrl(fileName, req);
 
         const newId = await saveChat(
           req,
@@ -451,7 +451,7 @@ router.post(
           .toFile(outPath);
       }
 
-      imageUrl = fileUrl(outName);
+      imageUrl = fileUrl(outName, req);
 
       const newId = await saveChat(
         req,
