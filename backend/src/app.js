@@ -5,41 +5,20 @@ import path from "path";
 import routes from "./routes.js";
 import { planGuard } from "./middleware/planGuard.js";
 
+const app = express(); // 👈 PHẢI ĐẶT LÊN TRƯỚC
+
+// ✅ CORS đặt ngay sau khi tạo app
 app.use(cors({
-  origin: [
-    "https://app.workaivn.com",
-    "https://workaivn.com",
-    "http://localhost:5173"
-  ],
+  origin: "*",
   methods: ["GET","POST","PUT","DELETE","OPTIONS"],
   allowedHeaders: ["Content-Type","Authorization"]
 }));
 
-// 👇 BẮT BUỘC PHẢI CÓ
 app.options("*", cors());
 
-const app = express();
-
-/* =========================
-   TRUST PROXY
-========================= */
-app.set("trust proxy", 1);
-
-/* =========================
-   BODY PARSER
-========================= */
-app.use(
-  express.json({
-    limit: "50mb"
-  })
-);
-
-app.use(
-  express.urlencoded({
-    extended: true,
-    limit: "50mb"
-  })
-);
+// 👇 sau đó mới tới body parser
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 /* =========================
    CORS
