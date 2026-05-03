@@ -9,12 +9,18 @@ const app = express();
 
 // ✅ CORS DUY NHẤT
 app.use(cors({
-  origin: "*",
-  methods: ["GET","POST","PUT","DELETE","OPTIONS"],
-  allowedHeaders: ["Content-Type","Authorization"]
+  origin: [
+    "https://workaivn.vercel.app",
+    "https://workaivn.com",
+    "https://www.workaivn.com",
+    "https://app.workaivn.com",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173"
+  ],
+  credentials: true,
+  allowedHeaders: ["Content-Type", "Authorization"],
+  methods: ["GET","POST","PUT","DELETE","OPTIONS"]
 }));
-
-app.options("*", cors());
 
 // BODY
 app.use(express.json({ limit: "50mb" }));
