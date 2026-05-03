@@ -1088,10 +1088,7 @@ router.get(
           status;
       }
 
-      const list =
-        await Billing.find(
-          filter
-        )
+      const list = await Payment.find(filter)
           .sort({
             createdAt:
               -1
