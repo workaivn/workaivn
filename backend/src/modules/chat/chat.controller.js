@@ -3,7 +3,11 @@ import jwt from "jsonwebtoken";
 
 function getUserId(req) {
   try {
-    const token = req.headers.authorization;
+    const authHeader = req.headers.authorization || "";
+
+  	const token = authHeader.startsWith("Bearer ")
+  	  ? authHeader.slice(7)
+  	  : authHeader;
     if (!token) return null;
 
     const decoded = jwt.verify(
