@@ -397,7 +397,9 @@ router.post(
           size: "1024x1024"
         });
 
-        const b64 = result.data?.[0]?.b64_json;
+        console.log("IMAGE RESULT:", result);     // 👈 THÊM
+	    const b64 = result.data?.[0]?.b64_json;
+	    console.log("B64:", b64);                 // 👈 THÊM
 
         if (!b64) {
           throw new Error("Create image fail");
@@ -405,11 +407,13 @@ router.post(
 
         const fileName = `img_${Date.now()}.png`;
         const savePath = path.join(FILE_DIR, fileName);
+		console.log("SAVE PATH:", savePath);        // 👈 THÊM
 
         fs.writeFileSync(
           savePath,
           Buffer.from(b64, "base64")
         );
+		console.log("FILE EXISTS:", fs.existsSync(savePath)); // 👈 THÊM
 
         imageUrl = fileUrl(fileName, req);
 
@@ -1514,6 +1518,7 @@ router.get(
 
     } catch (err) {
       console.log(err);
+	  console.log("IMAGE ERROR FULL:", err);
       res.status(500).json({
         error: "chart fail"
       });
