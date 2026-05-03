@@ -142,7 +142,7 @@ async function askGroq(
         body: JSON.stringify(
           {
             model:
-              "llama3-8b-8192",
+              "llama3-70b-8192",
             messages: [
               {
                 role:
