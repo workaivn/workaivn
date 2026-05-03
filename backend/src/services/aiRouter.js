@@ -1,10 +1,8 @@
-// backend/src/services/aiRouter.js
-
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 /* =========================
-   INIT CLIENTS
+   INIT
 ========================= */
 
 const openai = new OpenAI({
@@ -16,7 +14,7 @@ const gemini = new GoogleGenerativeAI(
 );
 
 /* =========================
-   MAIN ROUTER (PRODUCTION)
+   MAIN ROUTER
 ========================= */
 
 export async function askAI({
@@ -24,98 +22,132 @@ export async function askAI({
   mode = "chat",
   plan = "free"
 }) {
-  console.log("=== AI ROUTER START ===");
-  console.log("PLAN:", plan);
+  console.log("=== AI ROUTER ===", mode, plan);
 
-  // 🔥 1. GROQ (ưu tiên free & nhanh)
-  try {
-    const r = await askGroq(prompt);
-    if (r) {
-      console.log("✅ GROQ OK");
-      return r;
+  // 🔥 PRO USER → OpenAI trước
+  if (plan !== "free") {
+    try {
+      const r = await askOpenAI(prompt, mode);
+      if (r) return r;
+    } catch (e) {
+      console.log("OPENAI FAIL:", e.message);
     }
-  } catch (e) {
-    console.log("❌ GROQ FAIL:", e.message);
   }
 
-  // 🔥 2. GEMINI
+  // 🔥 FREE → Gemini
   try {
-    const r = await askGemini(prompt);
-    if (r) {
-      console.log("✅ GEMINI OK");
-      return r;
-    }
+    const r = await askGemini(prompt, mode);
+    if (r) return r;
   } catch (e) {
-    console.log("❌ GEMINI FAIL:", e.message);
+    console.log("GEMINI FAIL:", e.message);
   }
 
-  // 🔥 3. OPENAI (fallback cuối)
+  // 🔥 fallback → Groq
   try {
-    const r = await askOpenAI(prompt);
-    if (r) {
-      console.log("✅ OPENAI OK");
-      return r;
-    }
+    const r = await askGroq(prompt, mode);
+    if (r) return r;
   } catch (e) {
-    console.log("❌ OPENAI FAIL:", e.message);
+    console.log("GROQ FAIL:", e.message);
   }
 
-  return "Hệ thống AI đang quá tải, thử lại sau.";
+  // 🔥 cuối cùng thử lại OpenAI
+  try {
+    const r = await askOpenAI(prompt, mode);
+    if (r) return r;
+  } catch (e) {
+    console.log("OPENAI FINAL FAIL:", e.message);
+  }
+
+  return "Hệ thống AI đang bận, thử lại sau.";
 }
 
 /* =========================
-   OPENAI
+   SYSTEM PROMPT
 ========================= */
 
-async function askOpenAI(prompt) {
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }]
-    });
+function getSystemPrompt(mode) {
+  if (mode === "code") {
+    return `
+Bạn là senior software engineer.
 
-    return r?.choices?.[0]?.message?.content || "";
-
-  } catch (err) {
-    console.log("OPENAI ERROR:", err.message);
-    throw err;
+YÊU CẦU:
+- Trả về FULL CODE
+- Không giải thích
+- Không cắt bớt
+- Code chạy được ngay
+`;
   }
+
+  if (mode === "file") {
+    return `
+Bạn là AI phân tích tài liệu.
+
+- Trả lời rõ ràng
+- Có cấu trúc
+- Không quá ngắn
+`;
+  }
+
+  return `
+Bạn là trợ lý AI thông minh cho người Việt.
+
+- Trả lời rõ ràng
+- Đầy đủ
+- Không lan man
+`;
+}
+
+/* =========================
+   OPENAI (BEST)
+========================= */
+
+async function askOpenAI(prompt, mode) {
+  const system = getSystemPrompt(mode);
+
+  const r = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: prompt }
+    ],
+    max_tokens: 2000,     // 🔥 FIX NGẮN
+    temperature: 0.7
+  });
+
+  return r?.choices?.[0]?.message?.content || "";
 }
 
 /* =========================
    GEMINI
 ========================= */
 
-async function askGemini(prompt) {
-  try {
-    const model = gemini.getGenerativeModel({
-      model: "gemini-1.5-flash"
-    });
+async function askGemini(prompt, mode) {
+  const model = gemini.getGenerativeModel({
+    model: "gemini-1.5-flash"
+  });
 
-    const r = await model.generateContent(prompt);
+  const fullPrompt =
+    getSystemPrompt(mode) + "\n\n" + prompt;
 
-    return r?.response?.text() || "";
+  const r = await model.generateContent(fullPrompt);
 
-  } catch (err) {
-    console.log("GEMINI ERROR:", err.message);
-    throw err;
-  }
+  return r?.response?.text() || "";
 }
 
 /* =========================
-   GROQ (MULTI MODEL SAFE)
+   GROQ
 ========================= */
 
-async function askGroq(prompt) {
+async function askGroq(prompt, mode) {
   const models = [
-    "llama-3.1-8b-instant",
-    "llama-3.1-70b-versatile"
+    "llama-3.1-8b-instant"
   ];
+
+  const fullPrompt =
+    getSystemPrompt(mode) + "\n\n" + prompt;
 
   for (const model of models) {
     try {
-      console.log("👉 Trying Groq:", model);
-
       const r = await fetch(
         "https://api.groq.com/openai/v1/chat/completions",
         {
@@ -127,23 +159,25 @@ async function askGroq(prompt) {
           },
           body: JSON.stringify({
             model,
-            messages: [{ role: "user", content: prompt }]
+            messages: [
+              {
+                role: "user",
+                content: fullPrompt
+              }
+            ],
+            max_tokens: 2000
           })
         }
       );
 
       const d = await r.json();
 
-      console.log("GROQ RAW:", d);
-
       if (d?.choices?.[0]?.message?.content) {
         return d.choices[0].message.content;
       }
 
-    } catch (err) {
-      console.log("❌ Groq model fail:", model, err.message);
-    }
+    } catch {}
   }
 
-  throw new Error("Groq failed all models");
+  throw new Error("Groq failed");
 }
