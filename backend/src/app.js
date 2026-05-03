@@ -5,9 +5,9 @@ import path from "path";
 import routes from "./routes.js";
 import { planGuard } from "./middleware/planGuard.js";
 
-const app = express(); // 👈 PHẢI ĐẶT LÊN TRƯỚC
+const app = express();
 
-// ✅ CORS đặt ngay sau khi tạo app
+// ✅ CORS DUY NHẤT
 app.use(cors({
   origin: "*",
   methods: ["GET","POST","PUT","DELETE","OPTIONS"],
@@ -16,102 +16,22 @@ app.use(cors({
 
 app.options("*", cors());
 
-// 👇 sau đó mới tới body parser
+// BODY
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-/* =========================
-   CORS
-========================= */
-app.use(
-  cors({
-    origin: [
-      "https://workaivn.vercel.app", // 👈 QUAN TRỌNG NHẤT
-      "https://workaivn.com",
-      "https://www.workaivn.com",
-      "https://app.workaivn.com",
-      "http://localhost:5173",
-      "http://127.0.0.1:5173"
-    ],
-    credentials: true
-  })
-);
-
-/* =========================
-   HEALTH CHECK
-========================= */
-app.get("/", (req, res) => {
-  res.json({
-    ok: true,
-    name: "WorkAI VN API",
-    secure:
-      req.secure,
-    host:
-      req.headers.host,
-    time:
-      new Date()
-  });
+// TEST ROUTE (để debug)
+app.get("/api/test", (req,res)=>{
+  res.json({ ok:true });
 });
 
-/* =========================
-   STATIC GENERATED FILES
-========================= */
-app.use(
-  "/files",
-  express.static(
-    path.join(
-      process.cwd(),
-      "generated"
-    )
-  )
-);
+// ROUTES
+app.use("/api", planGuard);
+app.use("/api", routes);
 
-/* =========================
-   API ROUTES
-========================= */
-app.use(
-  "/api",
-  planGuard
-);
-
-app.use(
-  "/api",
-  routes
-);
-
-/* =========================
-   404
-========================= */
-app.use(
-  (req, res) => {
-    res.status(404).json({
-      error:
-        "Not Found"
-    });
-  }
-);
-
-/* =========================
-   ERROR HANDLER
-========================= */
-app.use(
-  (
-    err,
-    req,
-    res,
-    next
-  ) => {
-    console.log(
-      "APP ERROR:",
-      err
-    );
-
-    res.status(500).json({
-      error:
-        err.message ||
-        "Server error"
-    });
-  }
-);
+// ROOT
+app.get("/", (req, res) => {
+  res.json({ ok: true });
+});
 
 export default app;
