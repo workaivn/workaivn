@@ -228,10 +228,9 @@ function fileUrl(name, req) {
   return `${base}/files/${name}`;
 }
 
-function fileMsg(icon, name) {
+function fileMsg(icon, name, req) {
   return `${icon} **${name}**
-
-[⬇ Download file](${fileUrl(name)})`;
+[⬇ Download file](${fileUrl(name, req)})`;
 }
 
 async function saveChat(
