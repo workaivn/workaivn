@@ -8,7 +8,7 @@ import Composer from "../components/Composer";
 import MessageList from "../components/MessageList";
 
 import { apiGet, apiPost } from "../services/api";
-
+const [paywallDismissed, setPaywallDismissed] = useState(false);
 export default function Chat({ tab, setTab }) {
 const [usage, setUsage] =
   useState(null);
@@ -51,27 +51,21 @@ const [usage, setUsage] =
     });
   }, [messages]);
   
-  useEffect(() => {
+ useEffect(() => {
   if (!usage) return;
+  if (paywallDismissed) return;  // 👈 CHẶN
 
-  const used =
-    usage?.used?.chat || 0;
-
-  const limit =
-    usage?.limits
-      ?.chatPerDay || 0;
+  const used = usage?.used?.chat || 0;
+  const limit = usage?.limits?.chatPerDay || 0;
 
   if (
-    usage.plan ===
-      "free" &&
+    usage.plan === "free" &&
     limit > 0 &&
     used >= limit
   ) {
-    setShowPaywall(
-      true
-    );
+    setShowPaywall(true);
   }
-}, [usage]);
+}, [usage, paywallDismissed]);
 
   /* ==================================================
      API
@@ -1052,24 +1046,29 @@ async function runTool(item) {
 
    <div className="paywallActions">
   <button
-    className="paywallBtn"
-    onClick={() => {
-      setShowPaywall(false);
-      setTab("chat");
-      document
-        .querySelector(".upgradeBtn")
-        ?.click();
-    }}
-  >
-    Nâng cấp ngay
-  </button>
+  className="paywallBtn"
+  onClick={() => {
+    setPaywallDismissed(true);   // 👈 QUAN TRỌNG
+    setShowPaywall(false);
+    setTab("chat");
 
-  <button
-    className="paywallClose"
-    onClick={() => setShowPaywall(false)}
-  >
-    Để sau
-  </button>
+    document
+      .querySelector(".upgradeBtn")
+      ?.click();
+  }}
+>
+  Nâng cấp ngay
+</button>
+
+ button
+  className="paywallClose"
+  onClick={() => {
+    setPaywallDismissed(true);   // 👈 thêm dòng này
+    setShowPaywall(false);
+  }}
+>
+  Để sau
+</button>
 </div>
 
   </div>
