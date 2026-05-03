@@ -11,10 +11,16 @@ const getToken = () => {
 export function apiGet(url) {
   const token = localStorage.getItem("token");
 
+  const headers = {
+    "Content-Type": "application/json"
+  };
+
+  if (token) {
+    headers["Authorization"] = "Bearer " + token;
+  }
+
   return fetch(API + url, {
-    headers: {
-      "Authorization": "Bearer " + token
-    }
+    headers
   });
 }
 
