@@ -2892,3 +2892,17 @@ UPGRADE MODAL
 .paywallWrap {
   backdrop-filter: blur(4px);
 }
+
+.paywallActions {
+  display: flex;
+  gap: 12px;           /* 👈 khoảng cách */
+  margin-top: 20px;
+}
+
+.paywallBtn {
+  flex: 1;
+}
+
+.paywallClose {
+  flex: 1;
+}
