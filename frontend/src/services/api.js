@@ -10,7 +10,7 @@ const getToken = () => {
 
 export function apiGet(url) {
   const token = localStorage.getItem("token");
-
+console.log("TOKEN IN apiGet:", token);   // 👈 THÊM
   const headers = {
     "Content-Type": "application/json"
   };
