@@ -10,6 +10,7 @@ import MessageList from "../components/MessageList";
 import { apiGet, apiPost } from "../services/api";
 
 export default function Chat({ tab, setTab }) {
+const paywallBlockedRef = useRef(false);   // 👈 THÊM NGAY ĐÂY
 const [paywallDismissed, setPaywallDismissed] = useState(false);
 const [usage, setUsage] =
   useState(null);
@@ -52,9 +53,9 @@ const [usage, setUsage] =
     });
   }, [messages]);
   
- useEffect(() => {
+useEffect(() => {
   if (!usage) return;
-  if (paywallDismissed) return;  // 👈 CHẶN
+  if (paywallBlockedRef.current) return;  // 🔥 CHẶN CỨNG
 
   const used = usage?.used?.chat || 0;
   const limit = usage?.limits?.chatPerDay || 0;
@@ -66,7 +67,7 @@ const [usage, setUsage] =
   ) {
     setShowPaywall(true);
   }
-}, [usage, paywallDismissed]);
+}, [usage]);
 
   /* ==================================================
      API
@@ -1045,7 +1046,7 @@ async function runTool(item) {
   <button
   className="paywallBtn"
   onClick={() => {
-    setPaywallDismissed(true);   // 👈 QUAN TRỌNG
+    paywallBlockedRef.current = true;  // 🔥 CHẶN LUÔN
     setShowPaywall(false);
     setTab("chat");
 
@@ -1060,7 +1061,7 @@ async function runTool(item) {
 <button
   className="paywallClose"
   onClick={() => {
-    setPaywallDismissed(true);   // 👈 thêm dòng này
+    paywallBlockedRef.current = true;  // 🔥 CHẶN LUÔN
     setShowPaywall(false);
   }}
 >
