@@ -220,8 +220,9 @@ function todayKey() {
   return `${y}-${m}-${d}`;
 }
 
-function fileUrl(name) {
-  return `http://localhost:3000/files/${name}`;
+function fileUrl(name, req) {
+  const baseUrl = `${req.protocol}://${req.get("host")}`;
+  return `${baseUrl}/files/${name}`;
 }
 
 function fileMsg(icon, name) {
