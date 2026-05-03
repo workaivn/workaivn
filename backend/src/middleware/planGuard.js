@@ -4,6 +4,16 @@
 
 import User from "../modules/auth/auth.model.js";
 
+const publicPaths = [
+  "/api/register",
+  "/api/login"
+];
+
+if (publicPaths.includes(req.originalUrl)) {
+  return next();
+}
+
+
 export async function planGuard(
   req,
   res,
