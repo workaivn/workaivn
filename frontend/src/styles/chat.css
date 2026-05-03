@@ -2932,3 +2932,51 @@ UPGRADE MODAL
   background: #f1f5f9;
   border: none;
 }
+
+.codeWrap {
+  background: #0f172a;
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 12px 0;
+  border: 1px solid #1e293b;
+}
+
+.codeTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 12px;
+  background: #1e293b;
+  color: #cbd5f5;
+  border-bottom: 1px solid #334155; /* 👈 QUAN TRỌNG */
+}
+
+.codeLang {
+  opacity: 0.8;
+}
+
+.codeBtn {
+  background: #334155;
+  border: none;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.codeBtn:hover {
+  background: #475569;
+}
+
+pre {
+  margin: 0;
+  padding: 14px;   /* 👈 tăng padding */
+  overflow-x: auto;
+  background: #020617;
+}
+
+code {
+  font-size: 13px;
+  line-height: 1.6;  /* 👈 dễ đọc hơn */
+}
