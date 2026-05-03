@@ -702,32 +702,31 @@ PROMPT AI
 
 let ask="";
 
-if(isCodeFile){
-
-ask = `
+if (isCodeFile) {
+  ask = `
 Bạn là senior software engineer.
 
-Người dùng upload source code.
-
 Nhiệm vụ:
-- Đọc toàn bộ code
-- Tìm bug
-- Chỉ vị trí lỗi
-- Giải thích nguyên nhân
-- Viết code sửa hoàn chỉnh
-- Tối ưu code nếu cần
-- Trả lời như ChatGPT coder chuyên nghiệp
+- Đọc code
+- Sửa lỗi
+- Tối ưu
 
-Tên file:
+QUAN TRỌNG:
+- CHỈ trả FULL CODE
+- KHÔNG giải thích
+
+FORMAT:
+
+\`\`\`js
+// FULL CODE
+\`\`\`
+
+FILE:
 ${file.originalname}
 
-Yêu cầu:
-${prompt || "Phân tích file code này"}
-
-SOURCE CODE:
+CODE:
 ${text}
 `;
-
 }else{
 
 ask =
