@@ -1,50 +1,36 @@
-// ============================================
-// AUTO HẾT HẠN PRO -> FREE
-// ============================================
-
 import User from "../modules/auth/auth.model.js";
 
-const publicPaths = [
-  "/api/register",
-  "/api/login"
-];
-
-if (publicPaths.includes(req.originalUrl)) {
-  return next();
-}
-
-
-export async function planGuard(
-  req,
-  res,
-  next
-) {
+export async function planGuard(req, res, next) {
   try {
+
+    // ✅ PUBLIC ROUTES (đặt đúng trong function)
+    const publicPaths = [
+      "/api/register",
+      "/api/login"
+    ];
+
+    if (publicPaths.includes(req.path)) {
+      return next();
+    }
+
     const authHeader = req.headers.authorization || "";
 
-	const token = authHeader.startsWith("Bearer ")
-	  ? authHeader.slice(7)
-	  : authHeader;
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : authHeader;
 
     if (!token) {
       return next();
     }
 
-    const jwt =
-      (await import(
-        "jsonwebtoken"
-      )).default;
+    const jwt = (await import("jsonwebtoken")).default;
 
-    const decoded =
-      jwt.verify(
-        token,
-        process.env.JWT_SECRET
-      );
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET
+    );
 
-    const user =
-      await User.findById(
-        decoded.id
-      );
+    const user = await User.findById(decoded.id);
 
     if (!user) {
       return next();
@@ -53,21 +39,17 @@ export async function planGuard(
     if (
       user.plan === "pro" &&
       user.planExpireAt &&
-      new Date() >
-        new Date(
-          user.planExpireAt
-        )
+      new Date() > new Date(user.planExpireAt)
     ) {
       user.plan = "free";
-      user.planExpireAt =
-        null;
-
+      user.planExpireAt = null;
       await user.save();
     }
 
     next();
 
-  } catch {
+  } catch (err) {
+    console.log("planGuard error:", err);
     next();
   }
 }
