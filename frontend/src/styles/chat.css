@@ -2859,3 +2859,36 @@ UPGRADE MODAL
 
   z-index: 9999;          /* 👈 luôn nổi trên */
 }
+
+.paywallWrap {
+  position: fixed;        /* 🔥 QUAN TRỌNG NHẤT */
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  background: rgba(0,0,0,0.4); /* overlay mờ */
+
+  z-index: 9999;
+}
+
+.paywallBox {
+  width: 360px;
+  max-width: 90%;
+
+  background: #fff;
+  border-radius: 16px;
+  padding: 24px;
+
+  box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+
+  text-align: center;
+}
+
+.paywallWrap {
+  backdrop-filter: blur(4px);
+}
