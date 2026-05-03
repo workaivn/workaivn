@@ -34,6 +34,7 @@ app.use(
 app.use(
   cors({
     origin: [
+      "https://workaivn.vercel.app", // 👈 QUAN TRỌNG NHẤT
       "https://workaivn.com",
       "https://www.workaivn.com",
       "https://app.workaivn.com",
