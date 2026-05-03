@@ -1050,29 +1050,27 @@ async function runTool(item) {
       ✔ Ưu tiên AI mạnh hơn
     </div>
 
-    <button
-      className="paywallBtn"
-      onClick={() => {
-        setShowPaywall(false);
-        setTab("chat");
-        document
-          .querySelector(
-            ".upgradeBtn"
-          )
-          ?.click();
-      }}
-    >
-      Nâng cấp ngay
-    </button>
+   <div className="paywallActions">
+  <button
+    className="paywallBtn"
+    onClick={() => {
+      setShowPaywall(false);
+      setTab("chat");
+      document
+        .querySelector(".upgradeBtn")
+        ?.click();
+    }}
+  >
+    Nâng cấp ngay
+  </button>
 
-    <button
-      className="paywallClose"
-      onClick={() =>
-        setShowPaywall(false)
-      }
-    >
-      Để sau
-    </button>
+  <button
+    className="paywallClose"
+    onClick={() => setShowPaywall(false)}
+  >
+    Để sau
+  </button>
+</div>
 
   </div>
 
