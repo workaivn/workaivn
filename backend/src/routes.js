@@ -221,8 +221,11 @@ function todayKey() {
 }
 
 function fileUrl(name, req) {
-  const baseUrl = `${req.protocol}://${req.get("host")}`;
-  return `${baseUrl}/files/${name}`;
+  const base =
+    process.env.BASE_URL ||
+    `https://${req.get("host")}`;
+
+  return `${base}/files/${name}`;
 }
 
 function fileMsg(icon, name) {
