@@ -26,6 +26,20 @@ app.use(cors({
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
+/* =========================
+   STATIC GENERATED FILES
+========================= */
+app.use(
+  "/files",
+  express.static(
+    path.join(
+      process.cwd(),
+      "generated"
+    )
+  )
+);
+
+
 // TEST ROUTE (để debug)
 app.get("/api/test", (req,res)=>{
   res.json({ ok:true });
