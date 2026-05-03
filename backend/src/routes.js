@@ -1062,39 +1062,38 @@ router.get(
   isAdmin,
   async (req, res) => {
     try {
-      const q = String(req.query.q || "").trim().toLowerCase();
       const status = String(req.query.status || "").trim();
 
-      // 🔥 chỉ filter theo status (KHÔNG filter email trực tiếp)
       const filter = {};
       if (status) {
         filter.status = status;
       }
 
-      // 🔥 lấy payment + join user
       const list = await Payment.find(filter)
-        .populate("userId", "email")   // 👈 QUAN TRỌNG
         .sort({ createdAt: -1 })
-        .limit(100)
-        .lean();
+        .limit(100);
 
-      // 🔥 map dữ liệu + search email nếu có q
-      let result = list.map(p => ({
-        _id: p._id,
-        userId: p.userId?._id || null,
-        email: p.userId?.email || "",
-        amount: p.amount || 0,
-        plan: p.plan || "free",
-        status: p.status || "pending",
-        createdAt: p.createdAt
-      }));
+      // 🔥 FIX EMAIL Ở ĐÂY (QUAN TRỌNG NHẤT)
+      const result = await Promise.all(
+        list.map(async (p) => {
+          let email = "";
 
-      // 🔥 search email ở đây (KHÔNG dùng Mongo filter)
-      if (q) {
-        result = result.filter(x =>
-          x.email.toLowerCase().includes(q)
-        );
-      }
+          try {
+            const user = await User.findById(p.userId);
+            email = user?.email || "";
+          } catch {}
+
+          return {
+            _id: p._id,
+            userId: p.userId,
+            email,
+            amount: p.amount || 0,
+            plan: p.plan || "free",
+            status: p.status || "pending",
+            createdAt: p.createdAt
+          };
+        })
+      );
 
       return res.json(result);
 
