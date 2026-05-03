@@ -158,7 +158,7 @@ async function askGroq(
 
   const d =
     await r.json();
-
+console.log("GROQ RAW:", d);   // 👈 thêm dòng này
   return (
     d.choices?.[0]
       ?.message
