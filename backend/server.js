@@ -4,6 +4,15 @@ import connectDB from "./src/config/db.js";
 import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
+import express from "express";
+import healthRoute from "./src/routes/health.js";
+const app = express();
+
+healthRoute(app);
+
+app.listen(5000, () => {
+  console.log("Server running...");
+});
 
 // ✅ FIX CORS FULL
 const allowedOrigins = [
