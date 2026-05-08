@@ -551,10 +551,13 @@ if (fileInputRef.current) {
         role: "user",
         content: prompt
       },
+	  
+	  /*
       {
         role: "assistant",
         content: "Đang tạo ảnh..."
       }
+	  */
     ]);
 
     setLoadingType("image");
