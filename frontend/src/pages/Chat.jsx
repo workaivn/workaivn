@@ -600,6 +600,7 @@ if (fileInputRef.current) {
 
 		const d = await r.json();
 
+
 		setMessages((prev) => {
 		  const copy = [...prev];
 
@@ -613,6 +614,8 @@ if (fileInputRef.current) {
 
 		  return copy;
 		});
+
+
 
 
 
