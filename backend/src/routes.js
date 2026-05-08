@@ -220,6 +220,7 @@ function todayKey() {
   return `${y}-${m}-${d}`;
 }
 
+/* func cu
 function fileUrl(name, req) {
   const base =
     process.env.BASE_URL ||
@@ -232,6 +233,42 @@ function fileMsg(icon, name, req) {
   return `${icon} **${name}**
 [⬇ Download file](${fileUrl(name, req)})`;
 }
+
+*/
+
+function fileUrl(name, req) {
+
+  if (
+    process.env.BASE_URL
+  ) {
+    return `${process.env.BASE_URL}/files/${name}`;
+  }
+
+  const host =
+    req.get("host");
+
+  const isLocal =
+    host.includes(
+      "localhost"
+    ) ||
+    host.includes(
+      "127.0.0.1"
+    );
+
+  const protocol =
+    isLocal
+      ? "http"
+      : "https";
+
+  return `${protocol}://${host}/files/${name}`;
+}
+
+function fileMsg(icon, name, req) {
+  return `${icon} **${name}**
+[⬇ Download file](${fileUrl(name, req)})`;
+}
+
+
 
 async function saveChat(
   req,
@@ -347,6 +384,22 @@ router.post(
   "/login",
   auth.login
 );
+
+router.get(
+  "/me",
+  auth.me
+);
+
+router.put(
+  "/me",
+  auth.updateMe
+);
+
+router.put(
+  "/me/password",
+  auth.changePassword
+);
+
 
 /* =========================
    CHAT
@@ -479,6 +532,108 @@ router.post(
     }
   }
 );
+
+
+
+router.post(
+  "/upload-avatar",
+  upload.single("file"),
+  async (req, res) => {
+
+    try {
+
+      const userId =
+        getUserId(req);
+
+      if (!userId) {
+        return res
+          .status(401)
+          .json({
+            error:
+              "Unauthorized"
+          });
+      }
+
+      if (!req.file) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "No file"
+          });
+      }
+
+      const ext =
+        path.extname(
+          req.file.originalname
+        ) || ".png";
+
+      const fileName =
+        `avatar_${Date.now()}${ext}`;
+
+      const savePath =
+        path.join(
+          FILE_DIR,
+          fileName
+        );
+
+      await sharp(req.file.path)
+        .resize(300, 300)
+        .jpeg({
+          quality: 90
+        })
+        .toFile(savePath);
+
+      fs.unlinkSync(
+        req.file.path
+      );
+
+      const avatar =
+        fileUrl(
+          fileName,
+          req
+        );
+
+      const user =
+        await User.findById(
+          userId
+        );
+
+      if (user) {
+
+        user.avatar =
+          avatar;
+
+        await user.save();
+      }
+
+      return res.json({
+        ok: true,
+        avatar
+      });
+
+    } catch (e) {
+
+      console.log(
+        "UPLOAD AVATAR ERROR:",
+        e
+      );
+
+      return res
+        .status(500)
+        .json({
+          error:
+            "upload fail"
+        });
+
+    }
+
+  }
+);
+
+
+
+
 
 /* =========================
    FILE UPLOAD
@@ -989,75 +1144,139 @@ router.delete(
 );
 
 
-// ADMIN APPROVE BILLING
-
 router.post(
-  "/admin/upgrade/:id/approve",
-  isAdmin,
+  "/admin/upgrade/:id/reject",
   async (req, res) => {
+
     try {
 
-      const bill =
-        await Billing.findById(
+      const payment =
+        await Payment.findById(
           req.params.id
         );
 
-      if (!bill) {
+      if (!payment) {
         return res
           .status(404)
           .json({
             error:
-              "Not found"
+              "Payment not found"
           });
       }
 
-      const user =
-        await User.findById(
-          bill.userId
-        );
+      payment.status =
+        "rejected";
 
-      if (!user) {
-        return res
-          .status(404)
-          .json({
-            error:
-              "User not found"
-          });
-      }
+      await payment.save();
 
-      user.plan = "pro";
-
-      user.planExpireAt =
-        new Date(
-          Date.now() +
-          30 *
-          24 *
-          60 *
-          60 *
-          1000
-        );
-
-      await user.save();
-
-      bill.status =
-        "approved";
-
-      await bill.save();
-
-      return res.json({
+      res.json({
         ok: true
       });
 
     } catch {
-      return res
-        .status(500)
-        .json({
-          error:
-            "approve fail"
-        });
+
+      res.status(500).json({
+        error:
+          "reject fail"
+      });
+
     }
+
   }
 );
+
+
+
+
+// ADMIN APPROVE BILLING
+
+router.post(
+  "/admin/upgrade/:id/approve",
+  async (req, res) => {
+
+    try {
+
+      const payment =
+        await Payment.findById(
+          req.params.id
+        );
+
+      if (!payment) {
+        return res
+          .status(404)
+          .json({
+            error:
+              "Payment not found"
+          });
+      }
+
+      payment.status =
+        "approved";
+
+      payment.approvedAt =
+        new Date();
+
+      await payment.save();
+
+      const user =
+        await User.findById(
+          payment.userId
+        );
+
+      if (user) {
+
+        user.plan =
+          payment.plan ||
+          "pro";
+
+        const now =
+          new Date();
+
+        const expire =
+          new Date(now);
+
+        if (
+          payment.plan ===
+          "business"
+        ) {
+
+          expire.setFullYear(
+            expire.getFullYear() + 1
+          );
+
+        } else {
+
+          expire.setMonth(
+            expire.getMonth() + 1
+          );
+
+        }
+
+        user.planExpireAt =
+          expire;
+
+        await user.save();
+      }
+
+      res.json({
+        ok: true
+      });
+
+    } catch (e) {
+
+      console.log(e);
+
+      res.status(500).json({
+        error:
+          "approve fail"
+      });
+
+    }
+
+  }
+);
+
+
 
 /* ============================================
 LIST BILLINGS
@@ -1173,6 +1392,63 @@ router.get(
     }
   }
 );
+
+
+/* ============================================
+MY BILLINGS
+============================================ */
+
+router.get(
+  "/my/billings",
+  async (req, res) => {
+
+    try {
+
+      const userId =
+        getUserId(req);
+
+      if (!userId) {
+        return res
+          .status(401)
+          .json({
+            error:
+              "Unauthorized"
+          });
+      }
+
+      const list =
+        await Payment.find({
+          userId
+        })
+        .sort({
+          createdAt: -1
+        })
+        .lean();
+
+      return res.json(
+        list
+      );
+
+    } catch (e) {
+
+      console.log(
+        "MY BILLINGS ERROR:",
+        e
+      );
+
+      return res
+        .status(500)
+        .json({
+          error:
+            "load fail"
+        });
+
+    }
+
+  }
+);
+
+
 
 //SEARCH USER
 
