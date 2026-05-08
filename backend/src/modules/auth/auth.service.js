@@ -1,25 +1,252 @@
+// backend/modules/auth/auth.service.js
+
 import User from "./auth.model.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
-export async function register(email, password) {
-  const exists = await User.findOne({ email });
-  if (exists) throw "User already exists";
+/* =========================================
+REGISTER
+========================================= */
 
-  const hash = await bcrypt.hash(password, 10);
-  await User.create({
-  email,
-  password: hash,
-  plan: "free"
-});
+export async function register(data) {
+
+  let {
+    fullName,
+    username,
+    email,
+    password
+  } = data;
+
+  fullName = String(fullName || "").trim();
+
+  username = String(username || "")
+    .trim()
+    .toLowerCase();
+
+  email = String(email || "")
+    .trim()
+    .toLowerCase();
+
+  password = String(password || "");
+
+  /* VALIDATE */
+
+  if (!fullName) {
+    throw "Vui lòng nhập họ tên";
+  }
+
+  if (!username) {
+    throw "Vui lòng nhập username";
+  }
+
+  if (!email) {
+    throw "Vui lòng nhập email";
+  }
+
+  if (!password || password.length < 6) {
+    throw "Mật khẩu tối thiểu 6 ký tự";
+  }
+
+  /* CHECK EMAIL */
+
+  const emailExists =
+    await User.findOne({ email });
+
+  if (emailExists) {
+    throw "Email đã tồn tại";
+  }
+
+  /* CHECK USERNAME */
+
+  const usernameExists =
+    await User.findOne({ username });
+
+  if (usernameExists) {
+    throw "Username đã tồn tại";
+  }
+
+  /* HASH */
+
+  const hash =
+    await bcrypt.hash(password, 10);
+
+  /* CREATE */
+
+  const user =
+    await User.create({
+      fullName,
+      username,
+      email,
+      password: hash,
+      plan: "free"
+    });
+
+  return user;
 }
 
-export async function login(email, password) {
-  const user = await User.findOne({ email });
-  if (!user) throw "User not found";
+/* =========================================
+LOGIN
+========================================= */
 
-  const ok = await bcrypt.compare(password, user.password);
-  if (!ok) throw "Wrong password";
+export async function login(account, password) {
 
-  return jwt.sign({ id: user._id }, process.env.JWT_SECRET);
+  account = String(account || "")
+    .trim()
+    .toLowerCase();
+
+  password = String(password || "");
+
+  const user =
+    await User.findOne({
+      $or: [
+        { email: account },
+        { username: account }
+      ]
+    });
+
+  if (!user) {
+    throw "Tài khoản không tồn tại";
+  }
+
+  if (user.status === "blocked") {
+    throw "Tài khoản đã bị khóa";
+  }
+
+  const ok =
+    await bcrypt.compare(
+      password,
+      user.password
+    );
+
+  if (!ok) {
+    throw "Sai mật khẩu";
+  }
+
+  user.lastLoginAt = new Date();
+
+  await user.save();
+
+  const token =
+    jwt.sign(
+      {
+        id: user._id,
+        role: user.role
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "30d"
+      }
+    );
+
+  return {
+    token,
+
+    user: {
+      id: user._id,
+      fullName: user.fullName,
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      plan: user.plan
+    }
+  };
+}
+
+/* =========================================
+GET PROFILE
+========================================= */
+
+export async function getProfile(userId) {
+
+  const user =
+    await User.findById(userId)
+    .select("-password");
+
+  if (!user) {
+    throw "User not found";
+  }
+
+  return user;
+}
+
+/* =========================================
+UPDATE PROFILE
+========================================= */
+
+export async function updateProfile(
+  userId,
+  data
+) {
+
+  const user =
+    await User.findById(userId);
+
+  if (!user) {
+    throw "User not found";
+  }
+
+  const fullName =
+    String(data.fullName || "").trim();
+
+  const phone =
+    String(data.phone || "").trim();
+
+  const avatar =
+    String(data.avatar || "").trim();
+
+  if (fullName) {
+    user.fullName = fullName;
+  }
+
+  user.phone = phone;
+  user.avatar = avatar;
+
+  await user.save();
+
+  return user;
+}
+
+/* =========================================
+CHANGE PASSWORD
+========================================= */
+
+export async function changePassword(
+  userId,
+  oldPassword,
+  newPassword
+) {
+
+  const user =
+    await User.findById(userId);
+
+  if (!user) {
+    throw "User not found";
+  }
+
+  const ok =
+    await bcrypt.compare(
+      oldPassword,
+      user.password
+    );
+
+  if (!ok) {
+    throw "Mật khẩu cũ không đúng";
+  }
+
+  if (
+    !newPassword ||
+    newPassword.length < 6
+  ) {
+    throw "Mật khẩu mới tối thiểu 6 ký tự";
+  }
+
+  user.password =
+    await bcrypt.hash(
+      newPassword,
+      10
+    );
+
+  await user.save();
+
+  return true;
 }
