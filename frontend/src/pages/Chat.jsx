@@ -550,7 +550,7 @@ if (fileInputRef.current) {
       {
         role: "user",
         content: prompt
-      },
+      }
 	  
 	  /*
       {
