@@ -597,20 +597,24 @@ if (fileInputRef.current) {
         }
       );
 
-      const d = await r.json();
 
-      setMessages((prev) => {
-        const copy = [...prev];
+		const d = await r.json();
 
-        copy[copy.length - 1] = {
-          role: "assistant",
-          content:
-            d.imageUrl ||
-            "Lỗi tạo ảnh."
-        };
+		setMessages((prev) => {
+		  const copy = [...prev];
 
-        return copy;
-      });
+		  copy[copy.length - 1] = {
+			role: "assistant",
+			content:
+			  d.imageUrl ||
+			  d.error ||
+			  "Lỗi tạo ảnh."
+		  };
+
+		  return copy;
+		});
+
+
 
       if (d.chatId) {
         setChatId(d.chatId);
