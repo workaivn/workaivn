@@ -5,9 +5,15 @@ import path from "path";
 import routes from "./routes.js";
 import { planGuard } from "./middleware/planGuard.js";
 
-const app = express();
+const app = express(); // 👈 PHẢI ĐẶT LÊN TRƯỚC
 
-// ✅ CORS DUY NHẤT
+// 👇 sau đó mới tới body parser
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+/* =========================
+   CORS
+========================= */
 app.use(cors({
   origin: [
     "https://workaivn.vercel.app",
@@ -21,10 +27,21 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"],
   methods: ["GET","POST","PUT","DELETE","OPTIONS"]
 }));
-
-// BODY
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+/* =========================
+   HEALTH CHECK
+========================= */
+app.get("/", (req, res) => {
+  res.json({
+    ok: true,
+    name: "WorkAI VN API",
+    secure:
+      req.secure,
+    host:
+      req.headers.host,
+    time:
+      new Date()
+  });
+});
 
 /* =========================
    STATIC GENERATED FILES
@@ -35,23 +52,88 @@ app.use(
     path.join(
       process.cwd(),
       "generated"
-    )
+    ),
+    {
+      setHeaders: (
+        res,
+        filePath
+      ) => {
+
+        if (
+          filePath.endsWith(".png")
+        ) {
+          res.setHeader(
+            "Content-Type",
+            "image/png"
+          );
+        }
+
+        if (
+          filePath.endsWith(".jpg") ||
+          filePath.endsWith(".jpeg")
+        ) {
+          res.setHeader(
+            "Content-Type",
+            "image/jpeg"
+          );
+        }
+
+        res.setHeader(
+          "Cross-Origin-Resource-Policy",
+          "cross-origin"
+        );
+      }
+    }
   )
 );
 
 
-// TEST ROUTE (để debug)
-app.get("/api/test", (req,res)=>{
-  res.json({ ok:true });
-});
+/* =========================
+   API ROUTES
+========================= */
+app.use(
+  "/api",
+  planGuard
+);
 
-// ROUTES
-app.use("/api", planGuard);
-app.use("/api", routes);
+app.use(
+  "/api",
+  routes
+);
 
-// ROOT
-app.get("/", (req, res) => {
-  res.json({ ok: true });
-});
+/* =========================
+   404
+========================= */
+app.use(
+  (req, res) => {
+    res.status(404).json({
+      error:
+        "Not Found"
+    });
+  }
+);
+
+/* =========================
+   ERROR HANDLER
+========================= */
+app.use(
+  (
+    err,
+    req,
+    res,
+    next
+  ) => {
+    console.log(
+      "APP ERROR:",
+      err
+    );
+
+    res.status(500).json({
+      error:
+        err.message ||
+        "Server error"
+    });
+  }
+);
 
 export default app;
