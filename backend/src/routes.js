@@ -175,9 +175,11 @@ const upload = multer({
 ========================= */
 
 const FILE_DIR = path.join(
-  process.cwd(),
+  BACKEND_DIR,
+  "..",
   "generated"
 );
+
 
 if (!fs.existsSync(FILE_DIR)) {
   fs.mkdirSync(FILE_DIR, {
