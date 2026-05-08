@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import path from "path";
+import { fileURLToPath } from "url"; const __filename = fileURLToPath(import.meta.url); const __dirname = path.dirname(__filename);
 import routes from "./routes.js";
 import { planGuard } from "./middleware/planGuard.js";
 
@@ -50,7 +51,9 @@ app.get("/", (req, res) => {
 app.use(
   "/files",
   express.static(
-    path.resolve(
+    path.join(
+      __dirname,
+      "..",
       "generated"
     ),
     {
@@ -86,6 +89,7 @@ app.use(
     }
   )
 );
+
 
 
 
