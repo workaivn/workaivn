@@ -46,12 +46,11 @@ app.get("/", (req, res) => {
 /* =========================
    STATIC GENERATED FILES
 ========================= */
+
 app.use(
   "/files",
   express.static(
-    path.join(
-      process.cwd(),
-	  "backend",
+    path.resolve(
       "generated"
     ),
     {
@@ -87,6 +86,8 @@ app.use(
     }
   )
 );
+
+
 
 
 /* =========================
