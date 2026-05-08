@@ -513,6 +513,8 @@ router.post(
       }
 
       imageUrl = fileUrl(outName, req);
+	  
+		console.log( "IMAGE URL:", imageUrl ); console.log( "SAVE CHAT START" );
 
       const newId = await saveChat(
         req,
@@ -520,6 +522,8 @@ router.post(
         imageUrl,
         chatId
       );
+	  
+	  console.log( "SAVE CHAT DONE:", newId );
 
       res.json({
         ok: true,
