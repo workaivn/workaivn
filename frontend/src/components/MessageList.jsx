@@ -134,15 +134,28 @@ msg.content || "";
 
 const isImg =
 content.startsWith("data:image") ||
+
 (
-content.startsWith("http") &&
-(
-content.includes(".png") ||
-content.includes(".jpg") ||
-content.includes(".jpeg") ||
-content.includes("openaiusercontent")
-)
+  content.startsWith("http") && (
+
+    content.includes("/files/img_") ||
+
+    content.includes("/files/avatar_") ||
+
+    content.includes(".png") ||
+
+    content.includes(".jpg") ||
+
+    content.includes(".jpeg") ||
+
+    content.includes(".webp") ||
+
+    content.includes("openaiusercontent")
+
+  )
 );
+
+
 
 return(
 <div
