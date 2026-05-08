@@ -606,12 +606,10 @@ async function deleteChat(id) {
 
   </div>
 )}
-        <button
-          className="logoutBtn"
-          onClick={logout}
-        >
-          Logout
-        </button>
+
+
+<button className="logoutBtn" onClick={() => { window.location.href = "/profile"; }} > 👤 Tài khoản </button>
+<button className="logoutBtn" onClick={logout} > 🚪 Logout </button>
       </div>
 	    
 	  
