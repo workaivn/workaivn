@@ -465,7 +465,7 @@ router.post(
         const savePath = path.join(FILE_DIR, fileName);
 		console.log("SAVE PATH:", savePath);        // 👈 THÊM
 
-        await sharp( Buffer.from( b64, "base64" ) ) .jpeg({ quality: 82 }) .toFile(savePath);
+        await sharp( Buffer.from( b64, "base64" ) ) .jpeg({ quality: 80 }) .toFile(savePath);
 		console.log("FILE EXISTS:", fs.existsSync(savePath)); // 👈 THÊM
 
         const uploaded = await cloudinary .uploader .upload( savePath, { folder: "workaivn" } ); imageUrl = uploaded.secure_url;
@@ -508,7 +508,7 @@ router.post(
         await sharp(file.path)
           .rotate()
           .sharpen()
-          .jpeg({ quality: 100 })
+          .jpeg({ quality: 80 })
           .toFile(outPath);
       }
 
