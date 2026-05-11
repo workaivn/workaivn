@@ -450,7 +450,7 @@ router.post(
         const result = await openai.images.generate({
           model: "gpt-image-1",
           prompt: finalPrompt || "Tạo ảnh đẹp",
-          size: "1024x1024"
+          size: "512x512"
         });
 
         console.log("IMAGE RESULT:", result);     // 👈 THÊM
