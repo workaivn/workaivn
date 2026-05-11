@@ -19,11 +19,12 @@ const generateOtp = () => {
 };
 
 export const forgotPasswordService = async (email) => {
-  const user = await User.findOne({ email });
-	email = String(email || "")
+email = String(email || "")
 	  .trim()
 	  .toLowerCase();
-
+	
+const user = await User.findOne({ email });
+	
   if (!user) {
     throw new Error("Email not found");
   }
