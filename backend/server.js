@@ -19,6 +19,7 @@ const allowedOrigins = [
   "https://app.workaivn.com"
 ];
 app.set("trust proxy", 1);
+app.use(express.json());
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
