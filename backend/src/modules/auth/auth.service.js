@@ -4,7 +4,18 @@ import User from "./auth.model.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
+import SibApiV3Sdk from "sib-api-v3-sdk";
 
+const client =
+  SibApiV3Sdk.ApiClient.instance;
+
+client.authentications[
+  "api-key"
+].apiKey =
+  process.env.BREVO_API_KEY;
+
+const apiInstance =
+  new SibApiV3Sdk.TransactionalEmailsApi();
 
 const transporter =
   nodemailer.createTransport({
@@ -92,26 +103,26 @@ export const forgotPasswordService = async (
 	  hasPass: !!process.env.SMTP_PASS
 	});
 try {
-  await transporter.sendMail({
-    from: "WorkAI VN <dangviethung.bvt@gmail.com>",
+  await apiInstance.sendTransacEmail({
 
-    to: email,
+	  sender: {
+		email: "admin@workaivn.com",
+		name: "WorkAI VN"
+	  },
 
-    subject:
-      "WorkAI VN - Reset Password OTP",
+	  to: [
+		{
+		  email
+		}
+	  ],
 
-    html: `
-      <h2>Reset Password</h2>
+	  subject:
+		"WorkAI VN OTP",
 
-      <p>Your OTP:</p>
-
-      <h1>${otp}</h1>
-
-      <p>
-        OTP expires in 10 minutes.
-      </p>
-    `,
-  });
+	  htmlContent: `
+		<h1>${otp}</h1>
+	  `,
+	});
   
   console.log(
 	  "EMAIL SENT SUCCESS"
