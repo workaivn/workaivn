@@ -37,7 +37,6 @@ export const forgotPasswordService = async (email) => {
 
   await user.save();
 
-/*
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
     to: email,
@@ -54,12 +53,7 @@ export const forgotPasswordService = async (email) => {
   };
 };
   
-*/
-console.log("OTP:", otp);
-return {
-  message: "OTP generated",
-  otp
-};
+
 
 export const resetPasswordService = async ({
   email,
