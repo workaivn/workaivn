@@ -93,7 +93,7 @@ export const forgotPasswordService = async (
 	});
 try {
   await transporter.sendMail({
-    from: process.env.EMAIL_USER,
+    from: "WorkAI VN <dangviethung.bvt@gmail.com>",
 
     to: email,
 
