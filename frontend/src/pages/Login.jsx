@@ -186,35 +186,40 @@ export default function Login({
             : "Đăng nhập"}
         </button>
 		<div
-		  style={{
-			marginTop: 12,
-			marginBottom: 10,
-			textAlign: "right",
-		  }}
-		>
+  style={{
+    marginTop: 16,
+    display: "flex",
+    justifyContent:
+      "space-between",
+    alignItems: "center",
+    fontSize: 15,
+  }}
+>
 
-		  <a
-			href="/forgot-password"
-			style={{
-			  fontSize: 14,
-			  color: "#666",
-			  textDecoration: "none",
-			}}
-		  >
-			Quên mật khẩu?
-		  </a>
+  <span
+    onClick={() =>
+      setPage("register")
+    }
+    style={{
+      cursor: "pointer",
+      color: "#444",
+    }}
+  >
+    Chưa có tài khoản?
+    Tạo ngay
+  </span>
 
-		</div>
-        <span
-          onClick={() =>
-            setPage(
-              "register"
-            )
-          }
-        >
-          Chưa có tài khoản?
-          Tạo ngay
-        </span>
+  <a
+    href="/forgot-password"
+    style={{
+      color: "#444",
+      textDecoration: "none",
+    }}
+  >
+    Quên mật khẩu?
+  </a>
+
+</div>
 
       </div>
 
