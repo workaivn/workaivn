@@ -80,7 +80,7 @@ export const forgotPasswordService = async (
     await User.findOne({ email });
 
   if (!user) {
-    throw new Error("Email not found");
+    throw new Error("Email không tồn tại");
   }
 
   const otp = generateOtp();
@@ -135,7 +135,7 @@ try {
 }
 
   return {
-    message: "OTP sent to email",
+    message: "Mã OTP đã được gửi tới email",
 
     // DEV ONLY
     otp
@@ -165,13 +165,13 @@ export const resetPasswordService = async ({
 
   if (!email) {
     throw new Error(
-      "Email is required"
+      "Vui lòng nhập email"
     );
   }
 
   if (!otp) {
     throw new Error(
-      "OTP is required"
+      "Vui lòng nhập mã OTP
     );
   }
 
@@ -180,7 +180,7 @@ export const resetPasswordService = async ({
     newPassword.length < 6
   ) {
     throw new Error(
-      "Password must be at least 6 characters"
+      "Mật khẩu tối thiểu 6 ký tự"
     );
   }
 
@@ -189,7 +189,7 @@ export const resetPasswordService = async ({
 
   if (!user) {
     throw new Error(
-      "User not found"
+      "Người dùng không tồn tại"
     );
   }
 
@@ -197,7 +197,7 @@ export const resetPasswordService = async ({
     user.resetPasswordOtp !== otp
   ) {
     throw new Error(
-      "Invalid OTP"
+      "Mã OTP không đúng"
     );
   }
 
@@ -207,7 +207,7 @@ export const resetPasswordService = async ({
       Date.now()
   ) {
     throw new Error(
-      "OTP expired"
+      "Mã OTP đã hết hạn"
     );
   }
 
@@ -227,7 +227,7 @@ export const resetPasswordService = async ({
 
   return {
     message:
-      "Password reset successful",
+      "Thay đổi mật khẩu thành công",
   };
 };
 
@@ -390,7 +390,7 @@ export async function getProfile(userId) {
     .select("-password");
 
   if (!user) {
-    throw "User not found";
+    throw "Người dùng không tồn tại";
   }
 
   return user;
@@ -409,7 +409,7 @@ export async function updateProfile(
     await User.findById(userId);
 
   if (!user) {
-    throw "User not found";
+    throw "Tài khoản không tồn tại";
   }
 
   const fullName =
@@ -447,7 +447,7 @@ export async function changePassword(
     await User.findById(userId);
 
   if (!user) {
-    throw "User not found";
+    throw "Tài khoản không tồn tại";
   }
 
   const ok =
