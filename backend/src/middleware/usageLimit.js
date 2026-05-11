@@ -127,20 +127,34 @@ const plan =
       if (
         used >= limit
       ) {
-        return res
-          .status(403)
-          .json({
-            error:
-              "LIMIT_REACHED",
-            type,
-            used,
-            limit,
-            plan:
-              user.plan ||
-              "free",
-            upgrade:
-              true
-          });
+       return res
+	  .status(403)
+	  .json({
+
+		error:
+		  type === "chat"
+			? "Bạn đã dùng hết lượt chat hôm nay. Nâng cấp Pro để tiếp tục 🚀"
+
+			: type === "image"
+			? "Bạn đã dùng hết lượt tạo ảnh hôm nay. Nâng cấp Pro để tiếp tục 🎨"
+
+			: type === "file"
+			? "Bạn đã dùng hết lượt upload file hôm nay. Nâng cấp Pro để tiếp tục 📁"
+
+			: "Bạn đã dùng hết giới hạn hôm nay.",
+
+		type,
+		used,
+		limit,
+
+		plan:
+		  user.plan ||
+		  "free",
+
+		upgrade:
+		  true
+	  });
+
       }
 
       req.usageDoc =

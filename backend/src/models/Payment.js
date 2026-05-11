@@ -22,6 +22,12 @@ const PaymentSchema = new mongoose.Schema({
 
   paidAt: Date,
 
+	approvedAt: {
+	  type: Date,
+	  default: null
+	},
+
+
   createdAt: {
     type: Date,
     default: Date.now

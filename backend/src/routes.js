@@ -175,9 +175,11 @@ const upload = multer({
 ========================= */
 
 const FILE_DIR = path.join(
-  process.cwd(),
+  BACKEND_DIR,
+  "..",
   "generated"
 );
+
 
 if (!fs.existsSync(FILE_DIR)) {
   fs.mkdirSync(FILE_DIR, {
@@ -191,8 +193,11 @@ if (!fs.existsSync(FILE_DIR)) {
 
 function getUserId(req) {
   try {
-    const token =
-      req.headers.authorization;
+    const authHeader = req.headers.authorization || "";
+
+	const token = authHeader.startsWith("Bearer ")
+	  ? authHeader.slice(7)
+	  : authHeader;
 
     if (!token) return null;
 
@@ -217,15 +222,55 @@ function todayKey() {
   return `${y}-${m}-${d}`;
 }
 
-function fileUrl(name) {
-  return `http://localhost:3000/files/${name}`;
+/* func cu
+function fileUrl(name, req) {
+  const base =
+    process.env.BASE_URL ||
+    `https://${req.get("host")}`;
+
+  return `${base}/files/${name}`;
 }
 
-function fileMsg(icon, name) {
+function fileMsg(icon, name, req) {
   return `${icon} **${name}**
-
-[⬇ Download file](${fileUrl(name)})`;
+[⬇ Download file](${fileUrl(name, req)})`;
 }
+
+*/
+
+function fileUrl(name, req) {
+
+  if (
+    process.env.BASE_URL
+  ) {
+    return `${process.env.BASE_URL}/files/${name}`;
+  }
+
+  const host =
+    req.get("host");
+
+  const isLocal =
+    host.includes(
+      "localhost"
+    ) ||
+    host.includes(
+      "127.0.0.1"
+    );
+
+  const protocol =
+    isLocal
+      ? "http"
+      : "https";
+
+  return `${protocol}://${host}/files/${name}`;
+}
+
+function fileMsg(icon, name, req) {
+  return `${icon} **${name}**
+[⬇ Download file](${fileUrl(name, req)})`;
+}
+
+
 
 async function saveChat(
   req,
@@ -342,6 +387,22 @@ router.post(
   auth.login
 );
 
+router.get(
+  "/me",
+  auth.me
+);
+
+router.put(
+  "/me",
+  auth.updateMe
+);
+
+router.put(
+  "/me/password",
+  auth.changePassword
+);
+
+
 /* =========================
    CHAT
 ========================= */
@@ -391,7 +452,9 @@ router.post(
           size: "1024x1024"
         });
 
-        const b64 = result.data?.[0]?.b64_json;
+        console.log("IMAGE RESULT:", result);     // 👈 THÊM
+	    const b64 = result.data?.[0]?.b64_json;
+	    console.log("B64:", b64);                 // 👈 THÊM
 
         if (!b64) {
           throw new Error("Create image fail");
@@ -399,13 +462,15 @@ router.post(
 
         const fileName = `img_${Date.now()}.png`;
         const savePath = path.join(FILE_DIR, fileName);
+		console.log("SAVE PATH:", savePath);        // 👈 THÊM
 
         fs.writeFileSync(
           savePath,
           Buffer.from(b64, "base64")
         );
+		console.log("FILE EXISTS:", fs.existsSync(savePath)); // 👈 THÊM
 
-        imageUrl = fileUrl(fileName);
+        imageUrl = fileUrl(fileName, req);
 
         const newId = await saveChat(
           req,
@@ -447,7 +512,9 @@ router.post(
           .toFile(outPath);
       }
 
-      imageUrl = fileUrl(outName);
+      imageUrl = fileUrl(outName, req);
+	  
+		console.log( "IMAGE URL:", imageUrl ); console.log( "SAVE CHAT START" );
 
       const newId = await saveChat(
         req,
@@ -455,6 +522,8 @@ router.post(
         imageUrl,
         chatId
       );
+	  
+	  console.log( "SAVE CHAT DONE:", newId );
 
       res.json({
         ok: true,
@@ -469,6 +538,108 @@ router.post(
     }
   }
 );
+
+
+
+router.post(
+  "/upload-avatar",
+  upload.single("file"),
+  async (req, res) => {
+
+    try {
+
+      const userId =
+        getUserId(req);
+
+      if (!userId) {
+        return res
+          .status(401)
+          .json({
+            error:
+              "Unauthorized"
+          });
+      }
+
+      if (!req.file) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "No file"
+          });
+      }
+
+      const ext =
+        path.extname(
+          req.file.originalname
+        ) || ".png";
+
+      const fileName =
+        `avatar_${Date.now()}${ext}`;
+
+      const savePath =
+        path.join(
+          FILE_DIR,
+          fileName
+        );
+
+      await sharp(req.file.path)
+        .resize(300, 300)
+        .jpeg({
+          quality: 90
+        })
+        .toFile(savePath);
+
+      fs.unlinkSync(
+        req.file.path
+      );
+
+      const avatar =
+        fileUrl(
+          fileName,
+          req
+        );
+
+      const user =
+        await User.findById(
+          userId
+        );
+
+      if (user) {
+
+        user.avatar =
+          avatar;
+
+        await user.save();
+      }
+
+      return res.json({
+        ok: true,
+        avatar
+      });
+
+    } catch (e) {
+
+      console.log(
+        "UPLOAD AVATAR ERROR:",
+        e
+      );
+
+      return res
+        .status(500)
+        .json({
+          error:
+            "upload fail"
+        });
+
+    }
+
+  }
+);
+
+
+
+
 
 /* =========================
    FILE UPLOAD
@@ -699,32 +870,31 @@ PROMPT AI
 
 let ask="";
 
-if(isCodeFile){
-
-ask = `
+if (isCodeFile) {
+  ask = `
 Bạn là senior software engineer.
 
-Người dùng upload source code.
-
 Nhiệm vụ:
-- Đọc toàn bộ code
-- Tìm bug
-- Chỉ vị trí lỗi
-- Giải thích nguyên nhân
-- Viết code sửa hoàn chỉnh
-- Tối ưu code nếu cần
-- Trả lời như ChatGPT coder chuyên nghiệp
+- Đọc code
+- Sửa lỗi
+- Tối ưu
 
-Tên file:
+QUAN TRỌNG:
+- CHỈ trả FULL CODE
+- KHÔNG giải thích
+
+FORMAT:
+
+\`\`\`js
+// FULL CODE
+\`\`\`
+
+FILE:
 ${file.originalname}
 
-Yêu cầu:
-${prompt || "Phân tích file code này"}
-
-SOURCE CODE:
+CODE:
 ${text}
 `;
-
 }else{
 
 ask =
@@ -980,75 +1150,139 @@ router.delete(
 );
 
 
-// ADMIN APPROVE BILLING
-
 router.post(
-  "/admin/upgrade/:id/approve",
-  isAdmin,
+  "/admin/upgrade/:id/reject",
   async (req, res) => {
+
     try {
 
-      const bill =
-        await Billing.findById(
+      const payment =
+        await Payment.findById(
           req.params.id
         );
 
-      if (!bill) {
+      if (!payment) {
         return res
           .status(404)
           .json({
             error:
-              "Not found"
+              "Payment not found"
           });
       }
 
-      const user =
-        await User.findById(
-          bill.userId
-        );
+      payment.status =
+        "rejected";
 
-      if (!user) {
-        return res
-          .status(404)
-          .json({
-            error:
-              "User not found"
-          });
-      }
+      await payment.save();
 
-      user.plan = "pro";
-
-      user.planExpireAt =
-        new Date(
-          Date.now() +
-          30 *
-          24 *
-          60 *
-          60 *
-          1000
-        );
-
-      await user.save();
-
-      bill.status =
-        "approved";
-
-      await bill.save();
-
-      return res.json({
+      res.json({
         ok: true
       });
 
     } catch {
-      return res
-        .status(500)
-        .json({
-          error:
-            "approve fail"
-        });
+
+      res.status(500).json({
+        error:
+          "reject fail"
+      });
+
     }
+
   }
 );
+
+
+
+
+// ADMIN APPROVE BILLING
+
+router.post(
+  "/admin/upgrade/:id/approve",
+  async (req, res) => {
+
+    try {
+
+      const payment =
+        await Payment.findById(
+          req.params.id
+        );
+
+      if (!payment) {
+        return res
+          .status(404)
+          .json({
+            error:
+              "Payment not found"
+          });
+      }
+
+      payment.status =
+        "approved";
+
+      payment.approvedAt =
+        new Date();
+
+      await payment.save();
+
+      const user =
+        await User.findById(
+          payment.userId
+        );
+
+      if (user) {
+
+        user.plan =
+          payment.plan ||
+          "pro";
+
+        const now =
+          new Date();
+
+        const expire =
+          new Date(now);
+
+        if (
+          payment.plan ===
+          "business"
+        ) {
+
+          expire.setFullYear(
+            expire.getFullYear() + 1
+          );
+
+        } else {
+
+          expire.setMonth(
+            expire.getMonth() + 1
+          );
+
+        }
+
+        user.planExpireAt =
+          expire;
+
+        await user.save();
+      }
+
+      res.json({
+        ok: true
+      });
+
+    } catch (e) {
+
+      console.log(e);
+
+      res.status(500).json({
+        error:
+          "approve fail"
+      });
+
+    }
+
+  }
+);
+
+
 
 /* ============================================
 LIST BILLINGS
@@ -1059,53 +1293,48 @@ router.get(
   isAdmin,
   async (req, res) => {
     try {
-      const q =
-        String(
-          req.query.q ||
-          ""
-        ).trim();
-
-      const status =
-        String(
-          req.query.status ||
-          ""
-        ).trim();
+      const status = String(req.query.status || "").trim();
 
       const filter = {};
-
-      if (q) {
-        filter.email = {
-          $regex: q,
-          $options: "i"
-        };
-      }
-
       if (status) {
-        filter.status =
-          status;
+        filter.status = status;
       }
 
-      const list =
-        await Billing.find(
-          filter
-        )
-          .sort({
-            createdAt:
-              -1
-          })
-          .limit(100);
+      // 🔥 LẤY PAYMENT
+      const list = await Payment.find(filter)
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .lean(); // 👈 QUAN TRỌNG
 
-      return res.json(
-        list
-      );
+      // 🔥 LẤY TẤT CẢ USER 1 LẦN (TRÁNH N+1)
+      const userIds = list.map(p => p.userId);
+
+      const users = await User.find({
+        _id: { $in: userIds }
+      }).lean();
+
+      // 🔥 TẠO MAP
+      const userMap = {};
+      users.forEach(u => {
+        userMap[String(u._id)] = u.email;
+      });
+
+      // 🔥 GHÉP EMAIL
+      const result = list.map(p => ({
+        _id: p._id,
+        userId: p.userId,
+        email: userMap[String(p.userId)] || "",
+        amount: p.amount || 0,
+        plan: p.plan || "free",
+        status: p.status || "pending",
+        createdAt: p.createdAt
+      }));
+
+      return res.json(result);
 
     } catch (err) {
-      return res
-        .status(500)
-        .json({
-          error:
-            "load fail"
-        });
+      console.log("ADMIN BILLINGS ERROR:", err);
+      return res.status(500).json({ error: "load fail" });
     }
   }
 );
@@ -1169,6 +1398,63 @@ router.get(
     }
   }
 );
+
+
+/* ============================================
+MY BILLINGS
+============================================ */
+
+router.get(
+  "/my/billings",
+  async (req, res) => {
+
+    try {
+
+      const userId =
+        getUserId(req);
+
+      if (!userId) {
+        return res
+          .status(401)
+          .json({
+            error:
+              "Unauthorized"
+          });
+      }
+
+      const list =
+        await Payment.find({
+          userId
+        })
+        .sort({
+          createdAt: -1
+        })
+        .lean();
+
+      return res.json(
+        list
+      );
+
+    } catch (e) {
+
+      console.log(
+        "MY BILLINGS ERROR:",
+        e
+      );
+
+      return res
+        .status(500)
+        .json({
+          error:
+            "load fail"
+        });
+
+    }
+
+  }
+);
+
+
 
 //SEARCH USER
 
@@ -1514,6 +1800,7 @@ router.get(
 
     } catch (err) {
       console.log(err);
+	  console.log("IMAGE ERROR FULL:", err);
       res.status(500).json({
         error: "chart fail"
       });

@@ -2,48 +2,32 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import path from "path";
+import { fileURLToPath } from "url"; const __filename = fileURLToPath(import.meta.url); const __dirname = path.dirname(__filename);
 import routes from "./routes.js";
 import { planGuard } from "./middleware/planGuard.js";
 
-const app = express();
+const app = express(); // 👈 PHẢI ĐẶT LÊN TRƯỚC
 
-/* =========================
-   TRUST PROXY
-========================= */
-app.set("trust proxy", 1);
-
-/* =========================
-   BODY PARSER
-========================= */
-app.use(
-  express.json({
-    limit: "50mb"
-  })
-);
-
-app.use(
-  express.urlencoded({
-    extended: true,
-    limit: "50mb"
-  })
-);
+// 👇 sau đó mới tới body parser
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 /* =========================
    CORS
 ========================= */
-app.use(
-  cors({
-    origin: [
-      "https://workaivn.com",
-      "https://www.workaivn.com",
-      "https://app.workaivn.com",
-      "http://localhost:5173",
-      "http://127.0.0.1:5173"
-    ],
-    credentials: true
-  })
-);
-
+app.use(cors({
+  origin: [
+    "https://workaivn.vercel.app",
+    "https://workaivn.com",
+    "https://www.workaivn.com",
+    "https://app.workaivn.com",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173"
+  ],
+  credentials: true,
+  allowedHeaders: ["Content-Type", "Authorization"],
+  methods: ["GET","POST","PUT","DELETE","OPTIONS"]
+}));
 /* =========================
    HEALTH CHECK
 ========================= */
@@ -63,15 +47,52 @@ app.get("/", (req, res) => {
 /* =========================
    STATIC GENERATED FILES
 ========================= */
+
 app.use(
   "/files",
   express.static(
     path.join(
-      process.cwd(),
+      __dirname,
+      "..",
       "generated"
-    )
+    ),
+    {
+      setHeaders: (
+        res,
+        filePath
+      ) => {
+
+        if (
+          filePath.endsWith(".png")
+        ) {
+          res.setHeader(
+            "Content-Type",
+            "image/png"
+          );
+        }
+
+        if (
+          filePath.endsWith(".jpg") ||
+          filePath.endsWith(".jpeg")
+        ) {
+          res.setHeader(
+            "Content-Type",
+            "image/jpeg"
+          );
+        }
+
+        res.setHeader(
+          "Cross-Origin-Resource-Policy",
+          "cross-origin"
+        );
+      }
+    }
   )
 );
+
+
+
+
 
 /* =========================
    API ROUTES

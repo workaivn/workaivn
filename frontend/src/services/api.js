@@ -8,86 +8,49 @@ const getToken = () => {
   return t ? "Bearer " + t : "";
 };
 
-export async function apiGet(
-  url
-) {
-  const res =
-    await fetch(
-      API + url,
-      {
-        headers: {
-          authorization:
-            getToken()
-        }
-      }
-    );
+export function apiGet(url) {
+  const token = localStorage.getItem("token");
 
-  return res;
+  return fetch(API + url, {
+    headers: {
+      "Authorization": "Bearer " + token
+    }
+  });
 }
 
-export async function apiPost(
-  url,
-  body = {}
-) {
-  const res =
-    await fetch(
-      API + url,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type":
-            "application/json",
-          authorization:
-            getToken()
-        },
-        body: JSON.stringify(
-          body
-        )
-      }
-    );
+export function apiPost(url, body) {
+  const token = localStorage.getItem("token");
 
-  return res;
+  return fetch(API + url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + token   // 👈 FIX CHÍNH
+    },
+    body: JSON.stringify(body)
+  });
 }
 
-export async function apiPut(
-  url,
-  body = {}
-) {
-  const res =
-    await fetch(
-      API + url,
-      {
-        method: "PUT",
-        headers: {
-          "Content-Type":
-            "application/json",
-          authorization:
-            getToken()
-        },
-        body: JSON.stringify(
-          body
-        )
-      }
-    );
+export async function apiPut(url, body = {}) {
+  const token = localStorage.getItem("token");
 
-  return res;
+  return fetch(API + url, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + token   // 👈 FIX
+    },
+    body: JSON.stringify(body)
+  });
 }
 
-export async function apiDelete(
-  url
-) {
-  const res =
-    await fetch(
-      API + url,
-      {
-        method:
-          "DELETE",
-        headers: {
-          authorization:
-            getToken()
-        }
-      }
-    );
+export async function apiDelete(url) {
+  const token = localStorage.getItem("token");
 
-  return res;
+  return fetch(API + url, {
+    method: "DELETE",
+    headers: {
+      "Authorization": "Bearer " + token   // 👈 FIX
+    }
+  });
 }

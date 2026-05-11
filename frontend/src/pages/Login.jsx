@@ -1,3 +1,5 @@
+// frontend/src/pages/Login.jsx
+
 import React, {
   useState
 } from "react";
@@ -13,9 +15,10 @@ const ADMIN_EMAIL =
 export default function Login({
   setPage
 }) {
+
   const [
-    email,
-    setEmail
+    account,
+    setAccount
   ] = useState("");
 
   const [
@@ -34,27 +37,29 @@ export default function Login({
   ] = useState(false);
 
   async function login() {
+
     try {
+
       setLoading(true);
       setError("");
 
       const r =
         await fetch(
-          API +
-            "/login",
+          API + "/login",
           {
             method:
               "POST",
+
             headers: {
               "Content-Type":
                 "application/json"
             },
-            body: JSON.stringify(
-              {
-                email,
+
+            body:
+              JSON.stringify({
+                account,
                 password
-              }
-            )
+              })
           }
         );
 
@@ -62,14 +67,22 @@ export default function Login({
         await r.json();
 
       if (d.token) {
+
         localStorage.setItem(
           "token",
           d.token
         );
 
+        localStorage.setItem(
+          "user",
+          JSON.stringify(
+            d.user
+          )
+        );
+
         const mail =
           String(
-            email || ""
+            d.user?.email || ""
           )
             .trim()
             .toLowerCase();
@@ -85,30 +98,40 @@ export default function Login({
           mail ===
           adminMail
         ) {
+
           window.location.href =
             "/admin";
+
           return;
         }
 
         location.reload();
 
       } else {
+
         setError(
+          d.error ||
           "Sai tài khoản hoặc mật khẩu"
         );
+
       }
 
     } catch {
+
       setError(
         "Không thể kết nối máy chủ"
       );
+
     } finally {
+
       setLoading(false);
+
     }
   }
 
   return (
     <div className="authWrap">
+
       <div className="authBox">
 
         <h1>
@@ -120,10 +143,10 @@ export default function Login({
         </p>
 
         <input
-          placeholder="Email"
-          value={email}
-          onChange={(e) =>
-            setEmail(
+          placeholder="Email hoặc Username"
+          value={account}
+          onChange={(e)=>
+            setAccount(
               e.target.value
             )
           }
@@ -133,16 +156,16 @@ export default function Login({
           type="password"
           placeholder="Mật khẩu"
           value={password}
-          onChange={(e) =>
+          onChange={(e)=>
             setPassword(
               e.target.value
             )
           }
-          onKeyDown={(e) => {
-            if (
+          onKeyDown={(e)=>{
+            if(
               e.key ===
               "Enter"
-            ) {
+            ){
               login();
             }
           }}
@@ -175,6 +198,7 @@ export default function Login({
         </span>
 
       </div>
+
     </div>
   );
 }
