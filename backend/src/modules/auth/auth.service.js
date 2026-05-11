@@ -7,13 +7,45 @@ import nodemailer from "nodemailer";
 
 
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+
+  host: "smtp.gmail.com",
+
+  port: 465,
+
+  secure: true,
 
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
+
+  connectionTimeout: 10000,
+
+  greetingTimeout: 10000,
+
+  socketTimeout: 10000,
+
 });
+
+transporter.verify((error, success) => {
+
+  if (error) {
+
+    console.log(
+      "SMTP ERROR:",
+      error
+    );
+
+  } else {
+
+    console.log(
+      "SMTP SERVER READY"
+    );
+
+  }
+
+});
+
 
 const generateOtp = () => {
   return Math.floor(
@@ -46,7 +78,10 @@ export const forgotPasswordService = async (
     Date.now() + 10 * 60 * 1000;
 
   await user.save();
-
+	  console.log(
+	  "SENDING OTP EMAIL TO:",
+	  email
+	);
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
 
@@ -67,8 +102,10 @@ export const forgotPasswordService = async (
       </p>
     `,
   });
-
-  console.log("EMAIL SENT");
+  
+  console.log(
+	  "EMAIL SENT SUCCESS"
+	);
 
   return {
     message: "OTP sent to email",
