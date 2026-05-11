@@ -171,7 +171,7 @@ export const resetPasswordService = async ({
 
   if (!otp) {
     throw new Error(
-      "Vui lòng nhập mã OTP
+      "Vui lòng nhập mã OTP"
     );
   }
 
