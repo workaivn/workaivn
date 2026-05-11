@@ -1,6 +1,7 @@
 import React, {
   useState
 } from "react";
+
 import axios from "axios";
 
 export default function ForgotPasswordPage() {
@@ -48,7 +49,7 @@ export default function ForgotPasswordPage() {
 
       setMessage(
         res.data.message ||
-        "OTP sent"
+        "Đã gửi mã OTP"
       );
 
       setStep(2);
@@ -57,7 +58,7 @@ export default function ForgotPasswordPage() {
 
       setMessage(
         err.response?.data?.message ||
-        "Send OTP failed"
+        "Gửi OTP thất bại"
       );
 
     } finally {
@@ -89,18 +90,20 @@ export default function ForgotPasswordPage() {
 
       setMessage(
         res.data.message ||
-        "Password reset successful"
+        "Đổi mật khẩu thành công"
       );
 
-      alert(
-        "Password reset successful"
-      );
+      setTimeout(() => {
+
+        window.location.href = "/";
+
+      }, 1200);
 
     } catch (err) {
 
       setMessage(
         err.response?.data?.message ||
-        "Reset password failed"
+        "Đổi mật khẩu thất bại"
       );
 
     } finally {
@@ -141,7 +144,7 @@ export default function ForgotPasswordPage() {
             fontWeight: 700,
           }}
         >
-          Forgot Password
+          Quên mật khẩu
         </h1>
 
         <p
@@ -150,7 +153,7 @@ export default function ForgotPasswordPage() {
             marginBottom: 25,
           }}
         >
-          WorkAI VN Account Recovery
+          Khôi phục tài khoản WorkAI VN
         </p>
 
         {
@@ -184,8 +187,8 @@ export default function ForgotPasswordPage() {
               >
                 {
                   loading
-                    ? "Sending..."
-                    : "Send OTP"
+                    ? "Đang gửi..."
+                    : "Gửi mã OTP"
                 }
               </button>
 
@@ -203,7 +206,7 @@ export default function ForgotPasswordPage() {
             >
 
               <label>
-                OTP Code
+                Mã OTP
               </label>
 
               <input
@@ -220,7 +223,7 @@ export default function ForgotPasswordPage() {
               />
 
               <label>
-                New Password
+                Mật khẩu mới
               </label>
 
               <input
@@ -232,7 +235,7 @@ export default function ForgotPasswordPage() {
                   )
                 }
                 required
-                placeholder="New password"
+                placeholder="Nhập mật khẩu mới"
                 style={inputStyle}
               />
 
@@ -243,8 +246,8 @@ export default function ForgotPasswordPage() {
               >
                 {
                   loading
-                    ? "Resetting..."
-                    : "Reset Password"
+                    ? "Đang đổi mật khẩu..."
+                    : "Đổi mật khẩu"
                 }
               </button>
 
