@@ -43,7 +43,7 @@ import cloudinary from "./config/cloudinary.js";
 import {
   forgotPassword,
   resetPassword,
-} from "./auth.controller.js";
+} from "./modules/auth/auth.controller.js";
 
 
 router.post("/forgot-password", forgotPassword);
