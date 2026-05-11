@@ -86,6 +86,12 @@ export const forgotPasswordService = async (
 	  "SENDING OTP EMAIL TO:",
 	  email
 	);
+	
+	console.log("SMTP CONFIG:", {
+	  user: process.env.SMTP_USER,
+	  hasPass: !!process.env.SMTP_PASS
+	});
+try {
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
 
@@ -110,6 +116,12 @@ export const forgotPasswordService = async (
   console.log(
 	  "EMAIL SENT SUCCESS"
 	);
+	
+	} catch (err) {
+
+  console.log("SEND MAIL ERROR:", err);
+
+}
 
   return {
     message: "OTP sent to email",
