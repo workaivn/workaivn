@@ -37,6 +37,7 @@ import Usage from "./models/Usage.js";
 import { getPlan } from "./config/plans.js";
 import paymentRoutes from "./routes/payment.routes.js";
 import { sepayWebhook } from "./controllers/sepay.webhook.js";
+import cloudinary from "./config/cloudinary.js";
 
 
 // =====================================
@@ -460,17 +461,16 @@ router.post(
           throw new Error("Create image fail");
         }
 
-        const fileName = `img_${Date.now()}.png`;
+        const fileName = `img_${Date.now()}.jpg`;
         const savePath = path.join(FILE_DIR, fileName);
 		console.log("SAVE PATH:", savePath);        // 👈 THÊM
 
-        fs.writeFileSync(
-          savePath,
-          Buffer.from(b64, "base64")
-        );
+        await sharp( Buffer.from( b64, "base64" ) ) .jpeg({ quality: 82 }) .toFile(savePath);
 		console.log("FILE EXISTS:", fs.existsSync(savePath)); // 👈 THÊM
 
-        imageUrl = fileUrl(fileName, req);
+        const uploaded = await cloudinary .uploader .upload( savePath, { folder: "workaivn" } ); imageUrl = uploaded.secure_url;
+		
+		if ( fs.existsSync(savePath) ) { fs.unlinkSync(savePath); }
 
         const newId = await saveChat(
           req,
