@@ -44,9 +44,6 @@ import {
   resetPassword,
 } from "./modules/auth/auth.controller.js";
 
-router.post("/forgot-password", forgotPassword);
-
-router.post("/reset-password", resetPassword);
 
 
 // =====================================
@@ -386,6 +383,11 @@ return "";
 /* =========================
    AUTH
 ========================= */
+
+router.post("/forgot-password", forgotPassword);
+
+router.post("/reset-password", resetPassword);
+
 
 router.post(
   "/register",
