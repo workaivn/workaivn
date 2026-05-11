@@ -37,6 +37,7 @@
     "tesseract.js": "^7.0.0",
     "word-extractor": "^1.0.4",
     "xlsx": "^0.18.5",
-    "cloudinary": "^2.5.1"
+    "cloudinary": "^2.5.1",
+    "nodemailer": "^7.0.3"
   }
 }
