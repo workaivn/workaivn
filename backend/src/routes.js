@@ -377,9 +377,15 @@ return "";
    AUTH
 ========================= */
 
-router.post("/forgot-password", forgotPassword);
+router.post(
+  "/forgot-password",
+  auth.forgotPassword
+);
 
-router.post("/reset-password", resetPassword);
+router.post(
+  "/reset-password",
+  auth.resetPassword
+);
 
 
 router.post(
