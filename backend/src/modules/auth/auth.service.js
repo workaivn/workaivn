@@ -362,8 +362,3 @@ export async function changePassword(
 
   return true;
 }
-
-forgotPasswordService()
-
-resetPasswordService()
-
