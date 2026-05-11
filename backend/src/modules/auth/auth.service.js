@@ -6,26 +6,30 @@ import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
 
 
-const transporter = nodemailer.createTransport({
+const transporter =
+  nodemailer.createTransport({
 
-  host: "smtp.gmail.com",
+    host:
+      process.env.SMTP_HOST,
 
-  port: 465,
+    port:
+      Number(
+        process.env.SMTP_PORT
+      ),
 
-  secure: true,
+    secure: false,
 
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
+    auth: {
 
-  connectionTimeout: 10000,
+      user:
+        process.env.SMTP_USER,
 
-  greetingTimeout: 10000,
+      pass:
+        process.env.SMTP_PASS,
 
-  socketTimeout: 10000,
+    },
 
-});
+  });
 
 transporter.verify((error, success) => {
 
