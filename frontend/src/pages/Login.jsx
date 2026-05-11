@@ -187,7 +187,8 @@ export default function Login({
         </button>
 		<div
 		  style={{
-			marginTop: 14,
+			marginTop: 12,
+			marginBottom: 10,
 			textAlign: "right",
 		  }}
 		>
