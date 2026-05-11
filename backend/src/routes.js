@@ -39,13 +39,6 @@ import paymentRoutes from "./routes/payment.routes.js";
 import { sepayWebhook } from "./controllers/sepay.webhook.js";
 import cloudinary from "./config/cloudinary.js";
 
-import {
-  forgotPassword,
-  resetPassword,
-} from "./modules/auth/auth.controller.js";
-
-
-
 // =====================================
 // OCR PDF SCAN WINDOWS
 // =====================================
