@@ -187,7 +187,9 @@ export default function Login({
         </button>
 		<div
   style={{
-    marginTop: 16,
+    marginTop: 18,
+    paddingLeft: 4,
+    paddingRight: 4,
     display: "flex",
     justifyContent:
       "space-between",
@@ -197,25 +199,26 @@ export default function Login({
 >
 
   <span
-    onClick={() =>
-      setPage("register")
-    }
-    style={{
-      cursor: "pointer",
-      color: "#444",
-    }}
-  >
+  onClick={() =>
+    setPage("register")
+  }
+  style={{
+    cursor: "pointer",
+    color: "#555",
+    transition: "0.2s",
+  }}
+>
     Chưa có tài khoản?
     Tạo ngay
   </span>
 
   <a
-    href="/forgot-password"
-    style={{
-      color: "#444",
-      textDecoration: "none",
-    }}
-  >
+  href="/forgot-password"
+  style={{
+    color: "#555",
+    textDecoration: "none",
+  }}
+>
     Quên mật khẩu?
   </a>
 
