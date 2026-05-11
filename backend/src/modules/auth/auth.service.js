@@ -3,6 +3,118 @@
 import User from "./auth.model.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import nodemailer from "nodemailer";
+
+
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+const generateOtp = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+export const forgotPasswordService = async (email) => {
+  const user = await User.findOne({ email });
+	email = String(email || "")
+	  .trim()
+	  .toLowerCase();
+
+  if (!user) {
+    throw new Error("Email not found");
+  }
+
+  const otp = generateOtp();
+
+  user.resetPasswordOtp = otp;
+  user.resetPasswordOtpExpires = Date.now() + 10 * 60 * 1000;
+
+  await user.save();
+
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER,
+    to: email,
+    subject: "WorkAI VN - Reset Password OTP",
+    html: `
+      <h2>Reset Password</h2>
+      <p>Your OTP:</p>
+      <h1>${otp}</h1>
+      <p>OTP expires in 10 minutes.</p>
+    `,
+  });
+
+  return {
+    message: "OTP sent to email",
+  };
+};
+
+export const resetPasswordService = async ({
+  email,
+  otp,
+  newPassword,
+}) => {
+
+  email = String(email || "")
+    .trim()
+    .toLowerCase();
+
+  otp = String(otp || "").trim();
+
+  newPassword = String(newPassword || "");
+
+  if (!email) {
+    throw new Error("Email is required");
+  }
+
+  if (!otp) {
+    throw new Error("OTP is required");
+  }
+
+  if (
+    !newPassword ||
+    newPassword.length < 6
+  ) {
+    throw new Error(
+      "Password must be at least 6 characters"
+    );
+  }
+
+  const user =
+    await User.findOne({ email });
+
+  if (!user) {
+    throw new Error("User not found");
+  }
+
+  if (user.resetPasswordOtp !== otp) {
+    throw new Error("Invalid OTP");
+  }
+
+  if (
+    !user.resetPasswordOtpExpires ||
+    user.resetPasswordOtpExpires < Date.now()
+  ) {
+    throw new Error("OTP expired");
+  }
+
+  const hashedPassword =
+    await bcrypt.hash(newPassword, 10);
+
+  user.password = hashedPassword;
+
+  user.resetPasswordOtp = null;
+  user.resetPasswordOtpExpires = null;
+
+  await user.save();
+
+  return {
+    message: "Password reset successful",
+  };
+};
 
 /* =========================================
 REGISTER
@@ -250,3 +362,8 @@ export async function changePassword(
 
   return true;
 }
+
+forgotPasswordService()
+
+resetPasswordService()
+
