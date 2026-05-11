@@ -8,6 +8,7 @@ import Admin from "./pages/Admin.jsx";
 import Users from "./pages/Users.jsx";
 import AdminDashboard from "./pages/AdminDashboard";
 import Profile from "./pages/Profile";
+import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 
 export default function App() {
   const host = window.location.hostname;
@@ -21,6 +22,7 @@ export default function App() {
   const isUsersPage = path === "/users";
   const isAdminDashboard = path === "/admin-dashboard";
   const isProfilePage = path === "/profile";
+  const isForgotPasswordPage =  path === "/forgot-password";
 
   if (isLanding) {
     return <Landing />;
@@ -59,7 +61,9 @@ export default function App() {
   }
   
   if (isProfilePage) { return <Profile />; }
-
+  if (isForgotPasswordPage) {
+	  return <ForgotPasswordPage />;
+	}
   if (page === "login") {
     return <Login setPage={setPage} />;
   }
