@@ -19,12 +19,13 @@ const generateOtp = () => {
 };
 
 export const forgotPasswordService = async (email) => {
-email = String(email || "")
+  
+  email = String(email || "")
 	  .trim()
 	  .toLowerCase();
-	
-const user = await User.findOne({ email });
-	
+	  
+  const user = await User.findOne({ email });
+
   if (!user) {
     throw new Error("Email not found");
   }
@@ -36,6 +37,7 @@ const user = await User.findOne({ email });
 
   await user.save();
 
+/*
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
     to: email,
@@ -47,6 +49,8 @@ const user = await User.findOne({ email });
       <p>OTP expires in 10 minutes.</p>
     `,
   });
+*/
+console.log("OTP:", otp);
 
   return {
     message: "OTP sent to email",
