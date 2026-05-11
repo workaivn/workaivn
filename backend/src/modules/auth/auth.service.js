@@ -49,12 +49,16 @@ export const forgotPasswordService = async (email) => {
       <p>OTP expires in 10 minutes.</p>
     `,
   });
-*/
-console.log("OTP:", otp);
-
-  return {
+    return {
     message: "OTP sent to email",
   };
+};
+  
+*/
+console.log("OTP:", otp);
+return {
+  message: "OTP generated",
+  otp
 };
 
 export const resetPasswordService = async ({
