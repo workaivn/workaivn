@@ -8,6 +8,7 @@ import nodemailer from "nodemailer";
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
+
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
@@ -15,16 +16,21 @@ const transporter = nodemailer.createTransport({
 });
 
 const generateOtp = () => {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return Math.floor(
+    100000 + Math.random() * 900000
+  ).toString();
 };
 
-export const forgotPasswordService = async (email) => {
-  
+export const forgotPasswordService = async (
+  email
+) => {
+
   email = String(email || "")
-	  .trim()
-	  .toLowerCase();
-	  
-  const user = await User.findOne({ email });
+    .trim()
+    .toLowerCase();
+
+  const user =
+    await User.findOne({ email });
 
   if (!user) {
     throw new Error("Email not found");
@@ -32,28 +38,49 @@ export const forgotPasswordService = async (email) => {
 
   const otp = generateOtp();
 
+  console.log("OTP:", otp);
+
   user.resetPasswordOtp = otp;
-  user.resetPasswordOtpExpires = Date.now() + 10 * 60 * 1000;
+
+  user.resetPasswordOtpExpires =
+    Date.now() + 10 * 60 * 1000;
 
   await user.save();
 
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
+
     to: email,
-    subject: "WorkAI VN - Reset Password OTP",
+
+    subject:
+      "WorkAI VN - Reset Password OTP",
+
     html: `
       <h2>Reset Password</h2>
+
       <p>Your OTP:</p>
+
       <h1>${otp}</h1>
-      <p>OTP expires in 10 minutes.</p>
+
+      <p>
+        OTP expires in 10 minutes.
+      </p>
     `,
   });
-    return {
+
+  console.log("EMAIL SENT");
+
+  return {
     message: "OTP sent to email",
+
+    // DEV ONLY
+    otp
   };
 };
-  
 
+// =========================================
+// RESET PASSWORD
+// =========================================
 
 export const resetPasswordService = async ({
   email,
@@ -65,16 +92,23 @@ export const resetPasswordService = async ({
     .trim()
     .toLowerCase();
 
-  otp = String(otp || "").trim();
+  otp = String(otp || "")
+    .trim();
 
-  newPassword = String(newPassword || "");
+  newPassword = String(
+    newPassword || ""
+  );
 
   if (!email) {
-    throw new Error("Email is required");
+    throw new Error(
+      "Email is required"
+    );
   }
 
   if (!otp) {
-    throw new Error("OTP is required");
+    throw new Error(
+      "OTP is required"
+    );
   }
 
   if (
@@ -90,32 +124,46 @@ export const resetPasswordService = async ({
     await User.findOne({ email });
 
   if (!user) {
-    throw new Error("User not found");
+    throw new Error(
+      "User not found"
+    );
   }
 
-  if (user.resetPasswordOtp !== otp) {
-    throw new Error("Invalid OTP");
+  if (
+    user.resetPasswordOtp !== otp
+  ) {
+    throw new Error(
+      "Invalid OTP"
+    );
   }
 
   if (
     !user.resetPasswordOtpExpires ||
-    user.resetPasswordOtpExpires < Date.now()
+    user.resetPasswordOtpExpires <
+      Date.now()
   ) {
-    throw new Error("OTP expired");
+    throw new Error(
+      "OTP expired"
+    );
   }
 
   const hashedPassword =
-    await bcrypt.hash(newPassword, 10);
+    await bcrypt.hash(
+      newPassword,
+      10
+    );
 
   user.password = hashedPassword;
 
   user.resetPasswordOtp = null;
+
   user.resetPasswordOtpExpires = null;
 
   await user.save();
 
   return {
-    message: "Password reset successful",
+    message:
+      "Password reset successful",
   };
 };
 
