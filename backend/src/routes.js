@@ -44,6 +44,11 @@ import {
   resetPassword,
 } from "./modules/auth/auth.controller.js";
 
+router.post("/forgot-password", forgotPassword);
+
+router.post("/reset-password", resetPassword);
+
+
 // =====================================
 // OCR PDF SCAN WINDOWS
 // =====================================
@@ -1813,10 +1818,6 @@ router.get(
 );
 
 
-
-router.post("/forgot-password", forgotPassword);
-
-router.post("/reset-password", resetPassword);
 
 router.post("/payment/create", authMiddleware, createPayment);
 
