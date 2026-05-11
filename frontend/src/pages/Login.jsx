@@ -185,7 +185,25 @@ export default function Login({
             ? "Đang đăng nhập..."
             : "Đăng nhập"}
         </button>
+		<div
+		  style={{
+			marginTop: 14,
+			textAlign: "right",
+		  }}
+		>
 
+		  <a
+			href="/forgot-password"
+			style={{
+			  fontSize: 14,
+			  color: "#666",
+			  textDecoration: "none",
+			}}
+		  >
+			Quên mật khẩu?
+		  </a>
+
+		</div>
         <span
           onClick={() =>
             setPage(
