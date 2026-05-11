@@ -40,6 +40,20 @@ import { sepayWebhook } from "./controllers/sepay.webhook.js";
 import cloudinary from "./config/cloudinary.js";
 
 
+import {
+  forgotPassword,
+  resetPassword,
+} from "./auth.controller.js";
+
+const router = express.Router();
+
+router.post("/forgot-password", forgotPassword);
+
+router.post("/reset-password", resetPassword);
+
+export default router;
+
+
 // =====================================
 // OCR PDF SCAN WINDOWS
 // =====================================
@@ -450,7 +464,7 @@ router.post(
         const result = await openai.images.generate({
           model: "gpt-image-1",
           prompt: finalPrompt || "Tạo ảnh đẹp",
-          size: "512x512"
+          size: "1024x1024"
         });
 
         console.log("IMAGE RESULT:", result);     // 👈 THÊM
