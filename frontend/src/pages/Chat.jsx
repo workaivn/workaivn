@@ -946,50 +946,52 @@ async function runTool(item) {
 
   )}
 
-  {tab !== "tools" && (
-	  <Composer
-		text={text}
-		setText={setText}
-		search={search}
-		setSearch={setSearch}
-		loading={loading}
-		send={async (file) => {
+	 {
+	  tab !== "tools" && (
+		<Composer
+		  text={text}
+		  setText={setText}
+		  search={search}
+		  setSearch={setSearch}
+		  loading={loading}
+		  send={async (file) => {
 
-		  if (file) {
+			if (file) {
 
-			const currentText =
-			  String(text || "").trim();
+			  const currentText =
+				String(text || "").trim();
 
-			setMessages(prev => [
-			  ...prev,
-			  {
-				role: "user",
-				content:
-				  currentText
-					? `${currentText}\n\n📎 ${file.name}`
-					: `📎 ${file.name}`
-			  }
-			]);
+			  setMessages(prev => [
+				...prev,
+				{
+				  role: "user",
+				  content:
+					currentText
+					  ? `${currentText}\n\n📎 ${file.name}`
+					  : `📎 ${file.name}`
+				}
+			  ]);
 
-			setText("");
+			  setText("");
 
-			await sendRealFile(
-			  currentText ||
-				"Xem file và hỗ trợ giúp mình",
-			  "file_summary",
-			  file
-			);
+			  await sendRealFile(
+				currentText ||
+				  "Xem file và hỗ trợ giúp mình",
+				"file_summary",
+				file
+			  );
+
+			  return true;
+			}
+
+			await sendText(text);
 
 			return true;
-		  }
 
-		  await sendText(text);
-
-		  return true;
-
-		}}
-	  />
-	)}
+		  }}
+		/>
+	  )
+	}
 </main>
 
 {showPaywall && (
