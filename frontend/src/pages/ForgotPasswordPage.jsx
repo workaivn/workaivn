@@ -127,15 +127,44 @@ export default function ForgotPasswordPage() {
     >
 
       <div
-        style={{
-          width: 420,
-          background: "white",
-          borderRadius: 16,
-          padding: 30,
-          boxShadow:
-            "0 10px 30px rgba(0,0,0,0.1)",
-        }}
-      >
+		  style={{
+			width: 420,
+			background: "white",
+			borderRadius: 16,
+			padding: 30,
+			position: "relative",
+			boxShadow:
+			  "0 10px 30px rgba(0,0,0,0.1)",
+		  }}
+		>
+	  
+	  <button
+		  onClick={() => window.location.href = "/"}
+		  style={{
+			position: "absolute",
+			top: 18,
+			right: 20,
+			border: "none",
+			background: "transparent",
+			cursor: "pointer",
+			fontSize: 14,
+			color: "#555",
+			fontWeight: 600,
+			padding: "6px 10px",
+			borderRadius: 8,
+			transition: "0.2s",
+		  }}
+		  onMouseOver={(e) => {
+			e.target.style.background = "#f3f4f6";
+			e.target.style.color = "#000";
+		  }}
+		  onMouseOut={(e) => {
+			e.target.style.background = "transparent";
+			e.target.style.color = "#555";
+		  }}
+		>
+		  ← Quay lại
+	</button>
 
         <h1
           style={{
