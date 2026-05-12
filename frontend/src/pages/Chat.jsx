@@ -145,95 +145,152 @@ export default function Chat({ tab, setTab }) {
   ================================================== */
 
   async function sendText(prompt) {
-    const cleanPrompt =
-	  String(prompt || "").trim();
 
-	if (!cleanPrompt) return;
+	  const cleanPrompt =
+		String(prompt || "").trim();
 
-    if (
-      usage?.plan === "free" &&
-      (usage?.used?.chat || 0) >= (usage?.limits?.chatPerDay || 0)
-    ) {
-      if (!paywallDismissed) setShowPaywall(true);
-      return;
-    }
+	  if (!cleanPrompt) return;
 
-    const imgTool = detectImageIntent(prompt);
+	  if (
+		usage?.plan === "free" &&
+		(usage?.used?.chat || 0) >=
+		(usage?.limits?.chatPerDay || 0)
+	  ) {
+		if (!paywallDismissed) {
+		  setShowPaywall(true);
+		}
 
-    if (imgTool) {
-      await generateImageInChat(prompt, imgTool);
-      setText("");
-      return;
-    }
+		return;
+	  }
 
-    const autoMode = detectMode(prompt);
+	  /* =====================================
+		 CLEAR INPUT NGAY
+	  ===================================== */
 
-		/* =====================================
-		   CLEAR INPUT NGAY KHI SEND
-		===================================== */
+	  setText("");
 
-		const currentText = cleanPrompt;
+	  const userMessage = {
+		role: "user",
+		content: cleanPrompt
+	  };
 
-		setText("");
+	  /* render ngay bubble user */
 
-		const next = [
+	  setMessages(prev => [
+		...prev,
+		userMessage
+	  ]);
+
+	  setLoading(true);
+	  setLoadingType("chat");
+
+	  try {
+
+		const autoMode =
+		  detectMode(cleanPrompt);
+
+		/* IMPORTANT:
+		   dùng latest messages
+		*/
+
+		const nextMessages = [
 		  ...messages,
-		  {
-			role: "user",
-			content: currentText
-		  }
+		  userMessage
 		];
 
-		setMessages(next);
+		const r =
+		  await apiPost(
+			"/chat",
+			{
+			  messages:
+				nextMessages,
+			  search,
+			  mode: autoMode,
+			  chatId:
+				chatIdRef.current
+			}
+		  );
 
-		setLoading(true);
-		setLoadingType("chat");
+		const reader =
+		  r.body.getReader();
 
-    try {
-      const r = await apiPost("/chat", {
-        messages: next,
-        search,
-        mode: autoMode,
-        chatId: chatIdRef.current
-      });
+		const decoder =
+		  new TextDecoder();
 
-      const reader = r.body.getReader();
-      const decoder = new TextDecoder();
+		let ai = "";
 
-      let ai = "";
+		while (true) {
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+		  const {
+			done,
+			value
+		  } = await reader.read();
 
-        ai += decoder.decode(value, { stream: true });
+		  if (done) break;
 
-        setMessages((prev) => {
-          const copy = [...prev];
+		  ai += decoder.decode(
+			value,
+			{
+			  stream: true
+			}
+		  );
 
-          if (copy.at(-1)?.role === "assistant") {
-            copy[copy.length - 1] = { role: "assistant", content: ai };
-          } else {
-            copy.push({ role: "assistant", content: ai });
-          }
+		  setMessages(prev => {
 
-          return copy;
-        });
-      }
+			const copy = [...prev];
 
-      await loadChats();
+			if (
+			  copy.at(-1)?.role ===
+			  "assistant"
+			) {
 
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: "Lỗi phản hồi AI." }
-      ]);
-    } finally {
-      setLoading(false);
-      setLoadingType("none");
-      await loadUsage();
-    }
-  }
+			  copy[
+				copy.length - 1
+			  ] = {
+				role:
+				  "assistant",
+				content: ai
+			  };
+
+			} else {
+
+			  copy.push({
+				role:
+				  "assistant",
+				content: ai
+			  });
+
+			}
+
+			return copy;
+
+		  });
+
+		}
+
+		await loadChats();
+
+	  } catch {
+
+		setMessages(prev => [
+		  ...prev,
+		  {
+			role: "assistant",
+			content:
+			  "Lỗi phản hồi AI."
+		  }
+		]);
+
+	  } finally {
+
+		setLoading(false);
+		setLoadingType("none");
+
+		await loadUsage();
+
+	  }
+
+	}
 
   /* ==================================================
      FILE
