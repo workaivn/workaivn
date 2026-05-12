@@ -641,18 +641,36 @@ Bạn đang phân tích nhiều file source code.
 NHIỆM VỤ:
 - Đọc hiểu project
 - Hiểu dependency giữa files
+- Tìm root cause thật sự
 - Sửa lỗi
-- Tối ưu code
+- Tối ưu code nếu cần
 
 QUAN TRỌNG:
-- KHÔNG dump full code trừ khi được yêu cầu
-- CHỈ trả phần cần sửa
-- Giải thích ngắn
-- Ghi rõ file cần sửa
+- KHÔNG dump full code trừ khi user yêu cầu
+- CHỈ show phần code thay đổi
+- Giải thích ngắn gọn nhưng có ý nghĩa kỹ thuật
+- Nếu bug liên quan nhiều file, phải nói dependency
+- OLD và NEW phải khác nhau thật sự
+- Không thêm emoji trong code
+- Không thêm comment kiểu AI
+- Không lặp lại code y chang
 
-FORMAT ƯU TIÊN:
+FORMAT BẮT BUỘC:
 
 FILE: xxx.js
+
+VẤN ĐỀ:
+- mô tả ngắn lỗi
+- vì sao xảy ra
+
+ẢNH HƯỞNG:
+- bug gây gì
+- runtime/build/UI issue gì
+
+FIX:
+- mô tả hướng sửa ngắn
+
+PATCH:
 
 OLD:
 \`\`\`js
@@ -666,7 +684,13 @@ NEW:
 
 YÊU CẦU USER:
 
-${prompt || "Phân tích project"}
+${prompt || `
+Hãy:
+- phân tích project
+- tìm lỗi tiềm năng
+- giải thích cấu trúc
+- đề xuất cải thiện
+`}
 
 FILES:
 
