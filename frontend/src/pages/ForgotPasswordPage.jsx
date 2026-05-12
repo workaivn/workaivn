@@ -142,7 +142,7 @@ export default function ForgotPasswordPage() {
 		  onClick={() => window.location.href = "/"}
 		  style={{
 			position: "absolute",
-			top: 18,
+			top: 58,
 			right: 20,
 			border: "none",
 			background: "transparent",
