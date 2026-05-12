@@ -4,7 +4,6 @@ import { sepayWebhook } from "../controllers/sepay.webhook.js";
 import jwt from "jsonwebtoken";
 import User from "../modules/auth/auth.model.js";
 import Payment from "../models/Payment.js";
-import Payment from "../models/Payment.js";
 
 const router = express.Router();
 function getUserId(req) {
