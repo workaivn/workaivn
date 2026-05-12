@@ -225,7 +225,7 @@ handleFile(
 
 }}
 >
-
+<div className="composer premiumComposer">
 <div className="plusWrap">
 
   <button
