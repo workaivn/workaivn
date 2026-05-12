@@ -447,42 +447,92 @@ router.get(
 
     try {
 
-      const payments =
-        await Payment.find({
-          status: "approved"
-        })
-        .sort({
-          createdAt: 1
-        });
+      const result = [];
 
-      const map = {};
-
-      payments.forEach(p => {
+      for (
+        let i = 6;
+        i >= 0;
+        i--
+      ) {
 
         const d =
-          new Date(
-            p.createdAt
-          );
+          new Date();
 
-        const key =
-          `${d.getFullYear()}-${
-            String(
-              d.getMonth() + 1
-            ).padStart(2, "0")
-          }`;
+        d.setDate(
+          d.getDate() - i
+        );
 
-        map[key] =
-          (map[key] || 0) +
-          (p.amount || 0);
+        const start =
+          new Date(d);
 
-      });
+        start.setHours(
+          0, 0, 0, 0
+        );
 
-      const result =
-        Object.entries(map)
-        .map(([month, revenue]) => ({
-          month,
+        const end =
+          new Date(d);
+
+        end.setHours(
+          23, 59, 59, 999
+        );
+
+        const users =
+          await User.countDocuments({
+            createdAt: {
+              $gte: start,
+              $lte: end
+            }
+          });
+
+        const usage =
+          await Usage.find({
+            createdAt: {
+              $gte: start,
+              $lte: end
+            }
+          });
+
+        let chat = 0;
+
+        usage.forEach(u => {
+          chat +=
+            u.chat || 0;
+        });
+
+        const payments =
+          await Payment.find({
+            status: "approved",
+            createdAt: {
+              $gte: start,
+              $lte: end
+            }
+          });
+
+        let revenue = 0;
+
+        payments.forEach(p => {
+          revenue +=
+            p.amount || 0;
+        });
+
+        result.push({
+
+          date:
+            `${String(
+              d.getDate()
+            ).padStart(2, "0")}/${
+              String(
+                d.getMonth() + 1
+              ).padStart(2, "0")
+            }`,
+
+          users,
+          chat,
           revenue
-        }));
+
+        });
+
+      }
 
       return res.json(
         result
