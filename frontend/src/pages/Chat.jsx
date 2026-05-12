@@ -433,13 +433,18 @@ async function sendRealFile(
   const steps =
     getSteps();
 
-	  setMessages((prev) => [
-	  ...prev,
-	  {
+	  setMessages((prev) => {
+
+	  const copy = [...prev];
+
+	  copy.push({
 		role: "assistant",
 		content: steps[0]
-	  }
-	]);
+	  });
+
+	  return copy;
+
+	});
 
   setLoadingType("file");
   setLoading(true);
@@ -456,15 +461,19 @@ async function sendRealFile(
             ...prev
           ];
 
-          if (
-            copy.length &&
-            copy.at(-1)
-              ?.role ===
-              "assistant"
-          ) {
-            copy[
-              copy.length - 1
-            ] = {
+          const lastAssistantIndex =
+			  [...copy]
+				.reverse()
+				.findIndex(
+				  x => x.role === "assistant"
+				);
+
+			if (lastAssistantIndex !== -1) {
+
+			  const realIndex =
+				copy.length - 1 - lastAssistantIndex;
+
+			  copy[realIndex] = {
               role:
                 "assistant",
               content:
