@@ -18,6 +18,7 @@ const textareaRef=useRef(null);
 
 const [previews, setPreviews] = useState([]);
 const [dragging,setDragging]=useState(false);
+const [showMenu,setShowMenu] =  useState(false);
 
 useEffect(()=>{
 if(!loading){
@@ -225,46 +226,71 @@ handleFile(
 }}
 >
 
-<div className="composer premiumComposer">
+<div className="plusWrap">
 
-<button
-type="button"
-className="iconBtn"
-disabled={loading}
-onClick={()=>
-fileRef.current?.click()
-}
-title="Đính kèm file"
->
-📎
-</button>
+  <button
+    type="button"
+    className="plusBtn"
+    disabled={loading}
+    onClick={()=>
+      setShowMenu(
+        !showMenu
+      )
+    }
+  >
+    +
+  </button>
 
-<input
-hidden
-ref={fileRef}
-multiple
-type="file"
-accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.png,.jpg,.jpeg,.webp,.py,.js,.jsx,.ts,.tsx,.html,.css,.json,.sql,.java,.php,.cpp,.c,.cs,.go,.rs,.xml,.yaml,.yml,.env,.log"
-onChange={e=>
-handleFile(
-  e.target.files
-)
-}
-/>
+  {showMenu && (
 
-<button
-type="button"
-className={`iconBtn ${
-search?"active":""
-}`}
-disabled={loading}
-onClick={()=>
-setSearch(!search)
-}
-title="Tìm web"
->
-🌐
-</button>
+    <div className="plusMenu">
+
+      <button
+        type="button"
+        onClick={()=>{
+
+          fileRef.current?.click();
+
+          setShowMenu(false);
+
+        }}
+      >
+        📎 Add files
+      </button>
+
+      <button
+        type="button"
+        onClick={()=>{
+
+          setSearch(
+            !search
+          );
+
+          setShowMenu(false);
+
+        }}
+      >
+        🌐 Web search
+      </button>
+
+    </div>
+
+  )}
+
+  <input
+    hidden
+    ref={fileRef}
+    multiple
+    type="file"
+    accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.png,.jpg,.jpeg,.webp,.py,.js,.jsx,.ts,.tsx,.html,.css,.json,.sql,.java,.php,.cpp,.c,.cs,.go,.rs,.xml,.yaml,.yml,.env,.log"
+    onChange={e=>
+      handleFile(
+        e.target.files
+      )
+    }
+  />
+
+</div>
 
 <div className="inputArea">
 
