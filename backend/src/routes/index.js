@@ -7,6 +7,7 @@ import adminRoutes from "./admin.routes.js";
 
 import usageRoutes from "./usage.js";
 import paymentRoutes from "./payment.routes.js";
+import legacyRoutes from "../routes.js";
 
 const router = express.Router();
 
@@ -17,5 +18,6 @@ router.use("/", authRoutes);
 router.use("/", chatRoutes);
 router.use("/", imageRoutes);
 router.use("/", adminRoutes);
+router.use("/", legacyRoutes);
 
 export default router;
