@@ -433,17 +433,13 @@ async function sendRealFile(
   const steps =
     getSteps();
 
-  setMessages((prev) => [
-    ...prev,
-    {
-      role: "user",
-      content: `📎 ${name}`
-    },
-    {
-      role: "assistant",
-      content: steps[0]
-    }
-  ]);
+	  setMessages((prev) => [
+	  ...prev,
+	  {
+		role: "assistant",
+		content: steps[0]
+	  }
+	]);
 
   setLoadingType("file");
   setLoading(true);
@@ -952,17 +948,35 @@ async function runTool(item) {
         file
       ) => {
         if (file) {
-          await sendRealFile(
-            text ||
-              "Xem file và hỗ trợ giúp mình",
-            "file_summary",
-            file
-          );
+          if (file) {
 
-          setText("");
+  const currentText =
+    String(text || "").trim();
 
-          return true;
-        }
+		  /* render user message NGAY */
+
+		  setMessages(prev => [
+			...prev,
+			{
+			  role: "user",
+			  content:
+				currentText
+				  ? `${currentText}\n\n📎 ${file.name}`
+				  : `📎 ${file.name}`
+			}
+		  ]);
+
+		  setText("");
+
+		  await sendRealFile(
+			currentText ||
+			  "Xem file và hỗ trợ giúp mình",
+			"file_summary",
+			file
+		  );
+
+		  return true;
+		}
 
         await sendText(text);
 
