@@ -1004,9 +1004,9 @@ async function runTool(item) {
 		  search={search}
 		  setSearch={setSearch}
 		  loading={loading}
-		  send={async (file) => {
+		  send={async (files = []) => {
 
-			if (file) {
+			if (files?.length) {
 
 			  const currentText =
 				String(text || "").trim();
@@ -1017,8 +1017,8 @@ async function runTool(item) {
 				  role: "user",
 				  content:
 					currentText
-					  ? `${currentText}\n\n📎 ${file.name}`
-					  : `📎 ${file.name}`
+					  ? `${currentText}\n\n📎 ${files.map(f => f.name).join(", ")}`
+					  : `📎 ${files.map(f => f.name).join(", ")}`
 				}
 			  ]);
 

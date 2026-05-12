@@ -457,12 +457,18 @@ button:hover{
 
 .uploadPreview,
 .filePreview{
-  width:max-content;
-  max-width:220px;
-  padding:10px 12px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+
+  background:#f3f4f6;
+
   border-radius:14px;
-  background:#f8fafc;
-  border:1px solid #e2e8f0;
+
+  padding:6px 10px;
+
+  font-size:13px;
+
   position:relative;
 }
 
@@ -3272,6 +3278,9 @@ PROFILE PAGE
 .plusWrap{
   position:relative;
   flex-shrink:0;
+  display:flex;
+	align-items:center;
+	height:52px;
 }
 
 .plusBtn{
@@ -3336,4 +3345,169 @@ PROFILE PAGE
 
 .plusMenu button:hover{
   background:#f3f4f6;
+}
+
+.multiPreview{
+  display:flex;
+  align-items:center;
+
+  gap:8px;
+
+  flex-wrap:wrap;
+
+  margin-bottom:8px;
+}
+
+/* =====================================
+   FINAL COMPOSER FIX
+===================================== */
+
+.composer{
+  display:flex !important;
+  align-items:flex-end !important;
+  gap:12px;
+
+  min-height:72px;
+}
+
+/* PLUS */
+
+.plusWrap{
+  position:relative;
+
+  width:42px;
+  height:42px;
+
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+
+  flex-shrink:0;
+}
+
+.plusBtn{
+  width:38px;
+  height:38px;
+
+  border:none;
+  border-radius:50%;
+
+  background:#f3f4f6;
+
+  display:flex;
+  align-items:center;
+  justify-content:center;
+
+  padding:0;
+
+  line-height:1;
+  font-size:24px;
+  font-weight:400;
+
+  cursor:pointer;
+}
+
+/* INPUT AREA */
+
+.inputArea{
+  flex:1;
+  min-width:0;
+
+  display:flex;
+  flex-direction:column;
+
+  justify-content:center;
+}
+
+/* TEXTAREA */
+
+.composer textarea{
+  width:100%;
+
+  border:none;
+  outline:none;
+  resize:none;
+
+  background:transparent;
+
+  font-size:15px;
+  line-height:24px;
+
+  padding:14px 0;
+
+  min-height:52px;
+  max-height:240px;
+
+  overflow-y:auto;
+}
+
+/* FILES */
+
+.multiPreview{
+  display:flex !important;
+  flex-direction:row !important;
+
+  align-items:center;
+  flex-wrap:wrap;
+
+  gap:8px;
+
+  width:100%;
+}
+
+.filePreview{
+  display:inline-flex !important;
+
+  align-items:center;
+  gap:8px;
+
+  max-width:240px;
+
+  background:#f3f4f6;
+  border:1px solid #e5e7eb;
+
+  border-radius:14px;
+
+  padding:8px 10px;
+
+  font-size:13px;
+
+  white-space:nowrap;
+}
+
+.filePreview span{
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.removePreview{
+  position:static !important;
+
+  width:18px;
+  height:18px;
+
+  border-radius:50%;
+
+  flex-shrink:0;
+
+  display:flex;
+  align-items:center;
+  justify-content:center;
+
+  font-size:10px;
+}
+
+/* SEND */
+
+.sendBtn{
+  width:42px;
+  height:42px;
+
+  border-radius:50%;
+
+  flex-shrink:0;
+
+  display:flex;
+  align-items:center;
+  justify-content:center;
 }
