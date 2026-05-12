@@ -133,4 +133,205 @@ router.get(
   }
 );
 
+/* =========================
+   SET USER PLAN
+========================= */
+
+router.post(
+  "/admin/user/:id/plan",
+  isAdmin,
+
+  async (req, res) => {
+
+    try {
+
+      const plan =
+        String(
+          req.body.plan ||
+          "free"
+        );
+
+      const user =
+        await User.findById(
+          req.params.id
+        );
+
+      if (!user) {
+        return res
+          .status(404)
+          .json({
+            error:
+              "User not found"
+          });
+      }
+
+      user.plan = plan;
+
+      if (
+        plan === "pro" ||
+        plan === "business"
+      ) {
+
+        user.planExpireAt =
+          new Date(
+            Date.now() +
+            30 *
+            24 *
+            60 *
+            60 *
+            1000
+          );
+
+      } else {
+
+        user.planExpireAt =
+          null;
+
+      }
+
+      await user.save();
+
+      return res.json({
+        ok: true
+      });
+
+    } catch {
+
+      return res
+        .status(500)
+        .json({
+          error:
+            "save fail"
+        });
+
+    }
+
+  }
+);
+
+/* =========================
+   USER USAGE
+========================= */
+
+router.get(
+  "/admin/user/:id/usage",
+  isAdmin,
+
+  async (req, res) => {
+
+    try {
+
+      const user =
+        await User.findById(
+          req.params.id
+        );
+
+      if (!user) {
+        return res
+          .status(404)
+          .json({
+            error:
+              "User not found"
+          });
+      }
+
+      const agg =
+        await Usage.aggregate([
+          {
+            $match: {
+              userId: user._id
+            }
+          },
+          {
+            $group: {
+              _id: null,
+              chat: {
+                $sum: "$chat"
+              },
+              file: {
+                $sum: "$file"
+              },
+              image: {
+                $sum: "$image"
+              },
+              tool: {
+                $sum: "$tool"
+              }
+            }
+          }
+        ]);
+
+      const usage =
+        agg[0] || {};
+
+      const used =
+        usage || {};
+
+      const planName =
+        String(
+          user.plan || "free"
+        ).toLowerCase();
+
+      const planConfig =
+        getPlan(planName);
+
+      const limits = {
+        chat:
+          planConfig.limits.chatPerDay,
+
+        file:
+          planConfig.limits.filePerDay,
+
+        image:
+          planConfig.limits.imagePerDay,
+
+        tool:
+          planConfig.limits.toolPerDay
+      };
+
+      return res.json({
+
+        ok: true,
+
+        email: user.email,
+
+        plan: planName,
+
+        used: {
+          chat:
+            used.chat || 0,
+
+          file:
+            used.file || 0,
+
+          image:
+            used.image || 0,
+
+          tool:
+            used.tool || 0
+        },
+
+        limits
+
+      });
+
+    } catch (err) {
+
+      console.log(
+        "USAGE ADMIN ERROR:",
+        err
+      );
+
+      return res
+        .status(500)
+        .json({
+          error:
+            "load fail"
+        });
+
+    }
+
+  }
+);
+
 export default router;
