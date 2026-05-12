@@ -334,4 +334,177 @@ router.get(
   }
 );
 
+/* ============================================
+LIST BILLINGS
+============================================ */
+
+router.get(
+  "/admin/billings",
+  isAdmin,
+
+  async (req, res) => {
+
+    try {
+
+      const status =
+        String(
+          req.query.status || ""
+        ).trim();
+
+      const filter = {};
+
+      if (status) {
+        filter.status = status;
+      }
+
+      const list =
+        await Payment.find(filter)
+        .sort({
+          createdAt: -1
+        })
+        .limit(100)
+        .lean();
+
+      const userIds =
+        list.map(
+          p => p.userId
+        );
+
+      const users =
+        await User.find({
+          _id: {
+            $in: userIds
+          }
+        }).lean();
+
+      const userMap = {};
+
+      users.forEach(u => {
+        userMap[
+          String(u._id)
+        ] = u.email;
+      });
+
+      const result =
+        list.map(p => ({
+
+          _id: p._id,
+
+          userId:
+            p.userId,
+
+          email:
+            userMap[
+              String(p.userId)
+            ] || "",
+
+          amount:
+            p.amount || 0,
+
+          plan:
+            p.plan || "free",
+
+          status:
+            p.status || "pending",
+
+          createdAt:
+            p.createdAt
+
+        }));
+
+      return res.json(
+        result
+      );
+
+    } catch (err) {
+
+      console.log(
+        "ADMIN BILLINGS ERROR:",
+        err
+      );
+
+      return res
+        .status(500)
+        .json({
+          error:
+            "load fail"
+        });
+
+    }
+
+  }
+);
+
+/* ============================================
+ANALYTICS CHART
+============================================ */
+
+router.get(
+  "/admin/analytics/chart",
+  isAdmin,
+
+  async (req, res) => {
+
+    try {
+
+      const payments =
+        await Payment.find({
+          status: "approved"
+        })
+        .sort({
+          createdAt: 1
+        });
+
+      const map = {};
+
+      payments.forEach(p => {
+
+        const d =
+          new Date(
+            p.createdAt
+          );
+
+        const key =
+          `${d.getFullYear()}-${
+            String(
+              d.getMonth() + 1
+            ).padStart(2, "0")
+          }`;
+
+        map[key] =
+          (map[key] || 0) +
+          (p.amount || 0);
+
+      });
+
+      const result =
+        Object.entries(map)
+        .map(([month, revenue]) => ({
+          month,
+          revenue
+        }));
+
+      return res.json(
+        result
+      );
+
+    } catch (err) {
+
+      console.log(
+        "ANALYTICS CHART ERROR:",
+        err
+      );
+
+      return res
+        .status(500)
+        .json({
+          error:
+            "chart fail"
+        });
+
+    }
+
+  }
+);
+
 export default router;
