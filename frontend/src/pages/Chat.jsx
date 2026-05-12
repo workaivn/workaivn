@@ -990,42 +990,6 @@ async function runTool(item) {
 		}}
 	  />
 	)}
-
-  const currentText =
-    String(text || "").trim();
-
-		  /* render user message NGAY */
-
-		  setMessages(prev => [
-			...prev,
-			{
-			  role: "user",
-			  content:
-				currentText
-				  ? `${currentText}\n\n📎 ${file.name}`
-				  : `📎 ${file.name}`
-			}
-		  ]);
-
-		  setText("");
-
-		  await sendRealFile(
-			currentText ||
-			  "Xem file và hỗ trợ giúp mình",
-			"file_summary",
-			file
-		  );
-
-		  return true;
-		}
-
-        await sendText(text);
-
-        return true;
-      }}
-    />
-  )}
-
 </main>
 
 {showPaywall && (
