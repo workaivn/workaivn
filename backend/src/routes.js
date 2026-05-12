@@ -1001,60 +1001,6 @@ router.post(
 
 
 
-/* ============================================
-LIST BILLINGS
-============================================ */
-
-router.get(
-  "/admin/billings",
-  isAdmin,
-  async (req, res) => {
-    try {
-      const status = String(req.query.status || "").trim();
-
-      const filter = {};
-      if (status) {
-        filter.status = status;
-      }
-
-      // 🔥 LẤY PAYMENT
-      const list = await Payment.find(filter)
-        .sort({ createdAt: -1 })
-        .limit(100)
-        .lean(); // 👈 QUAN TRỌNG
-
-      // 🔥 LẤY TẤT CẢ USER 1 LẦN (TRÁNH N+1)
-      const userIds = list.map(p => p.userId);
-
-      const users = await User.find({
-        _id: { $in: userIds }
-      }).lean();
-
-      // 🔥 TẠO MAP
-      const userMap = {};
-      users.forEach(u => {
-        userMap[String(u._id)] = u.email;
-      });
-
-      // 🔥 GHÉP EMAIL
-      const result = list.map(p => ({
-        _id: p._id,
-        userId: p.userId,
-        email: userMap[String(p.userId)] || "",
-        amount: p.amount || 0,
-        plan: p.plan || "free",
-        status: p.status || "pending",
-        createdAt: p.createdAt
-      }));
-
-      return res.json(result);
-
-    } catch (err) {
-      console.log("ADMIN BILLINGS ERROR:", err);
-      return res.status(500).json({ error: "load fail" });
-    }
-  }
-);
 
 
 router.post("/payment/create", authMiddleware, createPayment);
