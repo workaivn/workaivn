@@ -953,11 +953,43 @@ async function runTool(item) {
       search={search}
       setSearch={setSearch}
       loading={loading}
-      send={async (
-        file
-      ) => {
-        if (file) {
-          if (file) {
+      send={async (file) => {
+
+  if (file) {
+
+    const currentText =
+      String(text || "").trim();
+
+    /* render user message */
+
+    setMessages(prev => [
+      ...prev,
+      {
+        role: "user",
+        content:
+          currentText
+            ? `${currentText}\n\n📎 ${file.name}`
+            : `📎 ${file.name}`
+      }
+    ]);
+
+    setText("");
+
+    await sendRealFile(
+      currentText ||
+        "Xem file và hỗ trợ giúp mình",
+      "file_summary",
+      file
+    );
+
+    return true;
+  }
+
+  await sendText(text);
+
+  return true;
+
+}}
 
   const currentText =
     String(text || "").trim();
