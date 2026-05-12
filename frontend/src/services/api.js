@@ -1,67 +1,80 @@
 const API =
-  import.meta.env
-    .VITE_API_URL ||
+  import.meta.env.VITE_API_URL ||
   "https://api.workaivn.com/api";
 
-const getToken = () => {
-  const t = localStorage.getItem("token");
-  return t ? "Bearer " + t : "";
-};
+function getHeaders() {
 
-export function apiGet(url) {
-  const token = localStorage.getItem("token");
+  const token =
+    localStorage.getItem("token");
 
-  return fetch(API + url, {
-    headers: {
-      "Authorization": "Bearer " + token
-    }
-console.log("TOKEN IN apiGet:", token);   // 👈 THÊM
   const headers = {
-    "Content-Type": "application/json"
+    "Content-Type":
+      "application/json"
   };
 
   if (token) {
-    headers["Authorization"] = "Bearer " + token;
+    headers["Authorization"] =
+      "Bearer " + token;
   }
 
-  return fetch(API + url, {
-    headers
-  });
+  return headers;
 }
 
-export function apiPost(url, body) {
-  const token = localStorage.getItem("token");
+export function apiGet(url) {
 
-  return fetch(API + url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer " + token   // 👈 FIX CHÍNH
-    },
-    body: JSON.stringify(body)
-  });
-}
-
-export async function apiPut(url, body = {}) {
-  const token = localStorage.getItem("token");
-
-  return fetch(API + url, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer " + token   // 👈 FIX
-    },
-    body: JSON.stringify(body)
-  });
-}
-
-export async function apiDelete(url) {
-  const token = localStorage.getItem("token");
-
-  return fetch(API + url, {
-    method: "DELETE",
-    headers: {
-      "Authorization": "Bearer " + token   // 👈 FIX
+  return fetch(
+    API + url,
+    {
+      headers:
+        getHeaders()
     }
-  });
+  );
+
+}
+
+export function apiPost(
+  url,
+  body
+) {
+
+  return fetch(
+    API + url,
+    {
+      method: "POST",
+      headers:
+        getHeaders(),
+      body: JSON.stringify(body)
+    }
+  );
+
+}
+
+export function apiPut(
+  url,
+  body = {}
+) {
+
+  return fetch(
+    API + url,
+    {
+      method: "PUT",
+      headers:
+        getHeaders(),
+      body: JSON.stringify(body)
+    }
+  );
+
+}
+
+export function apiDelete(url) {
+
+  return fetch(
+    API + url,
+    {
+      method: "DELETE",
+      headers:
+        getHeaders()
+    }
+  );
+
 }
