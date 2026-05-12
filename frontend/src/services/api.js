@@ -10,13 +10,11 @@ const getToken = () => {
 
 export function apiGet(url) {
   const token = localStorage.getItem("token");
-<<<<<<< HEAD
 
   return fetch(API + url, {
     headers: {
       "Authorization": "Bearer " + token
     }
-=======
 console.log("TOKEN IN apiGet:", token);   // 👈 THÊM
   const headers = {
     "Content-Type": "application/json"
@@ -28,7 +26,6 @@ console.log("TOKEN IN apiGet:", token);   // 👈 THÊM
 
   return fetch(API + url, {
     headers
->>>>>>> 2e04d0c1ebf21fcefc1ae3a1239c4591c7ad17e8
   });
 }
 
