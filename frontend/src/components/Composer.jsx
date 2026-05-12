@@ -16,7 +16,7 @@ loading
 const fileRef=useRef(null);
 const textareaRef=useRef(null);
 
-const [preview,setPreview]=useState(null);
+const [previews, setPreviews] = useState([]);
 const [dragging,setDragging]=useState(false);
 
 useEffect(()=>{
@@ -27,29 +27,37 @@ textareaRef.current?.focus();
 
 async function submit(){
 
-if(loading) return;
+  if(loading) return;
 
-const currentFile =
-preview?.file || null;
+  const currentFiles =
+    previews.map(
+      x => x.file
+    );
 
-/* clear ngay khi gửi */
-setPreview(null);
+  /* clear ngay khi gửi */
 
-if(fileRef.current){
-fileRef.current.value="";
-}
+  setPreviews([]);
 
-const ok =
-await send(currentFile);
+  if(fileRef.current){
+    fileRef.current.value="";
+  }
 
-if(ok){
+  const ok =
+    await send(currentFiles);
 
-if(textareaRef.current){
-textareaRef.current.style.height="52px";
-textareaRef.current.focus();
-}
+  if(ok){
 
-}
+    if(textareaRef.current){
+
+      textareaRef.current.style.height =
+        "52px";
+
+      textareaRef.current.focus();
+
+    }
+
+  }
+
 }
 
 function autoResize(el){
@@ -78,7 +86,7 @@ e.preventDefault();
 
 if(
 text.trim() ||
-preview
+previews.length
 ){
 submit();
 }
@@ -87,39 +95,112 @@ submit();
 
 }
 
-function handleFile(file){
+function handleFile(files){
 
-if(!file) return;
+  const list =
+    Array.from(files || []);
 
-if(
-file.type.startsWith("image/")
-){
+  if(!list.length) return;
 
-const reader =
-new FileReader();
+  const next = [];
 
-reader.onload=()=>{
+  list.forEach(file=>{
 
-setPreview({
-type:"image",
-file,
-name:file.name,
-data:reader.result
-});
+    /* IMAGE */
 
-};
+    if(
+      file.type.startsWith(
+        "image/"
+      )
+    ){
 
-reader.readAsDataURL(file);
-return;
+      const reader =
+        new FileReader();
+
+      reader.onload=()=>{
+
+        setPreviews(prev=>[
+          ...prev,
+          {
+            type:"image",
+            file,
+            name:file.name,
+            data:reader.result
+          }
+        ]);
+
+      };
+
+      reader.readAsDataURL(file);
+
+      return;
+    }
+
+    /* NORMAL FILE */
+
+    next.push({
+      type:"file",
+      file,
+      name:file.name
+    });
+
+  });
+
+  if(next.length){
+
+    setPreviews(prev=>[
+      ...prev,
+      ...next
+    ]);
+
+  }
+
 }
 
-setPreview({
-type:"file",
-file,
-name:file.name
-});
+function handlePaste(e){
+
+  const items =
+    Array.from(
+      e.clipboardData.items || []
+    );
+
+  const images =
+    items
+      .filter(x=>
+        x.type.includes("image")
+      )
+      .map((x,i)=>{
+
+	  const file =
+		x.getAsFile();
+
+	  if(
+		file &&
+		!file.name
+	  ){
+
+		return new File(
+		  [file],
+		  `paste-${Date.now()}-${i}.png`,
+		  {
+			type:file.type
+		  }
+		);
+
+	  }
+
+	  return file;
+
+	});
+
+  if(images.length){
+
+    handleFile(images);
+
+  }
 
 }
+
 
 return(
 <div
@@ -137,12 +218,10 @@ onDrop={e=>{
 e.preventDefault();
 setDragging(false);
 
-const file =
-e.dataTransfer.files?.[0];
+handleFile(
+  e.dataTransfer.files
+);
 
-if(file){
-handleFile(file);
-}
 }}
 >
 
@@ -163,11 +242,12 @@ title="Đính kèm file"
 <input
 hidden
 ref={fileRef}
+multiple
 type="file"
 accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.png,.jpg,.jpeg,.webp,.py,.js,.jsx,.ts,.tsx,.html,.css,.json,.sql,.java,.php,.cpp,.c,.cs,.go,.rs,.xml,.yaml,.yml,.env,.log"
 onChange={e=>
 handleFile(
-e.target.files?.[0]
+  e.target.files
 )
 }
 />
@@ -188,36 +268,61 @@ title="Tìm web"
 
 <div className="inputArea">
 
-{preview&&(
-<div className="filePreview">
+{previews.length > 0 && (
 
-{preview.type==="image"?(
-<img
-src={preview.data}
-className="miniPreview"
-/>
-):(
-<>📄</>
-)}
+  <div className="multiPreview">
 
-<span>
-{preview.name}
-</span>
+    {previews.map(
+      (preview,i)=>(
 
-<button
-className="removePreview"
-type="button"
-onClick={()=>
-setPreview(null)
-}
->
-✕
-</button>
+      <div
+        key={i}
+        className="filePreview"
+      >
 
-</div>
+        {preview.type==="image"?(
+
+          <img
+			alt=""
+            src={preview.data}
+            className="miniPreview"
+          />
+
+        ):(
+          <>📄</>
+        )}
+
+        <span>
+          {preview.name}
+        </span>
+
+        <button
+          className="removePreview"
+          type="button"
+          onClick={()=>{
+
+            setPreviews(prev=>
+              prev.filter(
+                (_,idx)=>
+                  idx!==i
+              )
+            );
+
+          }}
+        >
+          ✕
+        </button>
+
+      </div>
+
+    ))}
+
+  </div>
+
 )}
 
 <textarea
+onPaste={handlePaste}
 ref={textareaRef}
 rows="1"
 value={text}
@@ -237,7 +342,7 @@ type="button"
 className="sendBtn glowBtn"
 disabled={
 loading ||
-(!text.trim()&&!preview)
+(!text.trim()&&!previews.length)
 }
 onClick={submit}
 >

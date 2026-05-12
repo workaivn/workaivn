@@ -769,7 +769,7 @@ margin:auto;
 .quickCard,
 .logoutBtn,
 .ghostBtn{
-  font-family:Segoe UI,Arial,sans-serif;
+  font-family:Times New Roman,Arial,sans-serif;
 }
 
 .bubble{
@@ -1573,6 +1573,7 @@ font-size:14px;
 line-height:1.75;
 color:#0f172a;
 font-family:
+Times New Roman,
 ui-monospace,
 SFMono-Regular,
 Menlo,
@@ -1597,7 +1598,7 @@ border-radius:8px;
 background:#eef2ff;
 color:#1d4ed8;
 font-size:13px;
-font-family:ui-monospace,monospace;
+font-family:Times New Roman,ui-monospace,monospace;
 margin:0 2px;
 }
 
