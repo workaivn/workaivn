@@ -145,7 +145,10 @@ export default function Chat({ tab, setTab }) {
   ================================================== */
 
   async function sendText(prompt) {
-    if (!prompt.trim()) return;
+    const cleanPrompt =
+	  String(prompt || "").trim();
+
+	if (!cleanPrompt) return;
 
     if (
       usage?.plan === "free" &&
@@ -165,12 +168,26 @@ export default function Chat({ tab, setTab }) {
 
     const autoMode = detectMode(prompt);
 
-    const next = [...messages, { role: "user", content: prompt }];
+		/* =====================================
+		   CLEAR INPUT NGAY KHI SEND
+		===================================== */
 
-    setMessages(next);
-    setText("");
-    setLoading(true);
-    setLoadingType("chat");
+		const currentText = cleanPrompt;
+
+		setText("");
+
+		const next = [
+		  ...messages,
+		  {
+			role: "user",
+			content: currentText
+		  }
+		];
+
+		setMessages(next);
+
+		setLoading(true);
+		setLoadingType("chat");
 
     try {
       const r = await apiPost("/chat", {
