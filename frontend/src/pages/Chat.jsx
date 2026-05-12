@@ -1012,26 +1012,42 @@ async function runTool(item) {
 				String(text || "").trim();
 
 			  setMessages(prev => [
-				...prev,
-				{
-				  role: "user",
-				  content:
-					currentText
-					  ? `${currentText}\n\n📎 ${files.map(f => f.name).join(", ")}`
-					  : `📎 ${files.map(f => f.name).join(", ")}`
-				}
-			  ]);
+				  ...prev,
+				  {
+					role: "user",
+					content:
+					  currentText
+						? `${currentText}\n\n📎 ${
+							files
+							  .map(
+								(f, i) =>
+								  f?.name ||
+								  `image-${i + 1}.png`
+							  )
+							  .join(", ")
+						  }`
+						: `📎 ${
+							files
+							  .map(
+								(f, i) =>
+								  f?.name ||
+								  `image-${i + 1}.png`
+							  )
+							  .join(", ")
+						  }`
+				  }
+				]);
 
-			  setText("");
+				setText("");
 
-			  await sendRealFiles(
-				currentText ||
-				  "Xem file và hỗ trợ giúp mình",
-				"file_summary",
-				[file]
-			  );
+				await sendRealFiles(
+				  currentText ||
+					"Xem file và hỗ trợ giúp mình",
+				  "file_summary",
+				  files
+				);
 
-			  return true;
+				return true;
 			}
 
 			await sendText(text);
