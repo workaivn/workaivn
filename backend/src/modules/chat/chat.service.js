@@ -327,6 +327,15 @@ ${userText}
         plan
       });
 
+
+     console.log("=== DEBUG CHAT ===");
+console.log("USER:", userId);
+console.log("PROMPT:", prompt);
+console.log("ANSWER:", answer);
+console.log("==================");
+
+     
+
     const final =
       postProcess(
         answer,

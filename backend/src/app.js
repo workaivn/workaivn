@@ -3,7 +3,7 @@ import express from "express";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url"; const __filename = fileURLToPath(import.meta.url); const __dirname = path.dirname(__filename);
-import routes from "./routes.js";
+import routes from "./routes/index.js";
 import { planGuard } from "./middleware/planGuard.js";
 
 const app = express(); // 👈 PHẢI ĐẶT LÊN TRƯỚC

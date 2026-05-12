@@ -69,7 +69,22 @@ const schema = new mongoose.Schema(
   planExpireAt: {
     type: Date,
     default: null
+  },
+
+  // =========================
+  // FORGOT PASSWORD
+  // =========================
+
+  resetPasswordOtp: {
+    type: String,
+    default: null
+  },
+
+  resetPasswordOtpExpires: {
+    type: Date,
+    default: null
   }
+
 },
 {
   timestamps: true

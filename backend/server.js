@@ -4,27 +4,43 @@ import connectDB from "./src/config/db.js";
 import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
+import express from "express";
+import healthRoute from "./src/routes/health.js";
+healthRoute(app);
+app.listen(5000, () => {
+  console.log("Server running...");
+});
 
+// ✅ FIX CORS FULL
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://workaivn.vercel.app",
+  "https://workaivn.com",
+  "https://app.workaivn.com"
+];
+app.set("trust proxy", 1);
+app.use(express.json());
 app.use(cors({
-  origin: [
-    "http://localhost:5173",
-    "https://app.workaivn.com"
-  ],
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error("CORS not allowed: " + origin));
+  },
   credentials: true
 }));
 
 const PORT = process.env.PORT || 5000;
 
-// ✅ CHỈ DÙNG 1 SERVER DUY NHẤT
 const server = http.createServer(app);
 
+// ✅ FIX SOCKET.IO CORS
 export const io = new Server(server, {
   cors: {
-    origin: [
-      "https://app.workaivn.com",
-      "http://localhost:5173"
-    ],
-    methods: ["GET", "POST"]
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
@@ -56,10 +72,8 @@ async function start() {
   try {
     await connectDB();
 
-    // ✅ CHỈ LISTEN Ở ĐÂY
     server.listen(PORT, "0.0.0.0", () => {
       console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`🌐 http://localhost:${PORT}`);
     });
 
   } catch (err) {

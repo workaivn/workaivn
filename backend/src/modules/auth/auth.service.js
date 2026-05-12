@@ -3,6 +3,187 @@
 import User from "./auth.model.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import SibApiV3Sdk from "sib-api-v3-sdk";
+
+const client =
+  SibApiV3Sdk.ApiClient.instance;
+
+client.authentications[
+  "api-key"
+].apiKey =
+  process.env.BREVO_API_KEY;
+
+const apiInstance =
+  new SibApiV3Sdk.TransactionalEmailsApi();
+
+const generateOtp = () => {
+  return Math.floor(
+    100000 + Math.random() * 900000
+  ).toString();
+};
+
+export const forgotPasswordService = async (
+  email
+) => {
+
+  email = String(email || "")
+    .trim()
+    .toLowerCase();
+
+  const user =
+    await User.findOne({ email });
+
+  if (!user) {
+    throw new Error("Email không tồn tại");
+  }
+
+  const otp = generateOtp();
+
+  console.log("OTP:", otp);
+
+  user.resetPasswordOtp = otp;
+
+  user.resetPasswordOtpExpires =
+    Date.now() + 10 * 60 * 1000;
+
+  await user.save();
+	  console.log(
+	  "SENDING OTP EMAIL TO:",
+	  email
+	);
+	
+	console.log("SMTP CONFIG:", {
+	  user: process.env.SMTP_USER,
+	  hasPass: !!process.env.SMTP_PASS
+	});
+try {
+  await apiInstance.sendTransacEmail({
+
+	  sender: {
+		email: "admin@workaivn.com",
+		name: "WorkAI VN"
+	  },
+
+	  to: [
+		{
+		  email
+		}
+	  ],
+
+	  subject:
+		"WorkAI VN OTP",
+
+	  htmlContent: `
+		<h1>${otp}</h1>
+	  `,
+	});
+  
+  console.log(
+	  "EMAIL SENT SUCCESS"
+	);
+	
+	} catch (err) {
+
+  console.log("SEND MAIL ERROR:", err);
+
+}
+
+  return {
+    message: "Mã OTP đã được gửi tới email",
+
+    // DEV ONLY
+    otp
+  };
+};
+
+// =========================================
+// RESET PASSWORD
+// =========================================
+
+export const resetPasswordService = async ({
+  email,
+  otp,
+  newPassword,
+}) => {
+
+  email = String(email || "")
+    .trim()
+    .toLowerCase();
+
+  otp = String(otp || "")
+    .trim();
+
+  newPassword = String(
+    newPassword || ""
+  );
+
+  if (!email) {
+    throw new Error(
+      "Vui lòng nhập email"
+    );
+  }
+
+  if (!otp) {
+    throw new Error(
+      "Vui lòng nhập mã OTP"
+    );
+  }
+
+  if (
+    !newPassword ||
+    newPassword.length < 6
+  ) {
+    throw new Error(
+      "Mật khẩu tối thiểu 6 ký tự"
+    );
+  }
+
+  const user =
+    await User.findOne({ email });
+
+  if (!user) {
+    throw new Error(
+      "Người dùng không tồn tại"
+    );
+  }
+
+  if (
+    user.resetPasswordOtp !== otp
+  ) {
+    throw new Error(
+      "Mã OTP không đúng"
+    );
+  }
+
+  if (
+    !user.resetPasswordOtpExpires ||
+    user.resetPasswordOtpExpires <
+      Date.now()
+  ) {
+    throw new Error(
+      "Mã OTP đã hết hạn"
+    );
+  }
+
+  const hashedPassword =
+    await bcrypt.hash(
+      newPassword,
+      10
+    );
+
+  user.password = hashedPassword;
+
+  user.resetPasswordOtp = null;
+
+  user.resetPasswordOtpExpires = null;
+
+  await user.save();
+
+  return {
+    message:
+      "Thay đổi mật khẩu thành công",
+  };
+};
 
 /* =========================================
 REGISTER
@@ -163,7 +344,7 @@ export async function getProfile(userId) {
     .select("-password");
 
   if (!user) {
-    throw "User not found";
+    throw "Người dùng không tồn tại";
   }
 
   return user;
@@ -182,7 +363,7 @@ export async function updateProfile(
     await User.findById(userId);
 
   if (!user) {
-    throw "User not found";
+    throw "Tài khoản không tồn tại";
   }
 
   const fullName =
@@ -220,7 +401,7 @@ export async function changePassword(
     await User.findById(userId);
 
   if (!user) {
-    throw "User not found";
+    throw "Tài khoản không tồn tại";
   }
 
   const ok =

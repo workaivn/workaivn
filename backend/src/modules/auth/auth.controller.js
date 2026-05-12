@@ -3,6 +3,57 @@
 import * as service from "./auth.service.js";
 import jwt from "jsonwebtoken";
 
+import {
+  forgotPasswordService,
+  resetPasswordService,
+} from "./auth.service.js";
+
+/* =========================================
+FORGOT PASSWORD
+========================================= */
+
+export const forgotPassword = async (req, res) => {
+  try {
+
+    const result =
+      await forgotPasswordService(
+        req.body.email
+      );
+
+    res.json(result);
+
+  } catch (error) {
+
+    res.status(400).json({
+      message: error.message,
+    });
+
+  }
+};
+
+/* =========================================
+RESET PASSWORD
+========================================= */
+
+export const resetPassword = async (req, res) => {
+  try {
+
+    const result =
+      await resetPasswordService(
+        req.body
+      );
+
+    res.json(result);
+
+  } catch (error) {
+
+    res.status(400).json({
+      message: error.message,
+    });
+
+  }
+};
+
 /* =========================================
 HELPER
 ========================================= */
@@ -29,7 +80,9 @@ function getUserId(req) {
     return decoded.id;
 
   } catch {
+
     return null;
+
   }
 }
 
