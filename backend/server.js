@@ -4,6 +4,7 @@ import connectDB from "./src/config/db.js";
 import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
+import routes from "./src/routes/index.js";
 import express from "express";
 import healthRoute from "./src/routes/health.js";
 healthRoute(app);
