@@ -366,13 +366,14 @@ router.post(
 "/upload-file",
 usageLimit("file"),
 incrementUsage,
-upload.single("file"),
+upload.array("files", 20),
 async (req,res)=>{
 try{
 
-const file=req.file;
+const files =
+  req.files || [];
 
-if(!file){
+if (!files.length) {
 return res.status(400).json({
 error:"No file"
 });
@@ -380,258 +381,298 @@ error:"No file"
 
 const {prompt,chatId}=req.body;
 
-const ext=path
-.extname(file.originalname)
-.toLowerCase();
+let mergedText = "";
+let hasCodeFile = false;
 
-let text="";
+for (const file of files) {
 
-/* =========================
-CODE FILE LIST
-========================= */
+  const ext = path
+    .extname(file.originalname)
+    .toLowerCase();
 
-const codeExt = [
-".js",".mjs",".cjs",".ts",".tsx",".jsx",
-".py",".java",".php",".rb",".go",".rs",
-".cpp",".c",".h",".hpp",".cs",
-".html",".css",".scss",".sass",".less",
-".json",".env",".xml",".yml",".yaml",
-".sql",".md",".txt",".log",".sh",".bat"
-];
+  let text = "";
 
-const isCodeFile =
-codeExt.includes(ext);
+  /* =========================
+     CODE FILE LIST
+  ========================= */
 
-/* =====================
-PDF
-===================== */
+  const codeExt = [
+    ".js",".mjs",".cjs",
+    ".ts",".tsx",".jsx",
+    ".py",".java",".php",
+    ".rb",".go",".rs",
+    ".cpp",".c",".h",
+    ".hpp",".cs",
+    ".html",".css",
+    ".scss",".sass",".less",
+    ".json",".env",
+    ".xml",".yml",".yaml",
+    ".sql",".md",".txt",
+    ".log",".sh",".bat"
+  ];
 
-if(ext === ".pdf"){
+  const isCodeFile =
+    codeExt.includes(ext);
 
-text =
-await readPdfText(
-file.path
-);
+  if (isCodeFile) {
+    hasCodeFile = true;
+  }
 
-/* scan fallback */
-if(
-!text ||
-text.trim().length < 20
-){
+  /* =====================
+     PDF
+  ===================== */
 
-console.log(
-"PDF scan detected -> OCR"
-);
+  if (ext === ".pdf") {
 
-text =
-await readPdfOCR(
-file.path
-);
+    text =
+      await readPdfText(
+        file.path
+      );
+
+    /* scan fallback */
+
+    if (
+      !text ||
+      text.trim().length < 20
+    ) {
+
+      console.log(
+        "PDF scan detected -> OCR"
+      );
+
+      text =
+        await readPdfOCR(
+          file.path
+        );
+
+    }
+
+  }
+
+  /* =====================
+     DOCX
+  ===================== */
+
+  else if (
+    ext === ".docx"
+  ) {
+
+    try {
+
+      const data =
+        await mammoth.extractRawText({
+          path: file.path
+        });
+
+      text =
+        data.value || "";
+
+    } catch {
+
+      text = "";
+
+    }
+
+  }
+
+  /* =====================
+     DOC
+  ===================== */
+
+  else if (
+    ext === ".doc"
+  ) {
+
+    try {
+
+      const extractor =
+        new WordExtractor();
+
+      const doc =
+        await extractor.extract(
+          file.path
+        );
+
+      text =
+        doc.getBody() || "";
+
+    } catch {
+
+      text = "";
+
+    }
+
+  }
+
+  /* =====================
+     XLS / XLSX
+  ===================== */
+
+  else if (
+    ext === ".xlsx" ||
+    ext === ".xls"
+  ) {
+
+    try {
+
+      const wb =
+        XLSX.readFile(
+          file.path
+        );
+
+      let rows = [];
+
+      wb.SheetNames.forEach(
+        (name) => {
+
+          const ws =
+            wb.Sheets[name];
+
+          const data =
+            XLSX.utils.sheet_to_json(
+              ws,
+              {
+                header: 1,
+                blankrows: false
+              }
+            );
+
+          data.forEach(row => {
+
+            rows.push(
+              row.join(" | ")
+            );
+
+          });
+
+        }
+      );
+
+      text =
+        rows.join("\n");
+
+    } catch {
+
+      text = "";
+
+    }
+
+  }
+
+  /* =====================
+     CODE FILE
+  ===================== */
+
+  else if (
+    isCodeFile
+  ) {
+
+    try {
+
+      text =
+        fs.readFileSync(
+          file.path,
+          "utf8"
+        );
+
+    } catch {
+
+      text = "";
+
+    }
+
+  }
+
+  /* =====================
+     IMAGE
+  ===================== */
+
+  else if (
+    [
+      ".png",
+      ".jpg",
+      ".jpeg",
+      ".webp"
+    ].includes(ext)
+  ) {
+
+    text =
+      `Hình ảnh: ${file.originalname}`;
+
+  }
+
+  /* =====================
+     FALLBACK
+  ===================== */
+
+  if (
+    !text ||
+    !text.trim()
+  ) {
+
+    text =
+      `Tên file: ${file.originalname}`;
+
+  }
+
+  text = text
+    .replace(/\0/g, "")
+    .trim()
+    .slice(0, 50000);
+
+  mergedText += `
+
+===== FILE: ${file.originalname} =====
+
+${text}
+
+`;
+
 }
-
-}
-
-/* =====================
-DOCX
-===================== */
-
-else if(ext === ".docx"){
-
-try{
-
-const data =
-await mammoth.extractRawText({
-path:file.path
-});
-
-text =
-data.value || "";
-
-}catch{
-text="";
-}
-
-}
-
-/* =====================
-DOC
-===================== */
-
-else if(ext === ".doc"){
-
-try{
-
-const extractor =
-new WordExtractor();
-
-const doc =
-await extractor.extract(
-file.path
-);
-
-text =
-doc.getBody() || "";
-
-}catch{
-text="";
-}
-
-}
-
-/* =====================
-XLS / XLSX
-===================== */
-
-else if(
-ext === ".xlsx" ||
-ext === ".xls"
-){
-
-try{
-
-const wb =
-XLSX.readFile(
-file.path
-);
-
-let rows=[];
-
-wb.SheetNames.forEach(
-(name)=>{
-
-const ws =
-wb.Sheets[name];
-
-const data =
-XLSX.utils.sheet_to_json(
-ws,
-{
-header:1,
-blankrows:false
-}
-);
-
-data.forEach(row=>{
-rows.push(
-row.join(" | ")
-);
-});
-
-}
-);
-
-text =
-rows.join("\n");
-
-}catch{
-text="";
-}
-
-}
-
-/* =====================
-CODE FILE
-===================== */
-
-else if(isCodeFile){
-
-try{
-
-text =
-fs.readFileSync(
-file.path,
-"utf8"
-);
-
-}catch{
-text="";
-}
-
-}
-
-/* =====================
-IMAGE
-===================== */
-
-else if(
-[
-".png",".jpg",".jpeg",".webp"
-].includes(ext)
-){
-
-text =
-`Hình ảnh: ${file.originalname}`;
-
-}
-
-/* =====================
-FALLBACK
-===================== */
-
-if(
-!text ||
-!text.trim()
-){
-text =
-`Tên file: ${file.originalname}`;
-}
-
-text = text
-.replace(/\0/g,"")
-.trim()
-.slice(0,50000);
 
 /* =====================
 PROMPT AI
 ===================== */
 
-let ask="";
+let ask = `
 
-if (isCodeFile) {
-  ask = `
-Bạn là senior software engineer.
+Bạn đang phân tích nhiều file source code.
 
-Nhiệm vụ:
-- Đọc code
+NHIỆM VỤ:
+- Đọc hiểu project
+- Hiểu dependency giữa files
 - Sửa lỗi
-- Tối ưu
+- Tối ưu code
 
 QUAN TRỌNG:
-- CHỈ trả FULL CODE
-- KHÔNG giải thích
+- KHÔNG dump full code trừ khi được yêu cầu
+- CHỈ trả phần cần sửa
+- Giải thích ngắn
+- Ghi rõ file cần sửa
 
-FORMAT:
+FORMAT ƯU TIÊN:
 
+FILE: xxx.js
+
+OLD:
 \`\`\`js
-// FULL CODE
+...
 \`\`\`
 
-FILE:
-${file.originalname}
+NEW:
+\`\`\`js
+...
+\`\`\`
 
-CODE:
-${text}
+YÊU CẦU USER:
+
+${prompt || "Phân tích project"}
+
+FILES:
+
+${mergedText}
+
 `;
-}else{
-
-ask =
-prompt?.trim()
-? `
-Người dùng yêu cầu:
-
-${prompt}
-
-NỘI DUNG FILE:
-
-${text}
-`
-: `
-Hãy phân tích file sau:
-
-${text}
-`;
-
-}
 
 /* =====================
 ASK AI
@@ -649,7 +690,7 @@ const answer =
   await askAI({
     prompt: ask,
     mode:
-      isCodeFile
+      hasCodeFile
         ? "code"
         : "file",
     plan:
@@ -665,7 +706,7 @@ SAVE CHAT
 const newId =
 await saveChat(
 req,
-`📎 ${file.originalname}`,
+`📎 ${files.map(f => f.originalname).join(", ")}`,
 answer,
 chatId
 );
@@ -674,14 +715,16 @@ chatId
 DELETE TEMP
 ===================== */
 
-if(
-fs.existsSync(
-file.path
-)
-){
-fs.unlinkSync(
-file.path
-);
+for (const file of files) {
+
+  if (
+    fs.existsSync(file.path)
+  ) {
+
+    fs.unlinkSync(file.path);
+
+  }
+
 }
 
 return res.json({

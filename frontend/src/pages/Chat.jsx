@@ -22,7 +22,7 @@ export default function Chat({ tab, setTab }) {
 
   const [mode, setMode] = useState("normal");
 
-  const [smartFile, setSmartFile] = useState(null);
+  const [smartFiles, setSmartFiles] = useState([]);
   const [pendingFileAction, setPendingFileAction] = useState(null);
 
   const endRef = useRef(null);
@@ -95,7 +95,7 @@ export default function Chat({ tab, setTab }) {
     setText("");
     setChatId(null);
     setMode("normal");
-    setSmartFile(null);
+    setSmartFiles([]);
     setPendingFileAction(null);
   }
 
@@ -301,57 +301,74 @@ export default function Chat({ tab, setTab }) {
   }
 
   function pickFile(e) {
-    const file = e.target.files?.[0];
 
-    if (!file) return;
+	  const files =
+		Array.from(
+		  e.target.files || []
+		);
 
-    setSmartFile(file);
+	  if (!files.length) return;
 
-    if (
-      pendingFileAction?.type ===
-      "image-chat"
-    ) {
-      generateImageInChat(
-        pendingFileAction.prompt,
-        pendingFileAction.tool,
-        file
-      );
+	  setSmartFiles(prev => [
+		...prev,
+		...files
+	  ]);
 
-      setPendingFileAction(null);
-      return;
-    }
+	  /* file action pending */
 
-    if (
-      pendingFileAction?.type ===
-      "file-chat"
-    ) {
-      sendRealFile(
-        pendingFileAction.prompt,
-        pendingFileAction.mode,
-        file
-      );
+	  if (
+		pendingFileAction?.type ===
+		"image-chat"
+	  ) {
 
-      setPendingFileAction(null);
-      return;
-    }
-  }
+		generateImageInChat(
+		  pendingFileAction.prompt,
+		  pendingFileAction.tool,
+		  files[0]
+		);
+
+		setPendingFileAction(null);
+
+		return;
+	  }
+
+	  if (
+		pendingFileAction?.type ===
+		"file-chat"
+	  ) {
+
+		sendRealFiles(
+		  pendingFileAction.prompt,
+		  pendingFileAction.mode,
+		  files
+		);
+
+		setPendingFileAction(null);
+
+	  }
+
+	}
 
 // PATCH FULL function sendRealFile()
 
-async function sendRealFile(
+async function sendRealFiles(
   prompt,
   fileMode = "file_summary",
-  fileObj = null
+  fileList = []
 ) {
-  const useFile =
-    fileObj || smartFile;
+  const useFiles =
+  fileList.length
+    ? fileList
+    : smartFiles;
 
-  if (!useFile) return;
+  if (!useFiles.length) return;
 
   setTab("chat");
 
   const name =
-    useFile.name || "file";
+  useFiles
+    .map(f => f.name)
+    .join(", ");
 
   const ext =
     name
@@ -496,10 +513,14 @@ async function sendRealFile(
     const fd =
       new FormData();
 
-    fd.append(
-      "file",
-      useFile
-    );
+    useFiles.forEach(file => {
+
+	  fd.append(
+		"files",
+		file
+	  );
+
+	});
 
     fd.append(
       "prompt",
@@ -604,7 +625,7 @@ async function sendRealFile(
   } finally {
     setLoading(false);
 	setLoadingType("none");
-	setSmartFile(null);
+	setSmartFiles([]);
 setPendingFileAction(null);
 
 if (fileInputRef.current) {
@@ -622,7 +643,9 @@ if (fileInputRef.current) {
     fileObj = null
   ) {
     const useFile =
-      fileObj || smartFile || null;
+	  fileObj ||
+	  smartFiles?.[0] ||
+	  null;
 
     setMessages((prev) => [
       ...prev,
@@ -733,26 +756,30 @@ if (fileInputRef.current) {
   }
 
   async function runFileCard(
-    prompt,
-    fileMode = "file_summary"
-  ) {
-    if (!smartFile) {
-      setPendingFileAction({
-        type: "file-chat",
-        prompt,
-        mode: fileMode
-      });
+  prompt,
+  fileMode = "file_summary"
+) {
 
-      askUpload();
-      return;
-    }
+  if (!smartFiles.length) {
 
-    await sendRealFile(
+    setPendingFileAction({
+      type: "file-chat",
       prompt,
-      fileMode,
-      smartFile
-    );
+      mode: fileMode
+    });
+
+    askUpload();
+
+    return;
   }
+
+  await sendRealFiles(
+    prompt,
+    fileMode,
+    smartFiles
+  );
+
+}
 
   async function runImageCard(
     prompt
@@ -765,7 +792,7 @@ if (fileInputRef.current) {
       ["removebg", "upscale", "passport"].includes(
         tool
       ) &&
-      !smartFile
+      !smartFiles.length
     ) {
       setPendingFileAction({
         type: "image-chat",
@@ -788,7 +815,7 @@ async function runTool(item) {
     const mode = item.mode || "normal";
 
     if (mode.startsWith("file")) {
-      if (!smartFile) {
+      if (!smartFiles.length) {
         setTab("chat");
         setPendingFileAction({
           type: "file-chat",
@@ -799,7 +826,11 @@ async function runTool(item) {
         return;
       }
 
-      await sendRealFile(item.prompt, mode, smartFile);
+      await sendRealFiles(
+		  item.prompt,
+		  mode,
+		  smartFiles
+		);
       return;
     }
 
@@ -855,13 +886,32 @@ async function runTool(item) {
 
   return (
     <div className="app">
-      <input
-        hidden
-        ref={fileInputRef}
-        type="file"
-        accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.webp,.txt"
-        onChange={pickFile}
-      />
+  <input
+    hidden
+    multiple
+    ref={fileInputRef}
+    type="file"
+    accept="
+      .pdf,
+      .doc,
+      .docx,
+      .xls,
+      .xlsx,
+      .png,
+      .jpg,
+      .jpeg,
+      .webp,
+      .txt,
+      .js,
+      .jsx,
+      .ts,
+      .tsx,
+      .json,
+      .css,
+      .html
+    "
+    onChange={pickFile}
+  />
 
      <Sidebar
   chats={chats}
@@ -974,11 +1024,11 @@ async function runTool(item) {
 
 			  setText("");
 
-			  await sendRealFile(
+			  await sendRealFiles(
 				currentText ||
 				  "Xem file và hỗ trợ giúp mình",
 				"file_summary",
-				file
+				[file]
 			  );
 
 			  return true;
