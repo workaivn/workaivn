@@ -1015,7 +1015,7 @@ async function runTool(item) {
 				await generateImageInChat(
 				  currentText ||
 				  "Phân tích ảnh giúp mình",
-				  "create",
+				  "vision",
 				  files[0]
 				);
 
