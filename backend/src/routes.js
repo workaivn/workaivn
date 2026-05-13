@@ -620,57 +620,60 @@ PROMPT AI
 const finalPrompt =
   prompt?.trim() ||
   [
-    "Hãy:",
-    "- phân tích project",
-    "- tìm lỗi tiềm năng",
-    "- giải thích cấu trúc",
-    "- đề xuất cải thiện"
+    "Phân tích project",
+    "Tìm bug",
+    "Giải thích kiến trúc",
+    "Đề xuất cải thiện"
   ].join("\n");
-  
+
 let ask = `
 
-Bạn đang phân tích nhiều file source code.
+Bạn là senior software engineer và technical architect.
 
-NHIỆM VỤ:
-- Đọc hiểu project
+Bạn đang đọc nhiều files trong cùng một project thật.
+
+MỤC TIÊU:
+- Hiểu project structure
 - Hiểu dependency giữa files
 - Tìm root cause thật sự
-- Sửa lỗi
+- Sửa bug chính xác
 - Tối ưu code nếu cần
+- Giải thích ngắn gọn nhưng hữu ích
 
-QUAN TRỌNG:
-- KHÔNG dump full code trừ khi user yêu cầu
-- CHỈ show phần code thay đổi
-- Giải thích ngắn gọn nhưng có ý nghĩa kỹ thuật
-- Nếu bug liên quan nhiều file, phải nói dependency
-- OLD và NEW phải khác nhau thật sự
+NGUYÊN TẮC:
+- Không đoán bừa
+- Không trả lời chung chung
+- Không dump full source code
+- Chỉ show phần code cần sửa
+- Nếu bug nằm ở file khác, phải nói rõ
+- Nếu có nhiều files, phải phân tích nhiều files
+- Không được bỏ qua file upload
+- Ưu tiên fix thực tế production
 - Không thêm emoji trong code
 - Không thêm comment kiểu AI
-- Không lặp lại code y chang
+- Không lặp OLD và NEW giống nhau
 
-FORMAT BẮT BUỘC:
+KHI PHÂN TÍCH:
+1. Xác định file liên quan
+2. Tìm root cause
+3. Giải thích impact
+4. Đưa patch tối thiểu
+5. Nếu cần, đề xuất refactor ngắn
 
-PHÂN TÍCH THEO TỪNG FILE.
+FORMAT TRẢ LỜI:
 
-Nếu user upload nhiều files:
-- PHẢI phân tích tất cả files
-- PHẢI nói dependency giữa files
-- KHÔNG được chỉ trả lời 1 file
-- Mỗi file phải có section riêng
-FORMAT:
-
-================================
+================================================
 
 FILE: xxx.js
 
 VẤN ĐỀ:
 - lỗi gì
-- vì sao
+- vì sao xảy ra
 
 ẢNH HƯỞNG:
 - bug gây gì
-- liên quan file nào khác
 - runtime/build/UI issue gì
+- liên quan file nào khác
 
 FIX:
 - hướng sửa
@@ -686,10 +689,15 @@ NEW:
 \`\`\`js
 ...
 \`\`\`
-FILE: yyy.js
 
-VẤN ĐỀ:
-...
+================================================
+
+QUY TẮC PATCH:
+- OLD và NEW phải khác nhau thật sự
+- Chỉ show phần thay đổi
+- Không show full file trừ khi user yêu cầu
+- Nếu chỉ đổi 1 dòng thì chỉ show 1 dòng
+- Ưu tiên patch clean và production-ready
 
 YÊU CẦU USER:
 
