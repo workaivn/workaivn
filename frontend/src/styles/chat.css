@@ -3694,7 +3694,7 @@ FINAL CODE BLOCK FIX
 .codeTop{
   height:42px !important;
 
-  padding:0 12px !important;
+  padding:0 5px !important;
 
   display:flex !important;
   align-items:center !important;
@@ -3707,13 +3707,13 @@ FINAL CODE BLOCK FIX
 
 .codePre{
   margin:0 !important;
-  padding:12px 14px !important;
+  padding:4px 5px !important;
 
   background:#ffffff !important;
 
   overflow:auto !important;
 
-  line-height:1.55 !important;
+  line-height:1.5 !important;
 }
 
 .codePre code{
