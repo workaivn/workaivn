@@ -211,136 +211,20 @@ export default function Chat({ tab, setTab }) {
 			}
 		  );
 
-		const reader =
-		  r.body.getReader();
+		const answer =
+		  await r.text();
 
-		const decoder =
-		  new TextDecoder();
+		setMessages(prev => [
 
-		let buffer = "";
-		let streamTimeout = null;
+		  ...prev,
 
-		function flushStream() {
+		  {
+			role: "assistant",
+			content: answer,
+			streaming: false
+		  }
 
-		  clearTimeout(
-			streamTimeout
-		  );
-
-		  streamTimeout =
-			setTimeout(() => {
-
-			  setMessages(prev => {
-
-				const copy = [...prev];
-
-				if (
-				  copy.at(-1)?.role ===
-				  "assistant"
-				) {
-
-				  copy[
-					copy.length - 1
-				  ] = {
-					role: "assistant",
-					content: buffer,
-					streaming: true
-				  };
-
-				} else {
-
-				  copy.push({
-					role: "assistant",
-					content: buffer,
-					streaming: true
-				  });
-
-				}
-
-				return copy;
-
-			  });
-
-			}, 25);
-
-		}
-
-		while (true) {
-
-		  const {
-			done,
-			value
-		  } = await reader.read();
-
-		  if (done) {
-
-			  setMessages(prev => {
-
-				const copy = [...prev];
-
-				if (
-				  copy.at(-1)?.role ===
-				  "assistant"
-				) {
-
-				  copy[
-					copy.length - 1
-				  ] = {
-					...copy[
-					  copy.length - 1
-					],
-					streaming: false
-				  };
-
-				}
-
-				return copy;
-
-			  });
-
-			  break;
-			}
-
-		  const chunk =
-			  decoder.decode(
-				value,
-				{
-				  stream: true
-				}
-			  );
-
-			const cleaned =
-				  chunk
-					.replace(/\r/g, "")
-					.replace(/\t/g, "  ");
-
-				buffer += cleaned;
-
-				/* FIX HTML LINE BREAK */
-
-				buffer = buffer
-				  .replace(
-					/(<\/style>)/g,
-					"$1\n"
-				  )
-
-				  .replace(
-					/(<script>)/g,
-					"\n$1\n"
-				  )
-
-				  .replace(
-					/(<\/script>)/g,
-					"\n$1\n"
-				  )
-
-				  .replace(
-					/```html/g,
-					"\n```html\n"
-				  );
-			  
-		  flushStream();
-
-		}
+		]);
 
 		await loadChats();
 
