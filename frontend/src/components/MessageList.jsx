@@ -60,25 +60,25 @@ className={`bubble ${msg.role}`}
 :"WorkAI"}
 </div>
 
-{isImg?(
-<img
-src={content}
-className="chatImg"
-/>
+{isImg ? (
+
+  <img
+    src={content}
+    className="chatImg"
+  />
+
 ) : (
 
-<div
-  className={
-    msg.streaming
-      ? "markdown streaming"
-      : "markdown"
-  }
-  dangerouslySetInnerHTML={{
-    __html: renderMarkdown(content)
-  }}
-/>
-
-)
+  <div
+    className={
+      msg.streaming
+        ? "markdown streaming"
+        : "markdown"
+    }
+    dangerouslySetInnerHTML={{
+      __html: renderMarkdown(content)
+    }}
+  />
 
 )}
 
