@@ -8,7 +8,9 @@ import DOMPurify from "dompurify";
 
 marked.setOptions({
   gfm: true,
-  breaks: true
+  breaks: true,
+  headerIds: false,
+  mangle: false
 });
 
 /* =========================
@@ -124,8 +126,13 @@ export function renderMarkdown(
   const fixed =
     fixCodeBlock(text);
 
+  const escaped =
+    fixed
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
   const html =
-    marked.parse(fixed);
+    marked.parse(escaped);
 
   return DOMPurify.sanitize(
     html
