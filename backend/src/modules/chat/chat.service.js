@@ -342,23 +342,7 @@ console.log("==================");
         mode
       );
 
-    /* fake streaming */
-    const parts =
-      final.match(
-        /.{1,25}/g
-      ) || [];
-
-    for (const p of parts) {
-      res.write(p);
-
-      await new Promise(
-        (r) =>
-          setTimeout(
-            r,
-            15
-          )
-      );
-    }
+    res.write(final);
 
     await saveChat(
       userId,
