@@ -1010,17 +1010,65 @@ async function runTool(item) {
 				  f => f.type?.startsWith("image/")
 				);
 
-			  if (onlyImages) {
+			if (onlyImages) {
 
-				await generateImageInChat(
-				  currentText ||
-				  "Phân tích ảnh giúp mình",
-				  "vision",
-				  files[0]
+			  const fd =
+				new FormData();
+
+			  fd.append(
+				"prompt",
+				currentText ||
+				"Phân tích ảnh giúp mình"
+			  );
+
+			  fd.append(
+				"tool",
+				"vision"
+			  );
+
+			  fd.append(
+				"file",
+				files[0]
+			  );
+
+			  const r =
+				await fetch(
+				  `${API_URL}/generate-image`,
+				  {
+					method: "POST",
+
+					headers: {
+					  Authorization:
+						`Bearer ${token}`
+					},
+
+					body: fd
+				  }
 				);
 
-				return true;
-			  }
+			  const d =
+				await r.json();
+
+			  setMessages(prev => [
+				...prev,
+
+				{
+				  role: "user",
+				  content:
+					currentText ||
+					"📷 Ảnh"
+				},
+
+				{
+				  role: "assistant",
+				  content:
+					d.answer ||
+					"Không đọc được ảnh."
+				}
+			  ]);
+
+			  return true;
+			}
 
 			  setMessages(prev => [
 				...prev,
