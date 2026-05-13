@@ -248,7 +248,8 @@ export default function Chat({ tab, setTab }) {
 
 				  copy.push({
 					role: "assistant",
-					content: buffer
+					content: buffer,
+					streaming: true
 				  });
 
 				}
