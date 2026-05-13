@@ -3676,3 +3676,29 @@ FINAL CODE BLOCK FIX
 .bubble.assistant code{
   background:none !important;
 }
+
+
+
+/* FINAL HLJS OVERRIDE */
+
+.codePre{
+  padding:0 !important;
+}
+
+.codePre .hljs{
+  padding:10px 22px !important;
+
+  margin:0 !important;
+
+  background:#fff !important;
+
+  border:none !important;
+}
+
+.codePre code.hljs{
+  display:block !important;
+
+  line-height:1.55 !important;
+
+  font-size:14px !important;
+}
