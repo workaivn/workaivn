@@ -22,12 +22,19 @@ const renderer =
   new marked.Renderer();
 
 renderer.code = function (
-  code,
-  infostring
+  token
 ) {
 
+  const code =
+    typeof token === "string"
+      ? token
+      : token?.text || "";
+
   const lang =
-    (infostring || "plaintext")
+    (
+      token?.lang ||
+      "plaintext"
+    )
       .trim()
       .toLowerCase();
 
