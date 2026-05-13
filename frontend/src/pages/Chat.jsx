@@ -237,11 +237,12 @@ export default function Chat({ tab, setTab }) {
 				) {
 
 				  copy[
-					copy.length - 1
-				  ] = {
-					role: "assistant",
-					content: buffer
-				  };
+					  copy.length - 1
+					] = {
+					  role: "assistant",
+					  content: buffer,
+					  streaming: true
+					};
 
 				} else {
 
@@ -269,7 +270,34 @@ export default function Chat({ tab, setTab }) {
 			value
 		  } = await reader.read();
 
-		  if (done) break;
+		  if (done) {
+
+			  setMessages(prev => {
+
+				const copy = [...prev];
+
+				if (
+				  copy.at(-1)?.role ===
+				  "assistant"
+				) {
+
+				  copy[
+					copy.length - 1
+				  ] = {
+					...copy[
+					  copy.length - 1
+					],
+					streaming: false
+				  };
+
+				}
+
+				return copy;
+
+			  });
+
+			  break;
+			}
 
 		  buffer += decoder.decode(
 			value,

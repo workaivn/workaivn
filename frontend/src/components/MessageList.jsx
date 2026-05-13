@@ -180,29 +180,27 @@ className="chatImg"
 />
 ) : (
 
-  loading &&
-  index === messages.length - 1 &&
-  msg.role === "assistant"
+ msg.streaming
 
-  ? (
+? (
 
-    <pre className="streamRaw">
-      {content}
-    </pre>
+  <pre className="streamRaw">
+    {content}
+  </pre>
 
-  ) : (
+) : (
 
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        code: CodeBlock,
-        a: LinkRenderer
-      }}
-    >
-      {fixCodeBlock(content)}
-    </ReactMarkdown>
+  <ReactMarkdown
+    remarkPlugins={[remarkGfm]}
+    components={{
+      code: CodeBlock,
+      a: LinkRenderer
+    }}
+  >
+    {fixCodeBlock(content)}
+  </ReactMarkdown>
 
-  )
+)
 
 )}
 
