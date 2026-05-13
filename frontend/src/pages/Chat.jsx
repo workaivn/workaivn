@@ -300,12 +300,18 @@ export default function Chat({ tab, setTab }) {
 			  break;
 			}
 
-		  buffer += decoder.decode(
-			value,
-			{
-			  stream: true
-			}
-		  );
+		  const chunk =
+			  decoder.decode(
+				value,
+				{
+				  stream: true
+				}
+			  );
+
+			buffer += chunk
+			  .replace(/\r/g, "")
+			  .replace(/```(\w+)(\S)/g, "```$1\n$2")
+			  .replace(/([^\n])```/g, "$1\n```");
 
 		  flushStream();
 
