@@ -84,10 +84,16 @@ function fixCodeBlock(
   /* FIX html<!DOCTYPE */
 
   fixed =
-    fixed.replace(
-      /^html\s*</gm,
-      "```html\n<"
-    );
+  fixed.replace(
+    /^html\s*</gim,
+		"```html\n<"
+	  );
+
+	fixed =
+	  fixed.replace(
+		/^html</gim,
+		"```html\n<"
+	  );
 
   /* FIX jsconst */
 
