@@ -1054,24 +1054,35 @@ async function runTool(item) {
 			  const d =
 				await r.json();
 
-			  setMessages(prev => [
-				...prev,
+			  const preview =
+				  URL.createObjectURL(
+					files[0]
+				  );
 
-				{
-				  role: "user",
-				  content:
-					currentText ||
-					"📷 Ảnh"
-				},
+				setMessages(prev => [
+				  ...prev,
 
-				{
-				  role: "assistant",
-				  content:
-				  typeof d.answer === "string"
-					? d.answer
-					: "Không đọc được ảnh."
-				}
-			  ]);
+				  {
+					role: "user",
+					content:
+					  currentText ||
+					  "📷 Ảnh",
+
+					image:
+					  preview
+				  },
+
+				  {
+					role: "assistant",
+					content:
+					  typeof d.answer ===
+					  "string"
+
+						? d.answer
+
+						: "Không đọc được ảnh."
+				  }
+				]);
 
 			  return true;
 			}

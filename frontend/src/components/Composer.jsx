@@ -35,18 +35,18 @@ async function submit(){
       x => x.file
     );
 
-  /* clear ngay khi gửi */
-
-  setPreviews([]);
-
-  if(fileRef.current){
-    fileRef.current.value="";
-  }
 
   const ok =
     await send(currentFiles);
 
+
   if(ok){
+	  
+	  setPreviews([]);
+
+	if(fileRef.current){
+	  fileRef.current.value="";
+	}
 
     if(textareaRef.current){
 

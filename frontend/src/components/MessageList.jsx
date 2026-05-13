@@ -19,28 +19,36 @@ return(
 const content =
 msg.content || "";
 
+const imageSrc =
+  msg.image ||
+  (
+    typeof content === "string"
+      ? content
+      : ""
+  );
+
 const isImg =
-content.startsWith("data:image") ||
+  imageSrc.startsWith("data:image") ||
 
-(
-  content.startsWith("http") && (
+  (
+    imageSrc.startsWith("http") && (
 
-    content.includes("/files/img_") ||
+      imageSrc.includes("/files/img_") ||
 
-    content.includes("/files/avatar_") ||
+      imageSrc.includes("/files/avatar_") ||
 
-    content.includes(".png") ||
+      imageSrc.includes(".png") ||
 
-    content.includes(".jpg") ||
+      imageSrc.includes(".jpg") ||
 
-    content.includes(".jpeg") ||
+      imageSrc.includes(".jpeg") ||
 
-    content.includes(".webp") ||
+      imageSrc.includes(".webp") ||
 
-    content.includes("openaiusercontent")
+      imageSrc.includes("openaiusercontent")
 
-  )
-);
+    )
+  );
 
 
 
@@ -63,7 +71,7 @@ className={`bubble ${msg.role}`}
 {isImg ? (
 
   <img
-    src={content}
+    src={imageSrc}
     className="chatImg"
   />
 
