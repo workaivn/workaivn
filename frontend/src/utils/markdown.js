@@ -58,52 +58,8 @@ function fixCodeBlock(
   let fixed =
     String(text || "");
 
-  fixed = fixed.replace(
-    /^\s*1\s*$/gm,
-    ""
-  );
-
   fixed =
     fixed.replace(/\r/g, "");
-
-  fixed =
-    fixed.replace(
-      /```([a-zA-Z0-9+#-]*)([^\n])/g,
-      "```$1\n$2"
-    );
-	
-	fixed = fixed.replace(
-	  /^```html$/gm,
-	  "\n```html"
-	);
-
-	fixed = fixed.replace(
-	  /```\s+html/g,
-	  "```html"
-	);
-
-	fixed = fixed.replace(
-	  /```\s+css/g,
-	  "```css"
-	);
-
-	fixed = fixed.replace(
-	  /```\s+javascript/g,
-	  "```javascript"
-	);
-
-	fixed = fixed.replace(
-	  /```\s+js/g,
-	  "```js"
-	);
-
-	/* REMOVE SINGLE 1 */
-
-	fixed = fixed.replace(
-	  /^\s*1\s*$/gm,
-	  ""
-	);
-
 
   const count =
     (
