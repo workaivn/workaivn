@@ -43,7 +43,7 @@ renderer.code = ({
     </span>
 
     <button
-      class="copyBtn"
+      class="codeBtn"
       onclick="
 navigator.clipboard.writeText(
 this.closest('.codeWrap')

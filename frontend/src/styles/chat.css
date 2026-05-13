@@ -3677,3 +3677,76 @@ PROFILE PAGE
 
   overflow-x: auto;
 }
+
+
+/* =====================================
+FINAL CODE BLOCK FIX
+===================================== */
+
+.codeWrap{
+  margin:12px 0 !important;
+  border-radius:14px !important;
+  overflow:hidden !important;
+  border:1px solid #dbe3ef !important;
+  background:#fff !important;
+}
+
+.codeTop{
+  height:42px !important;
+
+  padding:0 12px !important;
+
+  display:flex !important;
+  align-items:center !important;
+  justify-content:space-between !important;
+
+  background:#f8fafc !important;
+
+  border-bottom:1px solid #e5e7eb !important;
+}
+
+.codePre{
+  margin:0 !important;
+  padding:12px 14px !important;
+
+  background:#ffffff !important;
+
+  overflow:auto !important;
+
+  line-height:1.55 !important;
+}
+
+.codePre code{
+  margin:0 !important;
+  padding:0 !important;
+
+  background:transparent !important;
+
+  white-space:pre-wrap !important;
+  word-break:break-word !important;
+
+  font-size:14px !important;
+}
+
+.codeWrap pre{
+  margin:0 !important;
+  padding:12px 14px !important;
+}
+
+.codeWrap code{
+  margin:0 !important;
+  padding:0 !important;
+}
+
+.codeBtn{
+  border:none !important;
+
+  background:#2563eb !important;
+  color:#fff !important;
+
+  padding:6px 10px !important;
+
+  border-radius:8px !important;
+
+  cursor:pointer !important;
+}
