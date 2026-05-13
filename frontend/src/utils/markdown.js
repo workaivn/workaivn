@@ -5,87 +5,50 @@ import DOMPurify from "dompurify";
 const renderer =
   new marked.Renderer();
 
-renderer.code = ({
-  text,
-  lang
-}) => {
+renderer.code = ({ text, lang }) => {
 
-  const language =
-    lang || "plaintext";
+  const language = lang || "plaintext";
 
-  let code = text;
+  let highlighted = text;
 
-  if (
-    hljs.getLanguage(language)
-  ) {
-
+  if (hljs.getLanguage(language)) {
     try {
-
-      code =
-        hljs.highlight(
-          text,
-          {
-            language
-          }
-        ).value;
-
+      highlighted = hljs.highlight(
+        text,
+        { language }
+      ).value;
     } catch {}
-
   }
 
+  const encoded =
+    encodeURIComponent(text);
+
   return `
-		<div class="codeWrap">
+<div class="codeWrap">
 
-		  <div class="codeTop">
+  <div class="codeTop">
 
-			<span class="codeLang">
-			  ${language.toUpperCase()}
-			</span>
+    <span class="codeLang">
+      ${language.toUpperCase()}
+    </span>
 
-			<button
-		  class="codeBtn"
-		  onclick="
-		(() => {
-		  const code =
-			this.closest('.codeWrap')
-			  .querySelector('code')
-			  .innerText;
-
-		  const textarea =
-			document.createElement('textarea');
-
-		  textarea.value = code;
-
-		  document.body.appendChild(textarea);
-
-		  textarea.select();
-
-		  document.execCommand('copy');
-
-		  document.body.removeChild(textarea);
-
-		  this.innerText = 'Copied';
-
-		  setTimeout(() => {
-			this.innerText = 'Copy';
-		  }, 1200);
-		})()
-		"
-		>
-		  Copy
-		</button>
+    <button
+      class="codeBtn"
+      data-code="${encoded}"
+    >
+      Copy
+    </button>
 
   </div>
 
   <pre class="codePre">
 <code class="hljs ${language}">
-${code}
+${highlighted}
 </code>
   </pre>
 
 </div>
 `;
-
 };
 
 marked.use({ renderer });
@@ -146,8 +109,41 @@ export function renderMarkdown(
   const html =
     marked.parse(fixed);
 
-  return DOMPurify.sanitize(
-    html
-  );
+  const clean =
+    DOMPurify.sanitize(html);
 
+  setTimeout(() => {
+
+    document
+      .querySelectorAll(".codeBtn")
+      .forEach((btn) => {
+
+        if (btn.dataset.binded)
+          return;
+
+        btn.dataset.binded = "1";
+
+        btn.onclick = () => {
+
+          const code =
+            decodeURIComponent(
+              btn.dataset.code || ""
+            );
+
+          navigator.clipboard
+            .writeText(code);
+
+          btn.innerText = "Copied";
+
+          setTimeout(() => {
+            btn.innerText = "Copy";
+          }, 1200);
+
+        };
+
+      });
+
+  }, 0);
+
+  return clean;
 }
