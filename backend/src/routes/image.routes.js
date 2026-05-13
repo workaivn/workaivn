@@ -6,6 +6,7 @@ import fs from "fs";
 import path from "path";
 
 import User from "../modules/auth/auth.model.js";
+import Chat from "../modules/chat/chat.model.js";
 
 import { usageLimit }
 from "../middleware/usageLimit.js";
@@ -156,6 +157,100 @@ router.post(
         });
 
       }
+	  
+	  
+	  /* =========================
+   VISION ANALYZE
+========================= */
+
+	if (tool === "vision") {
+
+	  if (!file) {
+
+		return res
+		  .status(400)
+		  .json({
+			error:
+			  "Không có ảnh nào được tải lên"
+		  });
+
+	  }
+
+	  const base64 =
+		fs.readFileSync(
+		  file.path,
+		  {
+			encoding:
+			  "base64"
+		  }
+		);
+
+	  const mime =
+		file.mimetype ||
+		"image/png";
+
+	  const vision =
+		await openai.chat.completions.create({
+
+		  model:
+			"gpt-4.1-mini",
+
+		  messages: [
+
+			{
+			  role: "system",
+			  content:
+				"Bạn là AI phân tích hình ảnh."
+			},
+
+			{
+			  role: "user",
+
+			  content: [
+
+				{
+				  type: "text",
+
+				  text:
+					finalPrompt ||
+					"Phân tích ảnh giúp mình"
+				},
+
+				{
+				  type: "image_url",
+
+				  image_url: {
+					url:
+	`data:${mime};base64,${base64}`
+				  }
+				}
+
+			  ]
+			}
+
+		  ]
+
+		});
+
+	  const answer =
+		vision.choices?.[0]
+		  ?.message?.content ||
+		"Không đọc được ảnh.";
+
+	  try {
+
+		fs.unlinkSync(
+		  file.path
+		);
+
+	  } catch {}
+
+	  return res.json({
+		ok: true,
+		answer
+	  });
+
+	}
 
       /* =========================
          REQUIRE FILE
