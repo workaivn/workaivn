@@ -34,11 +34,34 @@ renderer.code = ({
   }
 
   return `
-<pre class="codePre">
+<div class="codeWrap">
+
+  <div class="codeTop">
+
+    <span class="codeLang">
+      ${language.toUpperCase()}
+    </span>
+
+    <button
+      class="copyBtn"
+      onclick="
+navigator.clipboard.writeText(
+this.parentElement.nextElementSibling.innerText
+)
+"
+    >
+      Copy
+    </button>
+
+  </div>
+
+  <pre class="codePre">
 <code class="hljs ${language}">
 ${code}
 </code>
-</pre>
+  </pre>
+
+</div>
 `;
 
 };
