@@ -46,7 +46,9 @@ renderer.code = ({
       class="copyBtn"
       onclick="
 navigator.clipboard.writeText(
-this.parentElement.nextElementSibling.innerText
+this.closest('.codeWrap')
+.querySelector('code')
+.innerText
 )
 "
     >
