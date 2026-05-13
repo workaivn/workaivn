@@ -163,11 +163,12 @@ function fixCodeBlock(
 ========================= */
 
 export function renderMarkdown(
-  text = ""
-) {
+		  text = ""
+		) {
 
-  const fixed =
-    fixCodeBlock(text);
+		  const fixed =
+		  fixCodeBlock(text);
+
 		fixed = fixed.replace(
 		  /^html\s+</gm,
 		  "```html\n<"
@@ -177,8 +178,9 @@ export function renderMarkdown(
 		  /<\/html>$/gm,
 		  "</html>\n```"
 		);
-  const html =
-	marked.parse(fixed);
+
+		const html =
+		  marked.parse(fixed);
 
   return DOMPurify.sanitize(
 	  html,
