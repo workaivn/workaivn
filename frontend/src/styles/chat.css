@@ -3628,7 +3628,7 @@ FINAL CODE BLOCK FIX
 .codePre{
   margin:0 !important;
 
-  padding:10px 14px !important;
+  padding:8px 22px !important;
 
   background:#fff !important;
 
@@ -3636,6 +3636,8 @@ FINAL CODE BLOCK FIX
 }
 
 .codePre code{
+  display:block !important;
+
   padding:0 !important;
 
   margin:0 !important;
