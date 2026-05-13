@@ -67,20 +67,16 @@ className="chatImg"
 />
 ) : (
 
-msg.streaming ? (
-
-  <pre className="streamText">
-    {content}
-  </pre>
-
-) : (
-
-  <div
-    className="markdown"
-    dangerouslySetInnerHTML={{
-      __html: renderMarkdown(content)
-    }}
-  />
+<div
+  className={
+    msg.streaming
+      ? "markdown streaming"
+      : "markdown"
+  }
+  dangerouslySetInnerHTML={{
+    __html: renderMarkdown(content)
+  }}
+/>
 
 )
 
