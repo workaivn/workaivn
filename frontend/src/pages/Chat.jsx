@@ -1020,9 +1020,19 @@ async function runTool(item) {
 				"https://api.workaivn.com/api";
 
 			  const preview =
-				URL.createObjectURL(
-				  files[0]
-				);
+				  await new Promise(resolve => {
+
+					const reader =
+					  new FileReader();
+
+					reader.onload = () =>
+					  resolve(reader.result);
+
+					reader.readAsDataURL(
+					  files[0]
+					);
+
+				  });
 
 			  /* HIỆN USER MESSAGE NGAY */
 
