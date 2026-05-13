@@ -82,13 +82,49 @@ export default function Chat({ tab, setTab }) {
   }
 
   async function openChat(id) {
-    try {
-      const r = await apiGet("/chat/" + id);
-      const d = await r.json();
-      setChatId(id);
-      setMessages(d.messages || []);
-    } catch {}
-  }
+
+	  try {
+
+		const r =
+		  await apiGet(
+			"/chat/" + id
+		  );
+
+		const d =
+		  await r.json();
+
+		const cleaned =
+		  (d.messages || []).map(
+			msg => ({
+
+			  role:
+				String(
+				  msg.role ||
+				  "assistant"
+				),
+
+			  content:
+				typeof msg.content ===
+				"string"
+
+				  ? msg.content
+
+				  : JSON.stringify(
+					  msg.content || "",
+					  null,
+					  2
+					)
+
+			})
+		  );
+
+		setChatId(id);
+
+		setMessages(cleaned);
+
+	  } catch {}
+
+	}
 
   function newChat() {
     setMessages([]);
