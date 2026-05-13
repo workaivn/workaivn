@@ -6,14 +6,39 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 function fixCodeBlock(text = "") {
-  const count = (text.match(/```/g) || []).length;
 
-  // nếu số ``` là lẻ → thiếu đóng
+  let fixed = String(text || "");
+
+  /* normalize line breaks */
+  fixed = fixed.replace(/\r/g, "");
+
+  /* fix:
+     ```html<!DOCTYPE
+  */
+  fixed = fixed.replace(
+    /```(\w+)([^\n])/g,
+    "```$1\n$2"
+  );
+
+  /* fix:
+     abc``` 
+  */
+  fixed = fixed.replace(
+    /([^\n])```/g,
+    "$1\n```"
+  );
+
+  /* nếu thiếu đóng */
+  const count =
+    (
+      fixed.match(/```/g) || []
+    ).length;
+
   if (count % 2 !== 0) {
-    return text + "\n```";
+    fixed += "\n```";
   }
 
-  return text;
+  return fixed;
 }
 
 

@@ -309,10 +309,8 @@ export default function Chat({ tab, setTab }) {
 			  );
 
 			buffer += chunk
-			  .replace(/\r/g, "")
-			  .replace(/```(\w+)(\S)/g, "```$1\n$2")
-			  .replace(/([^\n])```/g, "$1\n```");
-
+			  .replace(/\r/g, "");
+			  
 		  flushStream();
 
 		}
