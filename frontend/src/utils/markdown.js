@@ -20,15 +20,17 @@ marked.setOptions({
 const renderer =
   new marked.Renderer();
 
-renderer.code = function({
-  text,
-  lang
-}) {
+renderer.code = function (
+  code,
+  language
+) {
 
-  let highlighted = text;
+  const lang =
+    language || "plaintext";
+
+  let highlighted = code;
 
   if (
-    lang &&
     hljs.getLanguage(lang)
   ) {
 
@@ -36,7 +38,7 @@ renderer.code = function({
 
       highlighted =
         hljs.highlight(
-          text,
+          code,
           {
             language: lang
           }
@@ -52,7 +54,7 @@ renderer.code = function({
   <div class="codeTop">
 
     <span class="codeLang">
-      ${lang || "CODE"}
+      ${lang.toUpperCase()}
     </span>
 
     <button
@@ -69,7 +71,7 @@ this.parentElement.nextElementSibling.innerText
   </div>
 
   <pre class="codePre">
-<code class="hljs ${lang || ""}">
+<code class="hljs ${lang}">
 ${highlighted}
 </code>
   </pre>
