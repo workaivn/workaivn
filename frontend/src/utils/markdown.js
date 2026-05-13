@@ -2,6 +2,50 @@ import { marked } from "marked";
 import hljs from "highlight.js";
 import DOMPurify from "dompurify";
 
+const renderer =
+  new marked.Renderer();
+
+renderer.code = ({
+  text,
+  lang
+}) => {
+
+  const language =
+    lang || "plaintext";
+
+  let code = text;
+
+  if (
+    hljs.getLanguage(language)
+  ) {
+
+    try {
+
+      code =
+        hljs.highlight(
+          text,
+          {
+            language
+          }
+        ).value;
+
+    } catch {}
+
+  }
+
+  return `
+<pre class="codePre">
+<code class="hljs ${language}">
+${code}
+</code>
+</pre>
+`;
+
+};
+
+marked.use({ renderer });
+
+
 /* =========================
    MARKED CONFIG
 ========================= */
@@ -14,38 +58,6 @@ marked.setOptions({
   pedantic: false
 });
 
-/* =========================
-   CODE BLOCK UI
-========================= */
-
-marked.setOptions({
-  gfm: true,
-  breaks: true,
-  pedantic: false,
-
-  highlight(code, lang) {
-
-    if (
-      lang &&
-      hljs.getLanguage(lang)
-    ) {
-
-      try {
-
-        return hljs.highlight(
-          code,
-          {
-            language: lang
-          }
-        ).value;
-
-      } catch {}
-
-    }
-
-    return code;
-  }
-});
 
 /* =========================
    FIX STREAM CODE
