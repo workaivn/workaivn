@@ -209,22 +209,6 @@ function todayKey() {
   return `${y}-${m}-${d}`;
 }
 
-/* func cu
-function fileUrl(name, req) {
-  const base =
-    process.env.BASE_URL ||
-    `https://${req.get("host")}`;
-
-  return `${base}/files/${name}`;
-}
-
-function fileMsg(icon, name, req) {
-  return `${icon} **${name}**
-[⬇ Download file](${fileUrl(name, req)})`;
-}
-
-*/
-
 function fileUrl(name, req) {
 
   if (
@@ -633,7 +617,16 @@ ${text}
 /* =====================
 PROMPT AI
 ===================== */
-
+const finalPrompt =
+  prompt?.trim() ||
+  [
+    "Hãy:",
+    "- phân tích project",
+    "- tìm lỗi tiềm năng",
+    "- giải thích cấu trúc",
+    "- đề xuất cải thiện"
+  ].join("\n");
+  
 let ask = `
 
 Bạn đang phân tích nhiều file source code.
@@ -657,18 +650,30 @@ QUAN TRỌNG:
 
 FORMAT BẮT BUỘC:
 
+PHÂN TÍCH THEO TỪNG FILE.
+
+Nếu user upload nhiều files:
+- PHẢI phân tích tất cả files
+- PHẢI nói dependency giữa files
+- KHÔNG được chỉ trả lời 1 file
+- Mỗi file phải có section riêng
+FORMAT:
+
+================================
+
 FILE: xxx.js
 
 VẤN ĐỀ:
-- mô tả ngắn lỗi
-- vì sao xảy ra
+- lỗi gì
+- vì sao
 
 ẢNH HƯỞNG:
 - bug gây gì
+- liên quan file nào khác
 - runtime/build/UI issue gì
 
 FIX:
-- mô tả hướng sửa ngắn
+- hướng sửa
 
 PATCH:
 
@@ -681,16 +686,14 @@ NEW:
 \`\`\`js
 ...
 \`\`\`
+FILE: yyy.js
+
+VẤN ĐỀ:
+...
 
 YÊU CẦU USER:
 
-${prompt || `
-Hãy:
-- phân tích project
-- tìm lỗi tiềm năng
-- giải thích cấu trúc
-- đề xuất cải thiện
-`}
+${finalPrompt}
 
 FILES:
 
