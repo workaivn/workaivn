@@ -8,6 +8,16 @@ import remarkGfm from "remark-gfm";
 function fixCodeBlock(text = "") {
 
   let fixed = String(text || "");
+  
+	  fixed = fixed.replace(
+	  /```html</g,
+	  "```html\n<"
+	);
+
+	fixed = fixed.replace(
+	  /```javascript(const|let|function)/g,
+	  "```javascript\n$1"
+	);
 
   fixed = fixed.replace(/\r/g, "");
 
@@ -49,79 +59,88 @@ function fixCodeBlock(text = "") {
 }
 
 
-function CodeBlock({
-inline,
-className,
-children
-}){
+function CodeBlock(props) {
 
-const code =
-String(children || "")
-.replace(/\n$/,"");
+  const {
+    className,
+    children
+  } = props;
 
-const [copied,setCopied] =
-useState(false);
+  const code =
+    String(children || "")
+      .replace(/\n$/, "");
 
-/* inline code */
-if(inline){
-return(
-<code className="inlineCode">
-{code}
-</code>
-);
-}
+  const [copied, setCopied] =
+    useState(false);
 
-async function copyCode(){
+  const isInline =
+    !className;
 
-try{
-await navigator.clipboard.writeText(
-code
-);
+  /* INLINE CODE */
 
-setCopied(true);
+  if (isInline) {
+    return (
+      <code className="inlineCode">
+        {code}
+      </code>
+    );
+  }
 
-setTimeout(()=>{
-setCopied(false);
-},1200);
+  async function copyCode() {
 
-}catch{}
+    try {
 
-}
+      await navigator.clipboard.writeText(
+        code
+      );
 
-const lang =
-className
-?.replace("language-","")
-||"code";
+      setCopied(true);
 
-return(
-<div className="codeWrap">
+      setTimeout(() => {
+        setCopied(false);
+      }, 1200);
 
-<div className="codeTop">
+    } catch {}
 
-<span className="codeLang">
-{lang}
-</span>
+  }
 
-<button
-className="codeBtn"
-type="button"
-onClick={copyCode}
->
-{copied
-?"Copied"
-:"Copy"}
-</button>
+  const lang =
+    className
+      ?.replace("language-", "")
+      || "code";
 
-</div>
+  return (
 
-<pre>
-<code className={className}>
-{code}
-</code>
-</pre>
+    <div className="codeWrap">
 
-</div>
-);
+      <div className="codeTop">
+
+        <span className="codeLang">
+          {lang.toUpperCase()}
+        </span>
+
+        <button
+          className="codeBtn"
+          type="button"
+          onClick={copyCode}
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+
+      </div>
+
+      <pre className="codePre">
+
+        <code className={className}>
+          {code}
+        </code>
+
+      </pre>
+
+    </div>
+
+  );
+
 }
 
 function LinkRenderer({
