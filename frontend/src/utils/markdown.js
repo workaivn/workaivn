@@ -166,18 +166,8 @@ export function renderMarkdown(
   text = ""
 ) {
 
-  let fixed =
+  const fixed =
     fixCodeBlock(text);
-
-  fixed = fixed.replace(
-    /^html\s+</gm,
-    "```html\n<"
-  );
-
-  fixed = fixed.replace(
-    /<\/html>$/gm,
-    "</html>\n```"
-  );
 
   const html =
     marked.parse(fixed);
