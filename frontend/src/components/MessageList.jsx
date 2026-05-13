@@ -27,38 +27,6 @@ function fixCodeBlock(text = "") {
       "$1\n```"
     );
 
-  /* COMMON STREAM FIXES */
-
-  fixed =
-    fixed.replace(
-      /(\w)(import\s+)/g,
-      "$1\n$2"
-    );
-
-  fixed =
-    fixed.replace(
-      /(\w)(from\s+\w+)/g,
-      "$1\n$2"
-    );
-
-  fixed =
-    fixed.replace(
-      /(:)(def\s+)/g,
-      "$1\n$2"
-    );
-
-  fixed =
-	  fixed.replace(
-		/(}\s*)(const|let|function)/g,
-		"$1\n$2"
-	  );
-
-  fixed =
-    fixed.replace(
-      /(}\s*)(const|let|function)/g,
-      "$1\n$2"
-    );
-
   /* close unclosed fence */
 
   const count =
