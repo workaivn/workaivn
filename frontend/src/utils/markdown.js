@@ -131,16 +131,26 @@ export function renderMarkdown(
   const fixed =
     fixCodeBlock(text);
 
-  const escaped =
-    fixed
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-
   const html =
-    marked.parse(escaped);
+	marked.parse(fixed);
 
   return DOMPurify.sanitize(
-    html
-  );
+	  html,
+	  {
+		ALLOWED_TAGS: [
+		  "pre",
+		  "code",
+		  "span",
+		  "div",
+		  "button",
+		  "p",
+		  "br"
+		],
+		ALLOWED_ATTR: [
+		  "class",
+		  "onclick"
+		]
+	  }
+	);
 
 }
