@@ -10,7 +10,8 @@ marked.setOptions({
   gfm: true,
   breaks: true,
   headerIds: false,
-  mangle: false
+  mangle: false,
+  pedantic: false
 });
 
 /* =========================
@@ -114,6 +115,34 @@ function fixCodeBlock(
 	  /^```html$/gm,
 	  "\n```html"
 	);
+
+	fixed = fixed.replace(
+	  /```\s+html/g,
+	  "```html"
+	);
+
+	fixed = fixed.replace(
+	  /```\s+css/g,
+	  "```css"
+	);
+
+	fixed = fixed.replace(
+	  /```\s+javascript/g,
+	  "```javascript"
+	);
+
+	fixed = fixed.replace(
+	  /```\s+js/g,
+	  "```js"
+	);
+
+	/* REMOVE SINGLE 1 */
+
+	fixed = fixed.replace(
+	  /^\s*1\s*$/gm,
+	  ""
+	);
+
 
   const count =
     (

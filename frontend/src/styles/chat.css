@@ -1544,6 +1544,8 @@ border-radius:16px;
 overflow:hidden;
 background:#ffffff;
 box-shadow:0 6px 20px rgba(15,23,42,.05);
+width: 100%;
+max-width: 100%;
 }
 
 .codeTop{
@@ -3556,6 +3558,8 @@ PROFILE PAGE
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-x: auto;
+  white-space: pre;
 }
 
 .codePre code {
