@@ -1001,64 +1001,64 @@ async function runTool(item) {
 		  send={async (files = []) => {
 
 			if (files?.length) {
-				
-				const onlyImages =
-				  files.every(
-					f => f.type?.startsWith("image/")
-				  );
-
-				if (onlyImages) {
-
-				  await generateImageInChat(
-					currentText ||
-					"Phân tích ảnh giúp mình",
-					"create",
-					files[0]
-				  );
-
-				  return true;
-				}
 
 			  const currentText =
 				String(text || "").trim();
 
-			  setMessages(prev => [
-				  ...prev,
-				  {
-					role: "user",
-					content:
-					  currentText
-						? `${currentText}\n\n📎 ${
-							files
-							  .map(
-								(f, i) =>
-								  f?.name ||
-								  `image-${i + 1}.png`
-							  )
-							  .join(", ")
-						  }`
-						: `📎 ${
-							files
-							  .map(
-								(f, i) =>
-								  f?.name ||
-								  `image-${i + 1}.png`
-							  )
-							  .join(", ")
-						  }`
-				  }
-				]);
+			  const onlyImages =
+				files.every(
+				  f => f.type?.startsWith("image/")
+				);
 
-				setText("");
+			  if (onlyImages) {
 
-				await sendRealFiles(
+				await generateImageInChat(
 				  currentText ||
-					"Xem file và hỗ trợ giúp mình",
-				  "file_summary",
-				  files
+				  "Phân tích ảnh giúp mình",
+				  "create",
+				  files[0]
 				);
 
 				return true;
+			  }
+
+			  setMessages(prev => [
+				...prev,
+				{
+				  role: "user",
+				  content:
+					currentText
+					  ? `${currentText}\n\n📎 ${
+						  files
+							.map(
+							  (f, i) =>
+								f?.name ||
+								`image-${i + 1}.png`
+							)
+							.join(", ")
+						}`
+					  : `📎 ${
+						  files
+							.map(
+							  (f, i) =>
+								f?.name ||
+								`image-${i + 1}.png`
+							)
+							.join(", ")
+						}`
+				}
+			  ]);
+
+			  setText("");
+
+			  await sendRealFiles(
+				currentText ||
+				"Xem file và hỗ trợ giúp mình",
+				"file_summary",
+				files
+			  );
+
+			  return true;
 			}
 
 			await sendText(text);
