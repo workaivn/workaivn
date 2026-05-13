@@ -217,7 +217,50 @@ export default function Chat({ tab, setTab }) {
 		const decoder =
 		  new TextDecoder();
 
-		let ai = "";
+		let buffer = "";
+		let raf = null;
+
+		function flushStream() {
+
+		  if (raf) return;
+
+		  raf =
+			requestAnimationFrame(() => {
+
+			  setMessages(prev => {
+
+				const copy = [...prev];
+
+				if (
+				  copy.at(-1)?.role ===
+				  "assistant"
+				) {
+
+				  copy[
+					copy.length - 1
+				  ] = {
+					role: "assistant",
+					content: buffer
+				  };
+
+				} else {
+
+				  copy.push({
+					role: "assistant",
+					content: buffer
+				  });
+
+				}
+
+				return copy;
+
+			  });
+
+			  raf = null;
+
+			});
+
+		}
 
 		while (true) {
 
@@ -228,43 +271,14 @@ export default function Chat({ tab, setTab }) {
 
 		  if (done) break;
 
-		  ai += decoder.decode(
+		  buffer += decoder.decode(
 			value,
 			{
 			  stream: true
 			}
 		  );
 
-		  setMessages(prev => {
-
-			const copy = [...prev];
-
-			if (
-			  copy.at(-1)?.role ===
-			  "assistant"
-			) {
-
-			  copy[
-				copy.length - 1
-			  ] = {
-				role:
-				  "assistant",
-				content: ai
-			  };
-
-			} else {
-
-			  copy.push({
-				role:
-				  "assistant",
-				content: ai
-			  });
-
-			}
-
-			return copy;
-
-		  });
+		  flushStream();
 
 		}
 
