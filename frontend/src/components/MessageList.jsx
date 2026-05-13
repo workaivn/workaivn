@@ -7,28 +7,60 @@ import remarkGfm from "remark-gfm";
 
 function fixCodeBlock(text = "") {
 
-  let fixed = String(text || "");
+  let fixed =
+    String(text || "");
 
-  /* normalize line breaks */
-  fixed = fixed.replace(/\r/g, "");
+  fixed =
+    fixed.replace(/\r/g, "");
 
-  /* fix:
-     ```html<!DOCTYPE
-  */
-  fixed = fixed.replace(
-    /```(\w+)([^\n])/g,
-    "```$1\n$2"
-  );
+  /* fix opening fence */
+  fixed =
+    fixed.replace(
+      /```(\w+)([^\n])/g,
+      "```$1\n$2"
+    );
 
-  /* fix:
-     abc``` 
-  */
-  fixed = fixed.replace(
-    /([^\n])```/g,
-    "$1\n```"
-  );
+  /* fix closing fence */
+  fixed =
+    fixed.replace(
+      /([^\n])```/g,
+      "$1\n```"
+    );
 
-  /* nếu thiếu đóng */
+  /* COMMON STREAM FIXES */
+
+  fixed =
+    fixed.replace(
+      /(\w)(import\s+)/g,
+      "$1\n$2"
+    );
+
+  fixed =
+    fixed.replace(
+      /(\w)(from\s+\w+)/g,
+      "$1\n$2"
+    );
+
+  fixed =
+    fixed.replace(
+      /(:)(def\s+)/g,
+      "$1\n$2"
+    );
+
+  fixed =
+	  fixed.replace(
+		/(}\s*)(const|let|function)/g,
+		"$1\n$2"
+	  );
+
+  fixed =
+    fixed.replace(
+      /(}\s*)(const|let|function)/g,
+      "$1\n$2"
+    );
+
+  /* close unclosed fence */
+
   const count =
     (
       fixed.match(/```/g) || []
