@@ -1001,6 +1001,23 @@ async function runTool(item) {
 		  send={async (files = []) => {
 
 			if (files?.length) {
+				
+				const onlyImages =
+				  files.every(
+					f => f.type?.startsWith("image/")
+				  );
+
+				if (onlyImages) {
+
+				  await generateImageInChat(
+					currentText ||
+					"Phân tích ảnh giúp mình",
+					"create",
+					files[0]
+				  );
+
+				  return true;
+				}
 
 			  const currentText =
 				String(text || "").trim();
