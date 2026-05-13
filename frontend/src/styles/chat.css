@@ -3537,3 +3537,16 @@ PROFILE PAGE
     sans-serif;
 
 }
+
+.bubble.assistant p {
+  margin: 0;
+}
+
+.bubble.assistant pre {
+  margin: 0;
+  overflow-x: auto;
+}
+
+.bubble.assistant code {
+  white-space: pre-wrap;
+}

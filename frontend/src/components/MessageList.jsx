@@ -7,34 +7,41 @@ import remarkGfm from "remark-gfm";
 
 function fixCodeBlock(text = "") {
 
-  let fixed =
-    String(text || "");
+  let fixed = String(text || "");
 
-  fixed =
-    fixed.replace(/\r/g, "");
+  fixed = fixed.replace(/\r/g, "");
 
-  /* fix opening fence */
-  fixed =
-    fixed.replace(
-      /```(\w+)([^\n])/g,
-      "```$1\n$2"
-    );
+  /*
+    Nếu AI viết:
+    ```html<!DOCTYPE
+    => sửa thành:
+    ```html
+    <!DOCTYPE
+  */
 
-  /* fix closing fence */
-  fixed =
-    fixed.replace(
-      /([^\n])```/g,
-      "$1\n```"
-    );
+  fixed = fixed.replace(
+    /```([a-zA-Z0-9+#-]*)([^\n])/g,
+    "```$1\n$2"
+  );
 
-  /* close unclosed fence */
+  /*
+    Nếu AI chưa xuống dòng trước ```
+  */
 
-  const count =
-    (
-      fixed.match(/```/g) || []
-    ).length;
+  fixed = fixed.replace(
+    /([^\n])```/g,
+    "$1\n```"
+  );
 
-  if (count % 2 !== 0) {
+  /*
+    Nếu stream chưa đóng fence
+    => tự đóng tạm thời
+  */
+
+  const fenceCount =
+    (fixed.match(/```/g) || []).length;
+
+  if (fenceCount % 2 !== 0) {
     fixed += "\n```";
   }
 
