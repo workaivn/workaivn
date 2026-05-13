@@ -179,15 +179,31 @@ src={content}
 className="chatImg"
 />
 ):(
-<ReactMarkdown
-  remarkPlugins={[remarkGfm]}
-  components={{
-    code: CodeBlock,
-    a: LinkRenderer
-  }}
->
-  {fixCodeBlock(content)}
-</ReactMarkdown>
+{
+  loading &&
+  index === messages.length - 1 &&
+  msg.role === "assistant"
+
+  ? (
+
+    <pre className="streamRaw">
+      {content}
+    </pre>
+
+  ) : (
+
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        code: CodeBlock,
+        a: LinkRenderer
+      }}
+    >
+      {fixCodeBlock(content)}
+    </ReactMarkdown>
+
+  )
+}
 )}
 
 </div>

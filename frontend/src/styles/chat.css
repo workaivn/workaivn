@@ -3511,3 +3511,15 @@ PROFILE PAGE
   align-items:center;
   justify-content:center;
 }
+
+.streamRaw{
+  margin:0;
+
+  white-space:pre-wrap;
+  word-break:break-word;
+
+  font-size:14px;
+  line-height:1.7;
+
+  font-family:inherit;
+}
