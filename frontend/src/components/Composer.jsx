@@ -162,39 +162,44 @@ function handlePaste(e){
 
   const items =
     Array.from(
-      e.clipboardData.items || []
+      e.clipboardData?.items || []
     );
 
-  const images =
-    items
-      .filter(x=>
-        x.type.includes("image")
-      )
-      .map((x,i)=>{
+  const images = [];
 
-	  const file =
-		x.getAsFile();
+  items.forEach((item, i) => {
 
-	  if(
-		file &&
-		!file.name
-	  ){
+    if (
+      !item.type.includes("image")
+    ) {
+      return;
+    }
 
-		return new File(
-		  [file],
-		  `paste-${Date.now()}-${i}.png`,
-		  {
-			type:file.type
-		  }
-		);
+    const blob =
+      item.getAsFile();
 
-	  }
+    if (!blob) {
+      return;
+    }
 
-	  return file;
+    const file =
+      new File(
+        [blob],
+        `paste-${Date.now()}-${i}.png`,
+        {
+          type:
+            blob.type ||
+            "image/png"
+        }
+      );
 
-	});
+    images.push(file);
+
+  });
 
   if(images.length){
+
+    e.preventDefault();
 
     handleFile(images);
 
