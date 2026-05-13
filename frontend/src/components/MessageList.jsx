@@ -178,8 +178,8 @@ className={`bubble ${msg.role}`}
 src={content}
 className="chatImg"
 />
-):(
-{
+) : (
+
   loading &&
   index === messages.length - 1 &&
   msg.role === "assistant"
@@ -203,7 +203,7 @@ className="chatImg"
     </ReactMarkdown>
 
   )
-}
+
 )}
 
 </div>
