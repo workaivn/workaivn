@@ -34,26 +34,46 @@ renderer.code = ({
   }
 
   return `
-<div class="codeWrap">
+		<div class="codeWrap">
 
-  <div class="codeTop">
+		  <div class="codeTop">
 
-    <span class="codeLang">
-      ${language.toUpperCase()}
-    </span>
+			<span class="codeLang">
+			  ${language.toUpperCase()}
+			</span>
 
-    <button
-      class="codeBtn"
-      onclick="
-navigator.clipboard.writeText(
-this.closest('.codeWrap')
-.querySelector('code')
-.innerText
-)
-"
-    >
-      Copy
-    </button>
+			<button
+		  class="codeBtn"
+		  onclick="
+		(() => {
+		  const code =
+			this.closest('.codeWrap')
+			  .querySelector('code')
+			  .innerText;
+
+		  const textarea =
+			document.createElement('textarea');
+
+		  textarea.value = code;
+
+		  document.body.appendChild(textarea);
+
+		  textarea.select();
+
+		  document.execCommand('copy');
+
+		  document.body.removeChild(textarea);
+
+		  this.innerText = 'Copied';
+
+		  setTimeout(() => {
+			this.innerText = 'Copy';
+		  }, 1200);
+		})()
+		"
+		>
+		  Copy
+		</button>
 
   </div>
 

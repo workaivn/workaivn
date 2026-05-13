@@ -3692,7 +3692,7 @@ FINAL CODE BLOCK FIX
 }
 
 .codeTop{
-  height:42px !important;
+  height:30px !important;
 
   padding:0 5px !important;
 
@@ -3716,21 +3716,20 @@ FINAL CODE BLOCK FIX
   line-height:1.5 !important;
 }
 
-.codePre code{
+.codePre{
   margin:0 !important;
-  padding:0 !important;
 
-  background:transparent !important;
+  padding:8px 12px !important;
 
-  white-space:pre-wrap !important;
-  word-break:break-word !important;
+  background:#fff !important;
 
-  font-size:14px !important;
+  overflow:auto !important;
+
+  line-height:1.45 !important;
 }
 
 .codeWrap pre{
-  margin:0 !important;
-  padding:12px 14px !important;
+  padding:8px 12px !important;
 }
 
 .codeWrap code{
