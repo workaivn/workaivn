@@ -237,15 +237,27 @@ className="chatImg"
 />
 ) : (
 
- <ReactMarkdown
-  remarkPlugins={[remarkGfm]}
-  components={{
-    code: CodeBlock,
-    a: LinkRenderer
-  }}
->
-  {fixCodeBlock(content)}
-</ReactMarkdown>
+msg.streaming
+
+? (
+
+  <div className="streamBox">
+    {content}
+  </div>
+
+) : (
+
+  <ReactMarkdown
+    remarkPlugins={[remarkGfm]}
+    components={{
+      code: CodeBlock,
+      a: LinkRenderer
+    }}
+  >
+    {fixCodeBlock(content)}
+  </ReactMarkdown>
+
+)
 
 )}
 

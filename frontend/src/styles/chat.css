@@ -3523,3 +3523,17 @@ PROFILE PAGE
 
   font-family:inherit;
 }
+
+.streamBox{
+
+  white-space:pre-wrap;
+  word-break:break-word;
+
+  line-height:1.7;
+  font-size:15px;
+
+  font-family:
+    Inter,
+    sans-serif;
+
+}
