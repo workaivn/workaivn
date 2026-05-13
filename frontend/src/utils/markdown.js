@@ -5,32 +5,23 @@ import DOMPurify from "dompurify";
 const renderer =
   new marked.Renderer();
 
-renderer.code = (code, infostring) => {
+renderer.code = ({ text, lang }) => {
 
-  const language =
-    (infostring || "plaintext")
-      .trim()
-      .split(/\s+/)[0];
+  const language = lang || "plaintext";
 
-  let highlighted = code;
+  let highlighted = text;
 
-  if (
-    language &&
-    hljs.getLanguage(language)
-  ) {
+  if (hljs.getLanguage(language)) {
     try {
-
-      highlighted =
-        hljs.highlight(
-          code,
-          { language }
-        ).value;
-
+      highlighted = hljs.highlight(
+        text,
+        { language }
+      ).value;
     } catch {}
   }
 
   const encoded =
-    encodeURIComponent(code);
+    encodeURIComponent(text);
 
   return `
 <div class="codeWrap">
