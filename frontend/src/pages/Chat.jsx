@@ -318,8 +318,6 @@ export default function Chat({ tab, setTab }) {
 				/* FIX HTML LINE BREAK */
 
 				buffer = buffer
-				  .replace(/></g, ">\n<")
-
 				  .replace(
 					/(<\/style>)/g,
 					"$1\n"

@@ -21,65 +21,67 @@ const renderer =
   new marked.Renderer();
 
 renderer.code = function (
-  code,
-  language
-) {
+	  token
+	) {
 
-  const lang =
-    language || "plaintext";
+	  const code =
+		token.text || "";
 
-  let highlighted = code;
+	  const lang =
+		token.lang || "plaintext";
 
-  if (
-    hljs.getLanguage(lang)
-  ) {
+	  let highlighted = code;
 
-    try {
+	  if (
+		hljs.getLanguage(lang)
+	  ) {
 
-      highlighted =
-        hljs.highlight(
-          code,
-          {
-            language: lang
-          }
-        ).value;
+		try {
 
-    } catch {}
+		  highlighted =
+			hljs.highlight(
+			  code,
+			  {
+				language: lang
+			  }
+			).value;
 
-  }
+		} catch {}
 
-  return `
-<div class="codeWrap">
+	  }
 
-  <div class="codeTop">
+	  return `
+	<div class="codeWrap">
 
-    <span class="codeLang">
-      ${lang.toUpperCase()}
-    </span>
+	  <div class="codeTop">
 
-    <button
-      class="copyBtn"
-      onclick="
-navigator.clipboard.writeText(
-this.parentElement.nextElementSibling.innerText
-)
-"
-    >
-      Copy
-    </button>
+		<span class="codeLang">
+		  ${lang.toUpperCase()}
+		</span>
 
-  </div>
+		<button
+		  class="copyBtn"
+		  onclick="
+	navigator.clipboard.writeText(
+	this.parentElement.nextElementSibling.innerText
+	)
+	"
+		>
+		  Copy
+		</button>
 
-  <pre class="codePre">
-<code class="hljs ${lang}">
-${highlighted}
-</code>
-  </pre>
+	  </div>
 
-</div>
-`;
+	  <pre class="codePre">
+	<code class="hljs ${lang}">
+	${highlighted}
+	</code>
+	  </pre>
 
-};
+	</div>
+	`;
+
+	};
 
 marked.use({ renderer });
 
@@ -107,6 +109,11 @@ function fixCodeBlock(
       /```([a-zA-Z0-9+#-]*)([^\n])/g,
       "```$1\n$2"
     );
+	
+	fixed = fixed.replace(
+	  /^```html$/gm,
+	  "\n```html"
+	);
 
   const count =
     (
