@@ -1011,7 +1011,12 @@ async function runTool(item) {
 				);
 
 			if (onlyImages) {
+			const token =
+			  localStorage.getItem("token") || "";
 
+			const API_URL =
+			  import.meta.env.VITE_API_URL ||
+			  "https://api.workaivn.com/api";
 			  const fd =
 				new FormData();
 
@@ -1062,8 +1067,9 @@ async function runTool(item) {
 				{
 				  role: "assistant",
 				  content:
-					d.answer ||
-					"Không đọc được ảnh."
+				  typeof d.answer === "string"
+					? d.answer
+					: "Không đọc được ảnh."
 				}
 			  ]);
 
