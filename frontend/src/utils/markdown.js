@@ -22,67 +22,67 @@ const renderer =
   new marked.Renderer();
 
 renderer.code = function (
-	  token
-	) {
+  code,
+  infostring
+) {
 
-	  const code =
-		token.text || "";
+  const lang =
+    (infostring || "plaintext")
+      .trim()
+      .toLowerCase();
 
-	  const lang =
-		token.lang || "plaintext";
+  let highlighted = code;
 
-	  let highlighted = code;
+  if (
+    hljs.getLanguage(lang)
+  ) {
 
-	  if (
-		hljs.getLanguage(lang)
-	  ) {
+    try {
 
-		try {
+      highlighted =
+        hljs.highlight(
+          code,
+          {
+            language: lang
+          }
+        ).value;
 
-		  highlighted =
-			hljs.highlight(
-			  code,
-			  {
-				language: lang
-			  }
-			).value;
+    } catch {}
 
-		} catch {}
+  }
 
-	  }
+  return `
+<div class="codeWrap">
 
-	  return `
-	<div class="codeWrap">
+  <div class="codeTop">
 
-	  <div class="codeTop">
+    <span class="codeLang">
+      ${lang.toUpperCase()}
+    </span>
 
-		<span class="codeLang">
-		  ${lang.toUpperCase()}
-		</span>
+    <button
+      class="copyBtn"
+      onclick="
+navigator.clipboard.writeText(
+this.parentElement.nextElementSibling.innerText
+)
+"
+    >
+      Copy
+    </button>
 
-		<button
-		  class="copyBtn"
-		  onclick="
-	navigator.clipboard.writeText(
-	this.parentElement.nextElementSibling.innerText
-	)
-	"
-		>
-		  Copy
-		</button>
+  </div>
 
-	  </div>
+  <pre class="codePre">
+<code class="hljs ${lang}">
+${highlighted}
+</code>
+  </pre>
 
-	  <pre class="codePre">
-	<code class="hljs ${lang}">
-	${highlighted}
-	</code>
-	  </pre>
+</div>
+`;
 
-	</div>
-	`;
-
-	};
+};
 
 marked.use({ renderer });
 
@@ -168,7 +168,15 @@ export function renderMarkdown(
 
   const fixed =
     fixCodeBlock(text);
+		fixed = fixed.replace(
+		  /^html\s+</gm,
+		  "```html\n<"
+		);
 
+		fixed = fixed.replace(
+		  /<\/html>$/gm,
+		  "</html>\n```"
+		);
   const html =
 	marked.parse(fixed);
 
