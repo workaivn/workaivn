@@ -85,14 +85,17 @@ marked.use({ renderer });
    FIX STREAM CODE
 ========================= */
 
-function fixCodeBlock(
+ffunction fixCodeBlock(
   text = ""
 ) {
 
+  let fixed =
+    String(text || "");
+
   fixed = fixed.replace(
-	  /^\s*1\s*$/gm,
-	  ""
-	);
+    /^\s*1\s*$/gm,
+    ""
+  );
 
   fixed =
     fixed.replace(/\r/g, "");
