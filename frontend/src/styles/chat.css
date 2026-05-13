@@ -3561,3 +3561,107 @@ PROFILE PAGE
 .codePre code {
   white-space: pre-wrap;
 }
+
+.markdown {
+  line-height: 1.7;
+  font-size: 15px;
+}
+
+/* PARAGRAPH */
+
+.markdown p {
+  margin: 0 0 14px;
+}
+
+/* CODE */
+
+.codeWrap {
+  margin: 14px 0;
+
+  border-radius: 14px;
+  overflow: hidden;
+
+  background: #0f172a;
+  border: 1px solid #1e293b;
+}
+
+.codeTop {
+  height: 42px;
+
+  background: #1e293b;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  padding: 0 12px;
+}
+
+.codeLang {
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.copyBtn {
+  border: none;
+
+  background: #2563eb;
+  color: white;
+
+  padding: 6px 10px;
+
+  border-radius: 8px;
+  cursor: pointer;
+
+  font-size: 12px;
+}
+
+.copyBtn:hover {
+  opacity: 0.9;
+}
+
+.codePre {
+  margin: 0;
+  padding: 16px;
+
+  overflow-x: auto;
+
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.codePre code {
+  font-family:
+    Consolas,
+    Monaco,
+    monospace;
+
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* INLINE CODE */
+
+.markdown :not(pre) > code {
+
+  background: #e2e8f0;
+
+  padding: 2px 6px;
+  border-radius: 6px;
+
+  font-size: 13px;
+}
+
+/* TABLE */
+
+.markdown table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid #cbd5e1;
+  padding: 8px;
+}

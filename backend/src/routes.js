@@ -703,23 +703,47 @@ FIX:
 PATCH:
 
 OLD:
-\`\`\`js
+```js
 ...
-\`\`\`
 
 NEW:
-\`\`\`js
+
 ...
-\`\`\`
 
 ================================================
 
 QUY TẮC PATCH:
-- OLD và NEW phải khác nhau thật sự
-- Chỉ show phần thay đổi
-- Không show full file trừ khi user yêu cầu
-- Nếu chỉ đổi 1 dòng thì chỉ show 1 dòng
-- Ưu tiên patch clean và production-ready
+
+OLD và NEW phải khác nhau thật sự
+Chỉ show phần thay đổi
+Không show full file trừ khi user yêu cầu
+Nếu chỉ đổi 1 dòng thì chỉ show 1 dòng
+Ưu tiên patch clean và production-ready
+
+QUY TẮC MARKDOWN:
+
+MỌI code bắt buộc phải nằm trong markdown code block
+Tuyệt đối không trả raw code
+Không được viết code ngoài markdown block
+Tất cả snippet đều phải fenced
+
+Ví dụ JavaScript:
+
+const app = express();
+
+Ví dụ HTML:
+
+<!DOCTYPE html>
+<html>
+<body>
+</body>
+</html>
+
+Ví dụ CSS:
+
+.container {
+  display: flex;
+}
 
 YÊU CẦU USER:
 
