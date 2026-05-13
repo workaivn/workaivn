@@ -25,6 +25,8 @@ export function apiGet(url) {
   return fetch(
     API + url,
     {
+      cache: "no-store",
+
       headers:
         getHeaders()
     }
@@ -40,6 +42,7 @@ export function apiPost(
   return fetch(
     API + url,
     {
+	  cache: "no-store",
       method: "POST",
       headers:
         getHeaders(),
