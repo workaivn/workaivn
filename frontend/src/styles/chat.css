@@ -3581,14 +3581,14 @@ PROFILE PAGE
   border-radius: 14px;
   overflow: hidden;
 
-  background: #0f172a;
+  background: #f8fafc;
   border: 1px solid #1e293b;
 }
 
 .codeTop {
   height: 42px;
 
-  background: #1e293b;
+  background: #e2e8f0;	
 
   display: flex;
   align-items: center;
@@ -3598,9 +3598,13 @@ PROFILE PAGE
 }
 
 .codeLang {
-  color: #cbd5e1;
+  color: #334155;
   font-size: 12px;
   font-weight: 600;
+}
+
+.codePre code {
+  color: #0f172a;
 }
 
 .copyBtn {

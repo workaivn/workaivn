@@ -308,9 +308,37 @@ export default function Chat({ tab, setTab }) {
 				}
 			  );
 
-			buffer += chunk
-					  .replace(/\r/g, "")
-					  .replace(/```(\w+)([^\n])/g, "```$1\n$2");
+			const cleaned =
+				  chunk
+					.replace(/\r/g, "")
+					.replace(/\t/g, "  ");
+
+				buffer += cleaned;
+
+				/* FIX HTML LINE BREAK */
+
+				buffer = buffer
+				  .replace(/></g, ">\n<")
+
+				  .replace(
+					/(<\/style>)/g,
+					"$1\n"
+				  )
+
+				  .replace(
+					/(<script>)/g,
+					"\n$1\n"
+				  )
+
+				  .replace(
+					/(<\/script>)/g,
+					"\n$1\n"
+				  )
+
+				  .replace(
+					/```html/g,
+					"\n```html\n"
+				  );
 			  
 		  flushStream();
 

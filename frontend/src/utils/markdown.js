@@ -89,8 +89,10 @@ function fixCodeBlock(
   text = ""
 ) {
 
-  let fixed =
-    String(text || "");
+  fixed = fixed.replace(
+	  /^\s*1\s*$/gm,
+	  ""
+	);
 
   fixed =
     fixed.replace(/\r/g, "");
