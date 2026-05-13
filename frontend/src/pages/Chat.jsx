@@ -260,7 +260,7 @@ export default function Chat({ tab, setTab }) {
 
 			  });
 
-			}, 80);
+			}, 25);
 
 		}
 
