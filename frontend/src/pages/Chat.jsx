@@ -218,14 +218,16 @@ export default function Chat({ tab, setTab }) {
 		  new TextDecoder();
 
 		let buffer = "";
-		let raf = null;
+		let streamTimeout = null;
 
 		function flushStream() {
 
-		  if (raf) return;
+		  clearTimeout(
+			streamTimeout
+		  );
 
-		  raf =
-			requestAnimationFrame(() => {
+		  streamTimeout =
+			setTimeout(() => {
 
 			  setMessages(prev => {
 
@@ -237,12 +239,12 @@ export default function Chat({ tab, setTab }) {
 				) {
 
 				  copy[
-					  copy.length - 1
-					] = {
-					  role: "assistant",
-					  content: buffer,
-					  streaming: true
-					};
+					copy.length - 1
+				  ] = {
+					role: "assistant",
+					content: buffer,
+					streaming: true
+				  };
 
 				} else {
 
@@ -258,9 +260,7 @@ export default function Chat({ tab, setTab }) {
 
 			  });
 
-			  raf = null;
-
-			});
+			}, 80);
 
 		}
 
