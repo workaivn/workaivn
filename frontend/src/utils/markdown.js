@@ -18,73 +18,34 @@ marked.setOptions({
    CODE BLOCK UI
 ========================= */
 
-const renderer =
-  new marked.Renderer();
+marked.setOptions({
+  gfm: true,
+  breaks: true,
+  pedantic: false,
 
-renderer.code = ({
-  text,
-  lang
-}) => {
+  highlight(code, lang) {
 
-  const language =
-    (lang || "plaintext")
-      .trim()
-      .toLowerCase();
+    if (
+      lang &&
+      hljs.getLanguage(lang)
+    ) {
 
-  let highlighted = text;
+      try {
 
-  if (
-    hljs.getLanguage(language)
-  ) {
-
-    try {
-
-      highlighted =
-        hljs.highlight(
-          text,
+        return hljs.highlight(
+          code,
           {
-            language
+            language: lang
           }
         ).value;
 
-    } catch {}
+      } catch {}
 
+    }
+
+    return code;
   }
-
-  return `
-<div class="codeWrap">
-
-  <div class="codeTop">
-
-    <span class="codeLang">
-      ${language.toUpperCase()}
-    </span>
-
-    <button
-      class="copyBtn"
-      onclick="
-navigator.clipboard.writeText(
-this.parentElement.nextElementSibling.innerText
-)
-"
-    >
-      Copy
-    </button>
-
-  </div>
-
-  <pre class="codePre">
-<code class="hljs ${language}">
-${highlighted}
-</code>
-  </pre>
-
-</div>
-`;
-
-};
-
-marked.use({ renderer });
+});
 
 /* =========================
    FIX STREAM CODE
@@ -173,22 +134,7 @@ export function renderMarkdown(
     marked.parse(fixed);
 
   return DOMPurify.sanitize(
-    html,
-    {
-      ALLOWED_TAGS: [
-        "pre",
-        "code",
-        "span",
-        "div",
-        "button",
-        "p",
-        "br"
-      ],
-      ALLOWED_ATTR: [
-        "class",
-        "onclick"
-      ]
-    }
+    html
   );
 
 }
