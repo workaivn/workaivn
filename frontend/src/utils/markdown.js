@@ -163,42 +163,42 @@ function fixCodeBlock(
 ========================= */
 
 export function renderMarkdown(
-		  text = ""
-		) {
+  text = ""
+) {
 
-		  const fixed =
-		  fixCodeBlock(text);
+  let fixed =
+    fixCodeBlock(text);
 
-		fixed = fixed.replace(
-		  /^html\s+</gm,
-		  "```html\n<"
-		);
+  fixed = fixed.replace(
+    /^html\s+</gm,
+    "```html\n<"
+  );
 
-		fixed = fixed.replace(
-		  /<\/html>$/gm,
-		  "</html>\n```"
-		);
+  fixed = fixed.replace(
+    /<\/html>$/gm,
+    "</html>\n```"
+  );
 
-		const html =
-		  marked.parse(fixed);
+  const html =
+    marked.parse(fixed);
 
   return DOMPurify.sanitize(
-	  html,
-	  {
-		ALLOWED_TAGS: [
-		  "pre",
-		  "code",
-		  "span",
-		  "div",
-		  "button",
-		  "p",
-		  "br"
-		],
-		ALLOWED_ATTR: [
-		  "class",
-		  "onclick"
-		]
-	  }
-	);
+    html,
+    {
+      ALLOWED_TAGS: [
+        "pre",
+        "code",
+        "span",
+        "div",
+        "button",
+        "p",
+        "br"
+      ],
+      ALLOWED_ATTR: [
+        "class",
+        "onclick"
+      ]
+    }
+  );
 
 }
