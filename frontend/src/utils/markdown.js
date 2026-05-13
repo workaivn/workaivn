@@ -85,7 +85,7 @@ marked.use({ renderer });
    FIX STREAM CODE
 ========================= */
 
-ffunction fixCodeBlock(
+function fixCodeBlock(
   text = ""
 ) {
 
