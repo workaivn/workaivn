@@ -617,6 +617,14 @@ ${text}
 /* =====================
 PROMPT AI
 ===================== */
+const totalFiles =
+  files.length;
+
+const fileNames =
+  files
+    .map(f => f.originalname)
+    .join(", ");
+
 const finalPrompt =
   prompt?.trim() ||
   [
@@ -631,6 +639,11 @@ let ask = `
 Bạn là senior software engineer và technical architect.
 
 Bạn đang đọc nhiều files trong cùng một project thật.
+
+USER UPLOADED ${totalFiles} FILES.
+
+FILES:
+${fileNames}
 
 MỤC TIÊU:
 - Hiểu project structure
@@ -652,6 +665,15 @@ NGUYÊN TẮC:
 - Không thêm emoji trong code
 - Không thêm comment kiểu AI
 - Không lặp OLD và NEW giống nhau
+
+QUAN TRỌNG:
+- Nếu user upload nhiều files:
+  PHẢI phân tích tất cả files
+- Không được chỉ trả lời 1 file
+- Mỗi file phải có section riêng
+- Nếu có 2 files trở lên:
+  phải trả lời ít nhất 2 sections FILE:
+- Không được trả lời quá ngắn
 
 KHI PHÂN TÍCH:
 1. Xác định file liên quan
