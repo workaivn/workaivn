@@ -81,6 +81,24 @@ function fixCodeBlock(
   fixed =
     fixed.replace(/\r/g, "");
 
+  /* FIX html<!DOCTYPE */
+
+  fixed =
+    fixed.replace(
+      /^html\s*</gm,
+      "```html\n<"
+    );
+
+  /* FIX jsconst */
+
+  fixed =
+    fixed.replace(
+      /^javascript\s+/gm,
+      "```javascript\n"
+    );
+
+  /* auto close */
+
   const count =
     (
       fixed.match(/```/g)
@@ -88,11 +106,12 @@ function fixCodeBlock(
     ).length;
 
   if (count % 2 !== 0) {
+
     fixed += "\n```";
+
   }
 
   return fixed;
-
 }
 
 /* =========================
