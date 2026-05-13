@@ -1011,126 +1011,159 @@ async function runTool(item) {
 				);
 
 			if (onlyImages) {
-			const token =
-			  localStorage.getItem("token") || "";
 
-			const API_URL =
-			  import.meta.env.VITE_API_URL ||
-			  "https://api.workaivn.com/api";
-			  const fd =
-				new FormData();
+			  const token =
+				localStorage.getItem("token") || "";
 
-			  fd.append(
-				"prompt",
-				currentText ||
-				"Phân tích ảnh giúp mình"
-			  );
-
-			  fd.append(
-				"tool",
-				"vision"
-			  );
-
-			  fd.append(
-				"file",
-				files[0]
-			  );
-
-			  const r =
-				await fetch(
-				  `${API_URL}/generate-image`,
-				  {
-					method: "POST",
-
-					headers: {
-					  Authorization:
-						`Bearer ${token}`
-					},
-
-					body: fd
-				  }
-				);
-
-			  const d =
-				await r.json();
+			  const API_URL =
+				import.meta.env.VITE_API_URL ||
+				"https://api.workaivn.com/api";
 
 			  const preview =
-				  URL.createObjectURL(
-					files[0]
-				  );
+				URL.createObjectURL(
+				  files[0]
+				);
 
-				setMessages(prev => [
-				  ...prev,
-
-				  {
-					role: "user",
-					content:
-					  currentText ||
-					  "📷 Ảnh",
-
-					image:
-					  preview
-				  },
-
-				  {
-					role: "assistant",
-					content:
-					  typeof d.answer ===
-					  "string"
-
-						? d.answer
-
-						: "Không đọc được ảnh."
-				  }
-				]);
-
-			  return true;
-			}
+			  /* HIỆN USER MESSAGE NGAY */
 
 			  setMessages(prev => [
 				...prev,
 				{
 				  role: "user",
 				  content:
-					currentText
-					  ? `${currentText}\n\n📎 ${
-						  files
-							.map(
-							  (f, i) =>
-								f?.name ||
-								`image-${i + 1}.png`
-							)
-							.join(", ")
-						}`
-					  : `📎 ${
-						  files
-							.map(
-							  (f, i) =>
-								f?.name ||
-								`image-${i + 1}.png`
-							)
-							.join(", ")
-						}`
+					currentText ||
+					"📷 Ảnh",
+				  image: preview
 				}
 			  ]);
 
+			  /* CLEAR INPUT NGAY */
+
 			  setText("");
 
-			  await sendRealFiles(
-				currentText ||
-				"Xem file và hỗ trợ giúp mình",
-				"file_summary",
-				files
-			  );
+			  setLoading(true);
+			  setLoadingType("chat");
+
+			  try {
+
+				const fd =
+				  new FormData();
+
+				fd.append(
+				  "prompt",
+				  currentText ||
+				  "Phân tích ảnh giúp mình"
+				);
+
+				fd.append(
+				  "tool",
+				  "vision"
+				);
+
+				fd.append(
+				  "file",
+				  files[0]
+				);
+
+				const r =
+				  await fetch(
+					`${API_URL}/generate-image`,
+					{
+					  method: "POST",
+
+					  headers: {
+						Authorization:
+						  `Bearer ${token}`
+					  },
+
+					  body: fd
+					}
+				  );
+
+				const d =
+				  await r.json();
+
+				setMessages(prev => [
+				  ...prev,
+				  {
+					role: "assistant",
+					content:
+					  typeof d.answer ===
+					  "string"
+						? d.answer
+						: "Không đọc được ảnh."
+				  }
+				]);
+
+			  } catch {
+
+				setMessages(prev => [
+				  ...prev,
+				  {
+					role: "assistant",
+					content:
+					  "Lỗi đọc ảnh."
+				  }
+				]);
+
+			  } finally {
+
+				setLoading(false);
+				setLoadingType("none");
+
+			  }
 
 			  return true;
 			}
+
+			/* FILE THƯỜNG */
+
+			setMessages(prev => [
+			  ...prev,
+			  {
+				role: "user",
+				content:
+				  currentText
+					? `${currentText}\n\n📎 ${
+						files
+						  .map(
+							(f, i) =>
+							  f?.name ||
+							  `file-${i + 1}`
+						  )
+						  .join(", ")
+					  }`
+					: `📎 ${
+						files
+						  .map(
+							(f, i) =>
+							  f?.name ||
+							  `file-${i + 1}`
+						  )
+						  .join(", ")
+					  }`
+			  }
+			]);
+
+			setText("");
+
+			await sendRealFiles(
+			  currentText ||
+			  "Xem file và hỗ trợ giúp mình",
+			  "file_summary",
+			  files
+			);
+
+			return true;
+			}
+
+			/* KHÔNG CÓ FILE -> CHAT THƯỜNG */
 
 			await sendText(text);
 
 			return true;
 
-		  }}
+			}}
 		/>
 	  )
 	}
