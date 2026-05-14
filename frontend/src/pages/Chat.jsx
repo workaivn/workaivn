@@ -1004,6 +1004,8 @@ async function runTool(item) {
 
 			  const currentText =
 				String(text || "").trim();
+			  const userPrompt =
+				currentText;
 
 			  const onlyImages =
 				files.every(
@@ -1041,7 +1043,7 @@ async function runTool(item) {
 				{
 				  role: "user",
 				  content:
-					currentText ||
+					userPrompt  ||
 					"📷 Ảnh",
 				  image: preview
 				}

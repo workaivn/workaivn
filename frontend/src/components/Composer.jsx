@@ -35,27 +35,24 @@ async function submit(){
       x => x.file
     );
 
+  /* SEND */
 
-  const ok =
-    await send(currentFiles);
+  send(currentFiles);
 
+  /* CLEAR UI NGAY */
 
-  if(ok){
-	  
-	  setPreviews([]);
+  setPreviews([]);
 
-	if(fileRef.current){
-	  fileRef.current.value="";
-	}
+  if(fileRef.current){
+    fileRef.current.value="";
+  }
 
-    if(textareaRef.current){
+  if(textareaRef.current){
 
-      textareaRef.current.style.height =
-        "52px";
+    textareaRef.current.style.height =
+      "52px";
 
-      textareaRef.current.focus();
-
-    }
+    textareaRef.current.focus();
 
   }
 
