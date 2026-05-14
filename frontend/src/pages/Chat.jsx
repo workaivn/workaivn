@@ -1101,6 +1101,16 @@ async function runTool(item) {
 				const d =
 				  await r.json();
 
+				if (d.chatId) {
+
+				  setChatId(
+					d.chatId
+				  );
+
+				  await loadChats();
+
+				}
+
 				setMessages(prev => [
 				  ...prev,
 				  {

@@ -34,6 +34,7 @@ const FILE_DIR = path.join(
 );
 
 function fileUrl(name, req) {
+	
 
   if (
     process.env.BASE_URL
@@ -52,6 +53,70 @@ function fileUrl(name, req) {
     isLocal ? "http" : "https";
 
   return `${protocol}://${host}/files/${name}`;
+}
+
+async function saveVisionChat(
+  req,
+  prompt,
+  answer,
+  image
+) {
+
+  const authHeader =
+    req.headers.authorization || "";
+
+  const token =
+    authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : authHeader;
+
+  if (!token) {
+    return null;
+  }
+
+  const jwt =
+    (await import("jsonwebtoken"))
+    .default;
+
+  const decoded =
+    jwt.verify(
+      token,
+      process.env.JWT_SECRET
+    );
+
+  const userId =
+    decoded.id;
+
+  let chat =
+    await Chat.create({
+
+      userId,
+
+      title:
+        prompt?.slice(0, 50) ||
+        "Image Chat",
+
+      messages: [
+
+        {
+          role: "user",
+          content:
+            prompt,
+          image
+        },
+
+        {
+          role: "assistant",
+          content:
+            answer
+        }
+
+      ]
+
+    });
+
+  return chat._id;
+
 }
 
 /* =========================
@@ -245,10 +310,23 @@ router.post(
 
 	  } catch {}
 
-	  return res.json({
-		ok: true,
-		answer
-	  });
+	  const imageBase64 =
+		  `data:${mime};base64,${base64}`;
+
+		const chatId =
+		  await saveVisionChat(
+			req,
+			finalPrompt ||
+			"📷 Ảnh",
+			answer,
+			imageBase64
+		  );
+
+		return res.json({
+		  ok: true,
+		  answer,
+		  chatId
+		});
 
 	}
 
