@@ -3702,3 +3702,10 @@ FINAL CODE BLOCK FIX
 
   font-size:14px !important;
 }
+
+.chatImg{
+  display:block;
+  max-width:100%;
+  border-radius:16px;
+  margin-bottom:12px;
+}

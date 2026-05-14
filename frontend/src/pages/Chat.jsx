@@ -113,7 +113,13 @@ export default function Chat({ tab, setTab }) {
 					  msg.content || "",
 					  null,
 					  2
-					)
+					),
+
+			  image:
+				typeof msg.image ===
+				"string"
+				  ? msg.image
+				  : ""
 
 			})
 		  );
