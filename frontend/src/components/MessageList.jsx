@@ -70,14 +70,17 @@ className={`bubble ${msg.role}`}
 :"WorkAI"}
 </div>
 
-{isImg ? (
+{isImg && (
 
   <img
     src={imageSrc}
     className="chatImg"
+    alt=""
   />
 
-) : (
+)}
+
+{content && (
 
   <div
     className={
