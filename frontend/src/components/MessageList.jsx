@@ -17,36 +17,38 @@ return(
 (msg,index)=>{
 
 const content =
-msg.content || "";
+  typeof msg.content === "string"
+    ? msg.content
+    : "";
 
 const imageSrc =
-  msg.image ||
-  (
-    typeof content === "string"
-      ? content
-      : ""
-  );
+  typeof msg.image === "string"
+    ? msg.image
+    : "";
 
 const isImg =
-  imageSrc.startsWith("data:image") ||
-
+  !!imageSrc &&
   (
-    imageSrc.startsWith("http") && (
+    imageSrc.startsWith("data:image") ||
 
-      imageSrc.includes("/files/img_") ||
+    (
+      imageSrc.startsWith("http") && (
 
-      imageSrc.includes("/files/avatar_") ||
+        imageSrc.includes("/files/img_") ||
 
-      imageSrc.includes(".png") ||
+        imageSrc.includes("/files/avatar_") ||
 
-      imageSrc.includes(".jpg") ||
+        imageSrc.includes(".png") ||
 
-      imageSrc.includes(".jpeg") ||
+        imageSrc.includes(".jpg") ||
 
-      imageSrc.includes(".webp") ||
+        imageSrc.includes(".jpeg") ||
 
-      imageSrc.includes("openaiusercontent")
+        imageSrc.includes(".webp") ||
 
+        imageSrc.includes("openaiusercontent")
+
+      )
     )
   );
 
