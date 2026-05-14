@@ -76,6 +76,9 @@ className={`bubble ${msg.role}`}
     src={imageSrc}
     className="chatImg"
     alt=""
+	 style={{
+		marginBottom: "12px"
+	  }}
   />
 
 )}
