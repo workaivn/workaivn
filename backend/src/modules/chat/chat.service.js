@@ -309,49 +309,58 @@ export async function streamChat({
 		  );
 
 	   let finalMessages = [];
+	   finalMessages.push({
+
+	  role: "system",
+
+	  content: systemPrompt
+
+	});
 
 	/* =========================
 	   LOAD CHAT HISTORY
 	========================= */
 
+	let existingChat = null;
+
+	let activeFilesText = "";
+
 	if (chatId) {
 
-	  const existingChat =
+	  existingChat =
 		await Chat.findOne({
 		  _id: chatId,
 		  userId
 		});
-		
-		let activeFilesText = "";
 
-		if (
+	  if (
+		existingChat
+		  ?.activeFiles
+		  ?.length
+	  ) {
+
+		activeFilesText =
 		  existingChat
-			?.activeFiles
-			?.length
-		) {
+			.activeFiles
+			.map((f) => `
 
-		  activeFilesText =
-			existingChat
-			  .activeFiles
-			  .map((f) => `
+	FILE: ${f.name}
 
-		FILE: ${f.name}
+	${f.content}
 
-		${f.content}
+	`)
+			.join("\n");
 
-		`)
-			  .join("\n");
-
-		}
+	  }
 
 	  if (
 		existingChat?.messages
 		  ?.length
 	  ) {
 
-		finalMessages = [
-		  ...existingChat.messages
-		];
+		finalMessages.push(
+	  ...existingChat.messages
+	);
 
 	  }
 
@@ -364,40 +373,6 @@ export async function streamChat({
 	if (
 	  activeFilesText
 	) {
-
-	  finalMessages.push({
-
-		role: "system",
-
-		content: `
-
-	ACTIVE FILES:
-
-	${activeFilesText}
-
-	`
-
-	  });
-
-	}
-
-	if (
-	  existingChat
-		?.activeFiles
-		?.length
-	) {
-
-	  const activeFilesText =
-		existingChat
-		  .activeFiles
-		  .map((f) => `
-
-	FILE: ${f.name}
-
-	${f.content}
-
-	`)
-		  .join("\n");
 
 	  finalMessages.push({
 
