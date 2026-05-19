@@ -356,38 +356,59 @@ export async function streamChat({
 			.map((f) => {
 
 			  const latestUserMsg =
-			  messages?.[
-				messages.length - 1
-			  ]?.content
-				?.toLowerCase() || "";
+				messages?.[
+				  messages.length - 1
+				]?.content
+				  ?.toLowerCase() || "";
 
-			const relevantChunks =
-			  f.chunks
-				?.filter(c => {
-
-				  const keywords =
-					latestUserMsg
-					  .split(/\s+/)
-					  .filter(
-						k =>
-						  k &&
-						  k.length > 2
-					  );
-
-				  if (!keywords.length) {
-					return true;
-				  }
-
-				  return keywords.some(
+			  const keywords =
+				latestUserMsg
+				  .split(/\s+/)
+				  .filter(
 					k =>
-					  c
-						.toLowerCase()
-						.includes(k)
+					  k &&
+					  k.length > 2
 				  );
 
-				})
-				.slice(0, 5)
-				.join("\n");
+			  const relevantChunks =
+				f.chunks
+				  ?.filter(c => {
+
+					if (
+					  !keywords.length
+					) {
+					  return true;
+					}
+
+					const haystack = `
+
+		${c.name || ""}
+		${c.type || ""}
+		${c.content || ""}
+
+		`
+					  .toLowerCase();
+
+					return keywords.some(
+					  k =>
+						haystack.includes(k)
+					);
+
+				  })
+				  .slice(0, 5)
+				  .map(c => `
+
+		TYPE:
+		${c.type}
+
+		NAME:
+		${c.name}
+
+		CONTENT:
+		${c.content}
+
+		`)
+				  .join("\n");
 
 			  return `
 

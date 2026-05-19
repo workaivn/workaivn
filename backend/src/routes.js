@@ -617,7 +617,7 @@ for (const file of files) {
 	  const chunks =
 		  chunkText(
 			text,
-			3000
+			file.originalname
 		  );
 
 		activeFiles.push({
