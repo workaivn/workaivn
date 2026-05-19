@@ -471,7 +471,7 @@ export async function streamChat({
 
 				const finalChunks =
 				  relevantChunks
-					.slice(0, 5);
+					.slice(0, 5)
 					.map(c => {
 
 					  if (
@@ -510,7 +510,7 @@ export async function streamChat({
 						${f.summary}
 
 						CHUNKS:
-						${relevantChunks}
+						${finalChunks}
 
 						`;
 
