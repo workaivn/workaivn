@@ -52,6 +52,22 @@ function chunkJavaScript(
             node.id.name;
 
         }
+		
+		/* async function */
+
+		if (
+		  node.type ===
+			"FunctionDeclaration" &&
+		  node.id?.name
+		) {
+
+		  name =
+			node.id.name;
+
+		  type =
+			"FunctionDeclaration";
+
+		}
 
         /* variable */
 
@@ -88,10 +104,19 @@ function chunkJavaScript(
         }
 
         if (
-          content?.trim()
-        ) {
+		  content?.trim()
+		) {
 
-          chunks.push({
+		  /* skip imports */
+
+		  if (
+			node.type ===
+			"ImportDeclaration"
+		  ) {
+			return;
+		  }
+
+		  chunks.push({
 
             file:
               fileName,

@@ -936,24 +936,36 @@ try {
 		   SAVE CHAT
 		========================= */
 
-		const newId =
-		  await saveChat(
+		const uploadedFilesText =
+			  files
+				.map(f => f.originalname)
+				.join(", ");
 
-			req,
+			const userMessageText =
+			  prompt?.trim()
 
-			`📎 ${files
-			  .map(f => f.originalname)
-			  .join(", ")}`,
+				? `${prompt.trim()}
 
-			answer,
+			📎 ${uploadedFilesText}`
 
-			chatId,
+				: `📎 ${uploadedFilesText}`;
 
-			Array.from(
-			  mergedMap.values()
-			).slice(-30)
+			const newId =
+			  await saveChat(
 
-		  );
+				req,
+
+				userMessageText,
+
+				answer,
+
+				chatId,
+
+				Array.from(
+				  mergedMap.values()
+				).slice(-30)
+
+			  );
 
 
 /* =====================

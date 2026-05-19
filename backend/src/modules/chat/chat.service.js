@@ -405,7 +405,7 @@ export async function streamChat({
 							?.toLowerCase()
 							.includes(k)
 						) {
-						  score += 10;
+						  score += 100;
 						}
 
 						if (
@@ -419,7 +419,7 @@ export async function streamChat({
 						if (
 						  haystack.includes(k)
 						) {
-						  score += 1;
+						  score += 5;
 						}
 
 					  });
@@ -435,7 +435,20 @@ export async function streamChat({
 					  (a, b) =>
 						b.score - a.score
 					)
-
+					console.log(
+					  "TOP CHUNKS:",
+					  JSON.stringify(
+						relevantChunks
+						  .slice(0, 3)
+						  .map(x => ({
+							name: x.name,
+							type: x.type,
+							score: x.score
+						  })),
+						null,
+						2
+					  )
+					);
 					.slice(0, 5)
 					.map(c => {
 
