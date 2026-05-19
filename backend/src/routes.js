@@ -246,12 +246,12 @@ function fileMsg(icon, name, req) {
 }
 
 
-
 async function saveChat(
   req,
   userText,
   aiText,
-  chatId
+  chatId,
+  activeFiles = null
 ) {
   const userId =
     getUserId(req);
@@ -273,12 +273,14 @@ async function saveChat(
 
   if (!doc) {
     doc = await Chat.create({
-      userId,
-      title:
-        userText?.slice(0, 50) ||
-        "New Chat",
-      messages: []
-    });
+	  userId,
+	  title:
+		userText?.slice(0, 50) ||
+		"New Chat",
+	  messages: [],
+	  activeFiles:
+		activeFiles || []
+	});
   }
 
   doc.messages.push(
@@ -293,7 +295,10 @@ async function saveChat(
   );
 
   doc.updatedAt = new Date();
-
+	if (activeFiles) {
+	  doc.activeFiles =
+		activeFiles;
+	}
   await doc.save();
 
   return doc._id;
@@ -871,29 +876,14 @@ const answer =
 
 			answer,
 
-			chatId
+			chatId,
+
+			Array.from(
+			  mergedMap.values()
+			).slice(-30)
 
 		  );
 
-		/* =========================
-		   SAVE ACTIVE FILES
-		========================= */
-
-		await Chat.findByIdAndUpdate(
-
-		  newId,
-
-		  {
-			$set: {
-			  activeFiles:
-				Array.from(
-				  mergedMap.values()
-				)
-				.slice(-30)
-			}
-		  }
-
-		);
 
 /* =====================
 DELETE TEMP

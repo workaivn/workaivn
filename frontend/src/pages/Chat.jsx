@@ -240,16 +240,24 @@ export default function Chat({ tab, setTab }) {
 		  userMessage
 		];
 
+		/* sync latest chatId */
+
+		const latestChatId =
+		  chatIdRef.current;
+
 		const r =
 		  await apiPost(
 			"/chat",
 			{
 			  messages:
 				nextMessages,
+
 			  search,
+
 			  mode: autoMode,
+
 			  chatId:
-				chatIdRef.current
+				latestChatId
 			}
 		  );
 
@@ -1181,6 +1189,12 @@ async function runTool(item) {
 			  "file_summary",
 			  files
 			);
+
+			/* IMPORTANT:
+			   sync latest chat list
+			*/
+
+			await loadChats();
 
 			return true;
 			}

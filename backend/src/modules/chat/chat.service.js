@@ -355,10 +355,49 @@ export async function streamChat({
 		  latestFiles
 			.map((f) => {
 
-			  const relevantChunks =
-				f.chunks
-				  ?.slice(0, 3)
-				  ?.join("\n");
+			  const latestUserMsg =
+			  messages?.[
+				messages.length - 1
+			  ]?.content
+				?.toLowerCase() || "";
+
+			const relevantChunks =
+			  f.chunks
+				?.filter(c => {
+
+					  const keywords =
+						latestUserMsg
+						  .split(/\s+/)
+						  .filter(
+							k =>
+							  k &&
+							  k.length > 2
+						  );
+
+					  if (!keywords.length) {
+						return true;
+					  }
+
+					  return keywords.some(
+						k =>
+						  c
+							.toLowerCase()
+							.includes(k)
+					  );
+
+					})
+					.some(k =>
+
+					  k.length > 2 &&
+					  c
+						.toLowerCase()
+						.includes(k)
+
+					)
+
+				)
+				.slice(0, 5)
+				.join("\n");
 
 			  return `
 
