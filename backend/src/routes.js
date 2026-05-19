@@ -648,8 +648,9 @@ for (const file of files) {
 	)}
 
 	CONTENT SAMPLE:
-	${chunks
+		${chunks
 	  .slice(0, 3)
+	  .map(c => c.content)
 	  .join("\n")}
 
 	`;
@@ -937,37 +938,35 @@ try {
 		========================= */
 
 		const uploadedFilesText =
-			  files
-				.map(f => f.originalname)
-				.join(", ");
+		  files
+			.map(f => f.originalname)
+			.join(", ");
 
-			const userMessageText =
-			  prompt?.trim()
+		const userMessageText =
+		  prompt?.trim()
 
-				? `${prompt.trim()}
+			? `${prompt.trim()}
 
-			📎 ${uploadedFilesText}`
+		📎 ${uploadedFilesText}`
 
-				: `📎 ${uploadedFilesText}`;
+			: `📎 ${uploadedFilesText}`;
 
-			const newId =
-			  await saveChat(
+		const newId =
+		  await saveChat(
 
-				req,
+			req,
 
-				userMessageText,
+			userMessageText,
 
-				answer,
+			answer,
 
-				chatId,
+			chatId,
 
-				Array.from(
-				  mergedMap.values()
-				).slice(-30)
+			Array.from(
+			  mergedMap.values()
+			).slice(-30)
 
-			  );
-
-
+		  );
 /* =====================
 DELETE TEMP
 ===================== */

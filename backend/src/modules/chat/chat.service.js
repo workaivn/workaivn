@@ -362,13 +362,15 @@ export async function streamChat({
 				  ?.toLowerCase() || "";
 
 			  const keywords =
-				latestUserMsg
-				  .split(/\s+/)
-				  .filter(
-					k =>
-					  k &&
-					  k.length > 2
-				  );
+			  latestUserMsg
+				.toLowerCase()
+				.replace(/[^\w\s]/g, " ")
+				.split(/\s+/)
+				.filter(
+				  k =>
+					k &&
+					k.length > 2
+				);
 
 			  const relevantChunks =
 				  (f.chunks || [])
@@ -400,29 +402,45 @@ export async function streamChat({
 
 					  keywords.forEach(k => {
 
-						if (
-						  c.name
-							?.toLowerCase()
-							.includes(k)
-						) {
-						  score += 100;
-						}
+					  if (
+						c.name
+						  ?.toLowerCase()
+						  === k
+					  ) {
 
-						if (
-						  c.type
-							?.toLowerCase()
-							.includes(k)
-						) {
-						  score += 3;
-						}
+						score += 1000;
 
-						if (
-						  haystack.includes(k)
-						) {
-						  score += 5;
-						}
+					  }
 
-					  });
+					  if (
+						c.name
+						  ?.toLowerCase()
+						  ?.includes(k)
+					  ) {
+
+						score += 200;
+
+					  }
+
+					  if (
+						c.type
+						  ?.toLowerCase()
+						  ?.includes(k)
+					  ) {
+
+						score += 20;
+
+					  }
+
+					  if (
+						haystack.includes(k)
+					  ) {
+
+						score += 5;
+
+					  }
+
+					});
 
 					  return {
 						...c,
@@ -453,7 +471,7 @@ export async function streamChat({
 
 				const finalChunks =
 				  relevantChunks
-					finalChunks
+					.slice(0, 5);
 					.map(c => {
 
 					  if (
