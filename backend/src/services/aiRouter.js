@@ -18,7 +18,7 @@ const gemini = new GoogleGenerativeAI(
 ========================= */
 
 export async function askAI({
-  prompt = "",
+  messages = [],
   mode = "chat",
   plan = "free"
 }) {
@@ -27,7 +27,11 @@ export async function askAI({
   // 🔥 PRO USER → OpenAI trước
   if (plan !== "free") {
     try {
-      const r = await askOpenAI(prompt, mode);
+      const r =
+		  await askOpenAI(
+			messages,
+			mode
+		  );
       if (r) return r;
     } catch (e) {
       console.log("OPENAI FAIL:", e.message);
@@ -36,7 +40,11 @@ export async function askAI({
 
   // 🔥 FREE → Gemini
   try {
-    const r = await askGemini(prompt, mode);
+    const r =
+	  await askGemini(
+		messages,
+		mode
+	  );
     if (r) return r;
   } catch (e) {
     console.log("GEMINI FAIL:", e.message);
@@ -44,7 +52,11 @@ export async function askAI({
 
   // 🔥 fallback → Groq
   try {
-    const r = await askGroq(prompt, mode);
+    const r =
+	  await askGroq(
+		messages,
+		mode
+	  );
     if (r) return r;
   } catch (e) {
     console.log("GROQ FAIL:", e.message);
@@ -52,7 +64,11 @@ export async function askAI({
 
   // 🔥 cuối cùng thử lại OpenAI
   try {
-    const r = await askOpenAI(prompt, mode);
+    const r =
+	  await askOpenAI(
+		messages,
+		mode
+	  );
     if (r) return r;
   } catch (e) {
     console.log("OPENAI FINAL FAIL:", e.message);
@@ -101,18 +117,34 @@ Bạn là trợ lý AI thông minh cho người Việt.
    OPENAI (BEST)
 ========================= */
 
-async function askOpenAI(prompt, mode) {
-  const system = getSystemPrompt(mode);
+async function askOpenAI(messages, mode) {
+	  const system = getSystemPrompt(mode);
 
-  const r = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: prompt }
-    ],
-    max_tokens: 8000,     // 🔥 FIX NGẮN
-    temperature: 0.7
-  });
+	  const finalMessages = [
+		{
+		  role: "system",
+		  content: system
+		},
+
+		...messages
+	  ];
+
+	  const r =
+		await openai.chat.completions.create({
+
+		  model: "gpt-4o-mini",
+
+		  messages: finalMessages,
+
+		  max_tokens: 8000,
+		  temperature: 0.7
+		});
+
+	  return (
+		r?.choices?.[0]
+		  ?.message?.content || ""
+	  );
+	}
 
   return r?.choices?.[0]?.message?.content || "";
 }
@@ -121,30 +153,100 @@ async function askOpenAI(prompt, mode) {
    GEMINI
 ========================= */
 
-async function askGemini(prompt, mode) {
-  const model = gemini.getGenerativeModel({
-    model: "gemini-1.5-flash"
-  });
+async function askGemini(
+  messages,
+  mode
+) {
 
-  const fullPrompt =
-    getSystemPrompt(mode) + "\n\n" + prompt;
+  const model =
+    gemini.getGenerativeModel({
+      model: "gemini-1.5-flash"
+    });
 
-  const r = await model.generateContent(fullPrompt);
+  const system =
+    getSystemPrompt(mode);
 
-  return r?.response?.text() || "";
+  const history =
+    messages.map((m) => {
+
+      return {
+
+        role:
+          m.role === "assistant"
+            ? "model"
+            : "user",
+
+        parts: [
+          {
+            text:
+              m.content || ""
+          }
+        ]
+
+      };
+
+    });
+
+  const chat =
+    model.startChat({
+
+      history: [
+
+        {
+          role: "user",
+          parts: [
+            {
+              text: system
+            }
+          ]
+        },
+
+        ...history
+
+      ]
+
+    });
+
+  const lastMessage =
+    messages[
+      messages.length - 1
+    ];
+
+  const r =
+    await chat.sendMessage(
+      lastMessage?.content || ""
+    );
+
+  return (
+    r?.response?.text() || ""
+  );
 }
 
 /* =========================
    GROQ
 ========================= */
 
-async function askGroq(prompt, mode) {
+async function askGroq(
+	  messages,
+	  mode
+	) {
   const models = [
     "llama-3.1-8b-instant"
   ];
 
-  const fullPrompt =
-    getSystemPrompt(mode) + "\n\n" + prompt;
+  const system =
+	  getSystemPrompt(mode);
+
+	const finalMessages = [
+
+	  {
+		role: "system",
+		content: system
+	  },
+
+	  ...messages
+
+	];
 
   for (const model of models) {
     try {
@@ -159,12 +261,7 @@ async function askGroq(prompt, mode) {
           },
           body: JSON.stringify({
             model,
-            messages: [
-              {
-                role: "user",
-                content: fullPrompt
-              }
-            ],
+            messages: finalMessages,
             max_tokens: 8000
           })
         }

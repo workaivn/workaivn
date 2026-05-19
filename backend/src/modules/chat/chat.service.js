@@ -264,12 +264,15 @@ async function saveChat(
     }
 
     doc.messages = [
-      ...messages,
-      {
-        role: "assistant",
-        content: answer
-      }
-    ];
+	  ...messages,
+	  {
+		role: "assistant",
+		content: answer
+	  }
+	];
+
+	doc.updatedAt =
+	  new Date();
 
     await doc.save();
 
@@ -305,34 +308,26 @@ export async function streamChat({
         mode
       );
 
-    const userText =
-      messages
-        ?.map(
-          (m) =>
-            m.content
-        )
-        .join("\n") ||
-      "";
-
-    const prompt = `
-${systemPrompt}
-
-${userText}
-`;
+   const finalMessages =
+	  messages.map((m) => ({
+		role: m.role,
+		content: m.content
+	  }));
 
     const answer =
-      await askAI({
-        prompt,
-        mode,
-        plan
-      });
+	  await askAI({
+		messages:
+		  finalMessages,
+		mode,
+		plan
+	  });
 
 
-     console.log("=== DEBUG CHAT ===");
-console.log("USER:", userId);
-console.log("PROMPT:", prompt);
-console.log("ANSWER:", answer);
-console.log("==================");
+    console.log("=== DEBUG CHAT ===");
+	console.log("USER:", userId);
+	console.log("PROMPT:", prompt);
+	console.log("ANSWER:", answer);
+	console.log("==================");
 
      
 
