@@ -321,6 +321,28 @@ export async function streamChat({
 		  _id: chatId,
 		  userId
 		});
+		
+		let activeFilesText = "";
+
+		if (
+		  existingChat
+			?.activeFiles
+			?.length
+		) {
+
+		  activeFilesText =
+			existingChat
+			  .activeFiles
+			  .map((f) => `
+
+		FILE: ${f.name}
+
+		${f.content}
+
+		`)
+			  .join("\n");
+
+		}
 
 	  if (
 		existingChat?.messages
@@ -338,6 +360,26 @@ export async function streamChat({
 	/* =========================
 	   APPEND NEW MESSAGE
 	========================= */
+
+	if (
+	  activeFilesText
+	) {
+
+	  finalMessages.push({
+
+		role: "system",
+
+		content: `
+
+	ACTIVE FILES:
+
+	${activeFilesText}
+
+	`
+
+	  });
+
+	}
 
 	finalMessages.push(
 	  ...messages

@@ -366,6 +366,7 @@ error:"No file"
 const {prompt,chatId}=req.body;
 
 let mergedText = "";
+let activeFiles = [];
 let hasCodeFile = false;
 
 for (const file of files) {
@@ -605,6 +606,18 @@ for (const file of files) {
     .slice(0, 50000);
 
   mergedText += `
+  
+  activeFiles.push({
+
+	  name:
+		file.originalname,
+
+	  type: ext,
+
+	  content:
+		text.slice(0, 20000)
+
+	});
 
 ===== FILE: ${file.originalname} =====
 
@@ -806,6 +819,58 @@ SAVE CHAT
 
 const newId =
 await saveChat(
+	let chatDoc = null;
+
+	if (chatId) {
+
+	  chatDoc =
+		await Chat.findById(
+		  chatId
+		);
+
+	}
+
+	/* =========================
+	   MERGE ACTIVE FILES
+	========================= */
+
+	if (chatDoc) {
+
+	  const existing =
+		chatDoc.activeFiles || [];
+
+	  const mergedMap =
+		new Map();
+
+	  /* old files */
+	  existing.forEach((f) => {
+
+		mergedMap.set(
+		  f.name,
+		  f
+		);
+
+	  });
+
+	  /* new uploads overwrite old */
+	  activeFiles.forEach((f) => {
+
+		mergedMap.set(
+		  f.name,
+		  f
+		);
+
+	  });
+
+	  chatDoc.activeFiles =
+		Array.from(
+		  mergedMap.values()
+		)
+		.slice(-30);
+
+	  await chatDoc.save();
+
+	}
 req,
 `📎 ${files.map(f => f.originalname).join(", ")}`,
 answer,
