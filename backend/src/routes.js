@@ -701,15 +701,8 @@ FIX:
 - hướng sửa
 
 PATCH:
-
-OLD:
-
-````js
-...
-
-NEW:
-
-...
+- chỉ show phần code cần sửa
+- không dump full source
 
 ================================================
 
