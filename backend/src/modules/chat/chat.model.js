@@ -8,13 +8,19 @@ const schema = new mongoose.Schema({
 
   messages: Array,
 
-  activeFiles: [
-    {
-      name: String,
-      content: String,
-      type: String
-    }
-  ]
+ activeFiles: [
+	  {
+
+		name: String,
+
+		type: String,
+
+		summary: String,
+
+		chunks: [String]
+
+	  }
+	]
 
 }, {
   timestamps: true

@@ -34,6 +34,10 @@ import paymentRoutes from "./routes/payment.routes.js";
 import { sepayWebhook } from "./controllers/sepay.webhook.js";
 import { isAdmin }
 from "./middleware/isAdmin.js";
+import {
+  chunkText,
+  summarizeFile
+} from "./services/chunker.js";
 
 
 // =====================================
@@ -605,17 +609,28 @@ for (const file of files) {
     .trim()
     .slice(0, 50000);
 
-  activeFiles.push({
+	  const chunks =
+		  chunkText(
+			text,
+			3000
+		  );
 
-	  name:
-		file.originalname,
+		activeFiles.push({
 
-	  type: ext,
+		  name:
+			file.originalname,
 
-	  content:
-		text.slice(0, 20000)
+		  type: ext,
 
-	});
+		  summary:
+			summarizeFile(
+			  file.originalname,
+			  text
+			),
+
+		  chunks
+
+		});
 
 	mergedText += `
 

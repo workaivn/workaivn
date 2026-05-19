@@ -346,16 +346,33 @@ export async function streamChat({
 		  ?.length
 	  ) {
 
-		activeFilesText =
+		const latestFiles =
 		  existingChat
 			.activeFiles
-			.map((f) => `
+			.slice(-5);
 
-	FILE: ${f.name}
+		activeFilesText =
+		  latestFiles
+			.map((f) => {
 
-	${f.content}
+			  const relevantChunks =
+				f.chunks
+				  ?.slice(0, 3)
+				  ?.join("\n");
 
-	`)
+			  return `
+
+		FILE: ${f.name}
+
+		SUMMARY:
+		${f.summary}
+
+		CHUNKS:
+		${relevantChunks}
+
+		`;
+
+			})
 			.join("\n");
 
 	  }
