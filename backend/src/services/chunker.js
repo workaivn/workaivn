@@ -42,20 +42,7 @@ function chunkJavaScript(
 
         /* function */
 
-        if (
-          node.type ===
-            "FunctionDeclaration" &&
-          node.id?.name
-        ) {
-
-          name =
-            node.id.name;
-
-        }
-		
-		/* async function */
-
-		if (
+      	if (
 		  node.type ===
 			"FunctionDeclaration" &&
 		  node.id?.name
@@ -68,6 +55,33 @@ function chunkJavaScript(
 			"FunctionDeclaration";
 
 		}
+
+/* export function */
+
+		else if (
+		  node.type ===
+			"ExportNamedDeclaration" &&
+		  node.declaration?.type ===
+			"FunctionDeclaration"
+		) {
+
+		  const fn =
+			node.declaration;
+
+		  if (
+			fn.id?.name
+		  ) {
+
+			name =
+			  fn.id.name;
+
+			type =
+			  "FunctionDeclaration";
+
+		  }
+
+		}
+
 
         /* variable */
 
@@ -117,15 +131,7 @@ function chunkJavaScript(
 		  }
 
 		  chunks.push({
-			  console.log(
-			  "CHUNK:",
-			  {
-				name,
-				type
-			  }
-			);
-
-            file:
+			  file:
               fileName,
 
             type,
@@ -135,6 +141,14 @@ function chunkJavaScript(
             content
 
           });
+		  
+		  console.log(
+			  "CHUNK:",
+			  {
+				name,
+				type
+			  }
+			);
 
         }
 
