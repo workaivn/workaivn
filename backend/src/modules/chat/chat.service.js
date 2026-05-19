@@ -439,6 +439,20 @@ export async function streamChat({
 
 					})
 					.join("\n");
+					 return `
+
+						FILE: ${f.name}
+
+						SUMMARY:
+						${f.summary}
+
+						CHUNKS:
+						${relevantChunks}
+
+						`;
+
+									})
+									.join("\n");
 
 	  }
 
