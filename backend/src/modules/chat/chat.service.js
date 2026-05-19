@@ -501,6 +501,7 @@ export async function streamChat({
 
 					})
 					.join("\n");
+	
 					 return `
 
 						FILE: ${f.name}
