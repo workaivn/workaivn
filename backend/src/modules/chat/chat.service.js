@@ -239,7 +239,8 @@ async function saveChat(
   userId,
   messages,
   answer,
-  chatId
+  chatId,
+  activeFiles = null
 ) {
   try {
     let doc = null;
@@ -273,7 +274,13 @@ async function saveChat(
 
 	doc.updatedAt =
 	  new Date();
+	  
+	if (activeFiles) {
 
+	  doc.activeFiles =
+		activeFiles;
+
+	}
 	await doc.save();
 
   } catch (err) {
@@ -446,11 +453,19 @@ export async function streamChat({
     res.write(final);
 
     await saveChat(
-      userId,
-      messages,
-      final,
-      chatId
-    );
+
+	  userId,
+
+	  messages,
+
+	  final,
+
+	  chatId,
+
+	  existingChat
+		?.activeFiles || []
+
+	);
 
     res.end();
 
