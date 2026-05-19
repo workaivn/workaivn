@@ -399,6 +399,21 @@ export async function streamChat({
 						.toLowerCase();
 
 					  let score = 0;
+					  
+					  const fullQuery =
+						  latestUserMsg
+							.toLowerCase();
+
+						if (
+						  c.name &&
+						  fullQuery.includes(
+							c.name.toLowerCase()
+						  )
+						) {
+
+						  score += 5000;
+
+						}
 
 					  keywords.forEach(k => {
 
@@ -433,8 +448,12 @@ export async function streamChat({
 					  }
 
 					  if (
-						haystack.includes(k)
-					  ) {
+						  haystack.includes(k)
+						) {
+
+						  score += 20;
+
+						} {
 
 						score += 5;
 
@@ -549,6 +568,15 @@ export async function streamChat({
 		role: "system",
 
 		content: `
+
+	IMPORTANT:
+
+	- Nếu thấy exact function/class:
+	  PHẢI quote đúng nội dung thật.
+	- Không được đoán code không tồn tại.
+	- Nếu function tồn tại:
+	  phải nói rõ FILE + FUNCTION NAME.
+	- Không được invent patch nếu chưa thấy code thật.
 
 	ACTIVE FILES:
 

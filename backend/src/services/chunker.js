@@ -117,6 +117,13 @@ function chunkJavaScript(
 		  }
 
 		  chunks.push({
+			  console.log(
+			  "CHUNK:",
+			  {
+				name,
+				type
+			  }
+			);
 
             file:
               fileName,
