@@ -862,6 +862,24 @@ try {
         "free"
 
     });
+	
+	if (
+	  typeof answer !== "string"
+	) {
+
+	  console.log(
+		"INVALID ANSWER:",
+		answer
+	  );
+
+	  answer =
+		JSON.stringify(
+		  answer,
+		  null,
+		  2
+		);
+
+	}
 
   if (
     !answer ||
@@ -953,6 +971,16 @@ for (const file of files) {
   }
 
 }
+
+console.log(
+  "FINAL ANSWER TYPE:",
+  typeof answer
+);
+
+console.log(
+  "FINAL ANSWER:",
+  answer
+);
 
 return res.json({
 ok:true,

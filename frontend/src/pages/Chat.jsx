@@ -64,6 +64,10 @@ export default function Chat({ tab, setTab }) {
     try {
       const r = await apiGet("/chats");
       const d = await r.json();
+	  console.log(
+	  "UPLOAD RESPONSE:",
+	  d
+	);
       setChats(Array.isArray(d) ? d : []);
     } catch {
       setChats([]);
@@ -589,8 +593,12 @@ async function sendRealFiles(
           role:
             "assistant",
           content:
-            d.answer ||
-            "Không đọc được file."
+			  typeof d.answer === "string"
+
+				? d.answer
+
+				: d.error ||
+				  JSON.stringify(d)
         };
 
         return copy;
