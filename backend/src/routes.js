@@ -779,9 +779,26 @@ const answer =
     ],
 
     mode:
-      hasCodeFile
-        ? "code"
-        : "file",
+	  hasCodeFile &&
+	  (
+		finalPrompt
+		  .toLowerCase()
+		  .includes("code") ||
+
+		finalPrompt
+		  .toLowerCase()
+		  .includes("fix") ||
+
+		finalPrompt
+		  .toLowerCase()
+		  .includes("bug") ||
+
+		finalPrompt
+		  .toLowerCase()
+		  .includes("refactor")
+	  )
+		? "code"
+		: "file",
 
     plan:
       user?.plan ||
