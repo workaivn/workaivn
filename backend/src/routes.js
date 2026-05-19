@@ -770,14 +770,23 @@ const user =
 
 const answer =
   await askAI({
-    prompt: ask,
+
+    messages: [
+      {
+        role: "user",
+        content: ask
+      }
+    ],
+
     mode:
       hasCodeFile
         ? "code"
         : "file",
+
     plan:
       user?.plan ||
       "free"
+
   });
 
 
