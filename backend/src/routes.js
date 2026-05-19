@@ -605,8 +605,6 @@ for (const file of files) {
     .trim()
     .slice(0, 50000);
 
-  mergedText += `
-  
   activeFiles.push({
 
 	  name:
@@ -619,11 +617,13 @@ for (const file of files) {
 
 	});
 
-===== FILE: ${file.originalname} =====
+	mergedText += `
 
-${text}
+	===== FILE: ${file.originalname} =====
 
-`;
+	${text}
+
+	`;
 
 }
 
@@ -811,71 +811,74 @@ const answer =
       "free"
 
   });
+  
+  
+  const existingChat =
+  chatId
+    ? await Chat.findById(chatId)
+    : null;
+
+	const mergedMap =
+	  new Map();
+
+	(existingChat?.activeFiles || [])
+	.forEach((f) => {
+
+	  mergedMap.set(
+		f.name,
+		f
+	  );
+
+	});
+
+	activeFiles.forEach((f) => {
+
+	  mergedMap.set(
+		f.name,
+		f
+	  );
+
+	});
 
 
-/* =====================
-SAVE CHAT
-===================== */
+		/* =========================
+		   SAVE CHAT
+		========================= */
 
-const newId =
-await saveChat(
-	let chatDoc = null;
+		const newId =
+		  await saveChat(
 
-	if (chatId) {
+			req,
 
-	  chatDoc =
-		await Chat.findById(
-		  chatId
+			`📎 ${files
+			  .map(f => f.originalname)
+			  .join(", ")}`,
+
+			answer,
+
+			chatId
+
+		  );
+
+		/* =========================
+		   SAVE ACTIVE FILES
+		========================= */
+
+		await Chat.findByIdAndUpdate(
+
+		  newId,
+
+		  {
+			$set: {
+			  activeFiles:
+				Array.from(
+				  mergedMap.values()
+				)
+				.slice(-30)
+			}
+		  }
+
 		);
-
-	}
-
-	/* =========================
-	   MERGE ACTIVE FILES
-	========================= */
-
-	if (chatDoc) {
-
-	  const existing =
-		chatDoc.activeFiles || [];
-
-	  const mergedMap =
-		new Map();
-
-	  /* old files */
-	  existing.forEach((f) => {
-
-		mergedMap.set(
-		  f.name,
-		  f
-		);
-
-	  });
-
-	  /* new uploads overwrite old */
-	  activeFiles.forEach((f) => {
-
-		mergedMap.set(
-		  f.name,
-		  f
-		);
-
-	  });
-
-	  chatDoc.activeFiles =
-		Array.from(
-		  mergedMap.values()
-		)
-		.slice(-30);
-
-	  await chatDoc.save();
-
-	}
-req,
-`📎 ${files.map(f => f.originalname).join(", ")}`,
-answer,
-chatId
-);
 
 /* =====================
 DELETE TEMP

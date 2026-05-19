@@ -381,6 +381,40 @@ export async function streamChat({
 
 	}
 
+	if (
+	  existingChat
+		?.activeFiles
+		?.length
+	) {
+
+	  const activeFilesText =
+		existingChat
+		  .activeFiles
+		  .map((f) => `
+
+	FILE: ${f.name}
+
+	${f.content}
+
+	`)
+		  .join("\n");
+
+	  finalMessages.push({
+
+		role: "system",
+
+		content: `
+
+	ACTIVE FILES:
+
+	${activeFilesText}
+
+	`
+
+	  });
+
+	}
+
 	finalMessages.push(
 	  ...messages
 	);
