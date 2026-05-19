@@ -118,35 +118,32 @@ Bạn là trợ lý AI thông minh cho người Việt.
 ========================= */
 
 async function askOpenAI(messages, mode) {
-	  const system = getSystemPrompt(mode);
+  const system = getSystemPrompt(mode);
 
-	  const finalMessages = [
-		{
-		  role: "system",
-		  content: system
-		},
+  const finalMessages = [
+    {
+      role: "system",
+      content: system
+    },
 
-		...messages
-	  ];
+    ...messages
+  ];
 
-	  const r =
-		await openai.chat.completions.create({
+  const r =
+    await openai.chat.completions.create({
 
-		  model: "gpt-4o-mini",
+      model: "gpt-4o-mini",
 
-		  messages: finalMessages,
+      messages: finalMessages,
 
-		  max_tokens: 8000,
-		  temperature: 0.7
-		});
+      max_tokens: 8000,
+      temperature: 0.7
+    });
 
-	  return (
-		r?.choices?.[0]
-		  ?.message?.content || ""
-	  );
-	}
-
-  return r?.choices?.[0]?.message?.content || "";
+  return (
+    r?.choices?.[0]
+      ?.message?.content || ""
+  );
 }
 
 /* =========================
@@ -167,9 +164,9 @@ async function askGemini(
     getSystemPrompt(mode);
 
   const history =
-    messages.map((m) => {
-
-      return {
+    messages
+      .slice(0, -1)
+      .map((m) => ({
 
         role:
           m.role === "assistant"
@@ -183,9 +180,7 @@ async function askGemini(
           }
         ]
 
-      };
-
-    });
+      }));
 
   const chat =
     model.startChat({
@@ -194,6 +189,7 @@ async function askGemini(
 
         {
           role: "user",
+
           parts: [
             {
               text: system

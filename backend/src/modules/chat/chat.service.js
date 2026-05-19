@@ -263,13 +263,18 @@ async function saveChat(
       });
     }
 
-    doc.messages = [
+    doc.messages.push(
 	  ...messages,
 	  {
 		role: "assistant",
 		content: answer
 	  }
-	];
+	);
+
+	doc.updatedAt =
+	  new Date();
+
+	await doc.save();
 
 	doc.updatedAt =
 	  new Date();
@@ -308,11 +313,66 @@ export async function streamChat({
         mode
       );
 
-   const finalMessages =
-	  messages.map((m) => ({
-		role: m.role,
-		content: m.content
-	  }));
+   let finalMessages = [];
+
+/* =========================
+   LOAD CHAT HISTORY
+========================= */
+
+	if (chatId) {
+
+	  const existingChat =
+		await Chat.findOne({
+		  _id: chatId,
+		  userId
+		});
+
+	  if (
+		existingChat?.messages
+		  ?.length
+	  ) {
+
+		finalMessages = [
+		  ...existingChat.messages
+		];
+
+	  }
+
+	}
+
+	/* =========================
+	   APPEND NEW MESSAGES
+	========================= */
+
+	messages: [
+	  {
+		role: "user",
+		content: input
+	  }
+	]
+
+	/* =========================
+	   CLEAN INVALID
+	========================= */
+
+	finalMessages =
+	  finalMessages
+		.filter(
+		  (m) =>
+			m &&
+			m.role &&
+			m.content
+		)
+		.map((m) => ({
+
+		  role: m.role,
+
+		  content:
+			String(
+			  m.content
+			)
+
+		}));
 
     const answer =
 	  await askAI({
