@@ -276,11 +276,6 @@ async function saveChat(
 
 	await doc.save();
 
-	doc.updatedAt =
-	  new Date();
-
-    await doc.save();
-
   } catch (err) {
     console.log(
       "SAVE CHAT ERROR:",
@@ -290,34 +285,34 @@ async function saveChat(
 }
 
 export async function streamChat({
-  userId,
-  messages = [],
-  mode = "normal",
-  search = false,
-  res,
-  chatId = null
-}) {
-  try {
+	  userId,
+	  messages = [],
+	  mode = "normal",
+	  search = false,
+	  res,
+	  chatId = null
+	}) {
+	  try {
 
-    const user =
-      await User.findById(
-        userId
-      );
+		const user =
+		  await User.findById(
+			userId
+		  );
 
-    const plan =
-      user?.plan ||
-      "free";
+		const plan =
+		  user?.plan ||
+		  "free";
 
-    const systemPrompt =
-      getSystemPrompt(
-        mode
-      );
+		const systemPrompt =
+		  getSystemPrompt(
+			mode
+		  );
 
-   let finalMessages = [];
+	   let finalMessages = [];
 
-/* =========================
-   LOAD CHAT HISTORY
-========================= */
+	/* =========================
+	   LOAD CHAT HISTORY
+	========================= */
 
 	if (chatId) {
 
@@ -341,15 +336,12 @@ export async function streamChat({
 	}
 
 	/* =========================
-	   APPEND NEW MESSAGES
+	   APPEND NEW MESSAGE
 	========================= */
 
-	messages: [
-	  {
-		role: "user",
-		content: input
-	  }
-	]
+	finalMessages.push(
+	  ...messages
+	);
 
 	/* =========================
 	   CLEAN INVALID
@@ -385,7 +377,6 @@ export async function streamChat({
 
     console.log("=== DEBUG CHAT ===");
 	console.log("USER:", userId);
-	console.log("PROMPT:", prompt);
 	console.log("ANSWER:", answer);
 	console.log("==================");
 
