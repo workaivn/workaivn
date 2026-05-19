@@ -423,7 +423,7 @@ export async function streamChat({
 						  === k
 					  ) {
 
-						score += 1000;
+						score += 10000;
 
 					  }
 
@@ -507,16 +507,19 @@ export async function streamChat({
 
 					  return `
 
-				TYPE:
-				${c.type}
+						FILE:
+						${c.file}
 
-				NAME:
-				${c.name}
+						TYPE:
+						${c.type}
 
-				CONTENT:
-				${c.content}
+						FUNCTION:
+						${c.name}
 
-				`;
+						CONTENT:
+						${c.content}
+
+						`;
 
 					})
 					.join("\n");
@@ -577,6 +580,21 @@ export async function streamChat({
 	- Nếu function tồn tại:
 	  phải nói rõ FILE + FUNCTION NAME.
 	- Không được invent patch nếu chưa thấy code thật.
+
+	QUAN TRỌNG:
+
+	- Nếu user hỏi:
+	  "ở đâu"
+	  "nằm ở đâu"
+	  "file nào"
+
+	THÌ PHẢI trả lời:
+
+	1. FILE NAME
+	2. FUNCTION NAME
+	3. Code snippet thật
+
+	Không được trả lời chung chung.
 
 	ACTIVE FILES:
 

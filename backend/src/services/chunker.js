@@ -129,7 +129,23 @@ function chunkJavaScript(
 		  ) {
 			return;
 		  }
+		/* skip noisy nodes */
 
+		const noisyTypes = [
+		  "ExpressionStatement",
+		  "VariableDeclaration"
+		];
+
+		if (
+		  noisyTypes.includes(
+			node.type
+		  ) &&
+		  name === "anonymous"
+		) {
+
+		  return;
+
+		}
 		  chunks.push({
 			  file:
               fileName,
