@@ -641,10 +641,18 @@ for (const file of files) {
 
 	===== FILE: ${file.originalname} =====
 
-	${text}
+	SUMMARY:
+	${summarizeFile(
+	  file.originalname,
+	  text
+	)}
+
+	CONTENT SAMPLE:
+	${chunks
+	  .slice(0, 3)
+	  .join("\n")}
 
 	`;
-
 }
 
 /* =====================
@@ -782,6 +790,20 @@ ${mergedText}
 
 `;
 
+/* LIMIT PROMPT */
+
+if (ask.length > 120000) {
+
+  ask =
+    ask.slice(0, 120000);
+
+}
+
+console.log(
+  "PROMPT LENGTH:",
+  ask.length
+);
+
 /* =====================
 ASK AI
 ===================== */
@@ -794,43 +816,74 @@ const user =
     userId
   );
 
-const answer =
-  await askAI({
+let answer = "";
 
-    messages: [
-      {
-        role: "user",
-        content: ask
-      }
-    ],
+try {
 
-    mode:
-	  hasCodeFile &&
-	  (
-		finalPrompt
-		  .toLowerCase()
-		  .includes("code") ||
+  console.log(
+    "PROMPT LENGTH:",
+    ask.length
+  );
 
-		finalPrompt
-		  .toLowerCase()
-		  .includes("fix") ||
+  answer =
+    await askAI({
 
-		finalPrompt
-		  .toLowerCase()
-		  .includes("bug") ||
+      messages: [
+        {
+          role: "user",
+          content: ask
+        }
+      ],
 
-		finalPrompt
-		  .toLowerCase()
-		  .includes("refactor")
-	  )
-		? "code"
-		: "file",
+      mode:
+        hasCodeFile &&
+        (
+          finalPrompt
+            .toLowerCase()
+            .includes("code") ||
 
-    plan:
-      user?.plan ||
-      "free"
+          finalPrompt
+            .toLowerCase()
+            .includes("fix") ||
 
-  });
+          finalPrompt
+            .toLowerCase()
+            .includes("bug") ||
+
+          finalPrompt
+            .toLowerCase()
+            .includes("refactor")
+        )
+          ? "code"
+          : "file",
+
+      plan:
+        user?.plan ||
+        "free"
+
+    });
+
+  if (
+    !answer ||
+    !String(answer).trim()
+  ) {
+
+    answer =
+      "AI không trả về nội dung.";
+
+  }
+
+} catch (err) {
+
+  console.log(
+    "ASK AI ERROR:",
+    err
+  );
+
+  answer =
+    "AI đọc file quá tải. Hãy thử ít file hơn hoặc file nhỏ hơn.";
+
+}
   
   
   const existingChat =
