@@ -358,9 +358,13 @@ export async function streamChat({
 		  ?.length
 	  ) {
 
+		const recentMessages =
+		  existingChat.messages
+			.slice(-20);
+
 		finalMessages.push(
-	  ...existingChat.messages
-	);
+		  ...recentMessages
+		);
 
 	  }
 
