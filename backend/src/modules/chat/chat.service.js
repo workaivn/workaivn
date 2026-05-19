@@ -463,7 +463,8 @@ export async function streamChat({
 	  chatId,
 
 	  existingChat
-		?.activeFiles || []
+		? existingChat.activeFiles
+		: undefined
 
 	);
 
