@@ -372,9 +372,8 @@ export async function streamChat({
 
 			  const relevantChunks =
 				  (f.chunks || [])
-					.filter(c => {
 
-					  /* legacy chunk */
+					.map(c => {
 
 					  if (
 						typeof c === "string"
@@ -388,12 +387,6 @@ export async function streamChat({
 
 					  }
 
-					  if (
-						!keywords.length
-					  ) {
-						return true;
-					  }
-
 					  const haystack = `
 
 				${c.name || ""}
@@ -403,12 +396,46 @@ export async function streamChat({
 				`
 						.toLowerCase();
 
-					  return keywords.some(
-						k =>
+					  let score = 0;
+
+					  keywords.forEach(k => {
+
+						if (
+						  c.name
+							?.toLowerCase()
+							.includes(k)
+						) {
+						  score += 10;
+						}
+
+						if (
+						  c.type
+							?.toLowerCase()
+							.includes(k)
+						) {
+						  score += 3;
+						}
+
+						if (
 						  haystack.includes(k)
-					  );
+						) {
+						  score += 1;
+						}
+
+					  });
+
+					  return {
+						...c,
+						score
+					  };
 
 					})
+
+					.sort(
+					  (a, b) =>
+						b.score - a.score
+					)
+
 					.slice(0, 5)
 					.map(c => {
 
