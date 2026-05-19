@@ -432,24 +432,28 @@ export async function streamChat({
 					})
 
 					.sort(
-					  (a, b) =>
-						b.score - a.score
-					)
-					console.log(
-					  "TOP CHUNKS:",
-					  JSON.stringify(
-						relevantChunks
-						  .slice(0, 3)
-						  .map(x => ({
-							name: x.name,
-							type: x.type,
-							score: x.score
-						  })),
-						null,
-						2
-					  )
-					);
-					.slice(0, 5)
+				  (a, b) =>
+					b.score - a.score
+				);
+
+				console.log(
+				  "TOP CHUNKS:",
+				  JSON.stringify(
+					relevantChunks
+					  .slice(0, 3)
+					  .map(x => ({
+						name: x.name,
+						type: x.type,
+						score: x.score
+					  })),
+					null,
+					2
+				  )
+				);
+
+				const finalChunks =
+				  relevantChunks
+					finalChunks
 					.map(c => {
 
 					  if (
