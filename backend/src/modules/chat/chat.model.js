@@ -7,23 +7,37 @@ const schema = new mongoose.Schema({
   title: String,
 
   messages: Array,
+activeFiles: [
+  new mongoose.Schema(
+    {
+      name: String,
 
-  activeFiles: [
-    new mongoose.Schema(
-      {
-        name: String,
+      type: String,
 
-        type: String,
+      summary: String,
 
-        summary: String,
+      chunks: [
+        new mongoose.Schema(
+          {
+            file: String,
 
-        chunks: [String]
-      },
-      {
-        _id: false
-      }
-    )
-  ]
+            type: String,
+
+            name: String,
+
+            content: String
+          },
+          {
+            _id: false
+          }
+        )
+      ]
+    },
+    {
+      _id: false
+    }
+  )
+]
 
 }, {
   timestamps: true
