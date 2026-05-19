@@ -365,37 +365,27 @@ export async function streamChat({
 			  f.chunks
 				?.filter(c => {
 
-					  const keywords =
-						latestUserMsg
-						  .split(/\s+/)
-						  .filter(
-							k =>
-							  k &&
-							  k.length > 2
-						  );
-
-					  if (!keywords.length) {
-						return true;
-					  }
-
-					  return keywords.some(
+				  const keywords =
+					latestUserMsg
+					  .split(/\s+/)
+					  .filter(
 						k =>
-						  c
-							.toLowerCase()
-							.includes(k)
+						  k &&
+						  k.length > 2
 					  );
 
-					})
-					.some(k =>
+				  if (!keywords.length) {
+					return true;
+				  }
 
-					  k.length > 2 &&
+				  return keywords.some(
+					k =>
 					  c
 						.toLowerCase()
 						.includes(k)
+				  );
 
-					)
-
-				)
+				})
 				.slice(0, 5)
 				.join("\n");
 
