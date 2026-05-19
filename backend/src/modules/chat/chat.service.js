@@ -371,59 +371,74 @@ export async function streamChat({
 				  );
 
 			  const relevantChunks =
-				f.chunks
-				  ?.filter(c => {
+				  (f.chunks || [])
+					.filter(c => {
 
-					if (
-					  !keywords.length
-					) {
-					  return true;
-					}
+					  /* legacy chunk */
 
-					const haystack = `
+					  if (
+						typeof c === "string"
+					  ) {
 
-		${c.name || ""}
-		${c.type || ""}
-		${c.content || ""}
+						c = {
+						  content: c,
+						  type: "text",
+						  name: "legacy"
+						};
 
-		`
-					  .toLowerCase();
+					  }
 
-					return keywords.some(
-					  k =>
-						haystack.includes(k)
-					);
+					  if (
+						!keywords.length
+					  ) {
+						return true;
+					  }
 
-				  })
-				  .slice(0, 5)
-				  .map(c => `
+					  const haystack = `
 
-		TYPE:
-		${c.type}
+				${c.name || ""}
+				${c.type || ""}
+				${c.content || ""}
 
-		NAME:
-		${c.name}
+				`
+						.toLowerCase();
 
-		CONTENT:
-		${c.content}
+					  return keywords.some(
+						k =>
+						  haystack.includes(k)
+					  );
 
-		`)
-				  .join("\n");
+					})
+					.slice(0, 5)
+					.map(c => {
 
-			  return `
+					  if (
+						typeof c === "string"
+					  ) {
 
-		FILE: ${f.name}
+						c = {
+						  content: c,
+						  type: "text",
+						  name: "legacy"
+						};
 
-		SUMMARY:
-		${f.summary}
+					  }
 
-		CHUNKS:
-		${relevantChunks}
+					  return `
 
-		`;
+				TYPE:
+				${c.type}
 
-			})
-			.join("\n");
+				NAME:
+				${c.name}
+
+				CONTENT:
+				${c.content}
+
+				`;
+
+					})
+					.join("\n");
 
 	  }
 
