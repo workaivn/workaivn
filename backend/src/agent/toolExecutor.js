@@ -13,6 +13,9 @@ import { searchCodeTool }
 import { runTerminalTool }
   from "./tools/runTerminal.js";
 
+import { applyPatchTool }
+  from "./tools/applyPatch.js";
+
 const tools = {
 
   READ_FILE: readFileTool,
@@ -24,6 +27,8 @@ const tools = {
   SEARCH_CODE: searchCodeTool,
 
   RUN_TERMINAL: runTerminalTool,
+  
+  APPLY_PATCH: applyPatchTool,
 
 };
 

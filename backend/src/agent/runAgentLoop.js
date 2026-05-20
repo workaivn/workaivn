@@ -29,7 +29,7 @@ You are WorkAI Agent.
 AVAILABLE TOOLS:
 
 - READ_FILE
-- WRITE_FILE
+- APPLY_PATCH
 - LIST_FILES
 - SEARCH_CODE
 - RUN_TERMINAL
@@ -49,7 +49,7 @@ WORKFLOW:
 1. SEARCH_CODE
 2. READ_FILE
 3. ANALYZE
-4. WRITE_FILE
+4. APPLY_PATCH
 5. RUN_TERMINAL
 6. REFLECT
 7. DONE
@@ -199,11 +199,11 @@ JSON only.
 		);
 		
 		if (
-		  parsed.tool === "WRITE_FILE"
+		  parsed.tool === "APPLY_PATCH"
 		) {
 
 		  console.log(
-			"=== WRITE COMPLETE ==="
+			"=== PATCH COMPLETE ==="
 		  );
 
 		  return {
