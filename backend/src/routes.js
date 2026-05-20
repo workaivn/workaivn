@@ -645,7 +645,7 @@ for (const file of files) {
 	text = text
 	  .replace(/\0/g, "")
 	  .trim()
-	  .slice(0, 50000);
+	  .slice(0, 15000);
 
 	/* =====================
 	   CHUNK FILE
@@ -1013,32 +1013,6 @@ YÊU CẦU USER:
 ${finalPrompt}
 
 FILES:
-
-IMPORT GRAPH:
-
-${JSON.stringify(
-  importGraph,
-  null,
-  2
-)}
-
-SYMBOL INDEX:
-
-${JSON.stringify(
-  symbolIndex,
-  null,
-  2
-)}
-
-
-FILE SUMMARY:
-
-${JSON.stringify(
-  fileMeta,
-  null,
-  2
-)}
-
 
 FLOW MAP là phần QUAN TRỌNG NHẤT của context.
 
@@ -1451,7 +1425,7 @@ router.put(
             ""
         )
           .trim()
-          .slice(0, 80);
+          .slice(0, 50);
 
       const chat =
         await Chat.findById(
