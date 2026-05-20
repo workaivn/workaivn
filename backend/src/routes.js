@@ -819,9 +819,19 @@ else if (
 
 FORMAT:
 
-FILE:
+ENTRY:
+- function bắt đầu
+
 FLOW:
+- function A
+→ function B
+→ function C
+
+FILES:
+- file nào tham gia flow
+
 GIẢI THÍCH:
+- mô tả flow thật sự
 
 `;
 
@@ -841,6 +851,13 @@ FILES:
 ${fileNames}
 
 MỤC TIÊU:
+
+- Trace execution flow chính xác
+- Nếu user hỏi flow:
+  phải trả exact call chain
+- Không được chỉ mô tả kiến trúc chung chung
+- Ưu tiên function thật từ FLOW MAP
+
 - Hiểu project structure
 - Hiểu dependency giữa files
 - Tìm root cause thật sự
@@ -989,6 +1006,13 @@ ${JSON.stringify(
 )}
 
 FLOW MAP:
+
+FLOW MAP là source of truth cho execution chain.
+Khi user hỏi flow:
+- PHẢI ưu tiên FLOW MAP
+- Không được trả lời chung chung
+- Không invent steps
+- Chỉ dùng function thật từ FLOW MAP
 
 ${JSON.stringify(
   flowMap,
