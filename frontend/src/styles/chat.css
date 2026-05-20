@@ -3709,3 +3709,28 @@ FINAL CODE BLOCK FIX
   border-radius:16px;
   margin-bottom:12px;
 }
+
+.patchBox{
+
+  margin-bottom:12px;
+  padding:12px;
+  border-radius:12px;
+
+  background:#1e293b;
+  border:1px solid #334155;
+
+}
+
+.patchTitle{
+
+  font-weight:700;
+  margin-bottom:6px;
+
+}
+
+.patchDesc{
+
+  opacity:.8;
+  font-size:14px;
+
+}

@@ -21,6 +21,20 @@ const content =
     ? msg.content
     : "";
 
+const isPatchJson =
+
+  content.includes(
+    '"file"'
+  ) &&
+
+  content.includes(
+    '"find"'
+  ) &&
+
+  content.includes(
+    '"replace"'
+  );
+
 const imageSrc =
   typeof msg.image === "string"
     ? msg.image
@@ -85,16 +99,38 @@ className={`bubble ${msg.role}`}
 
 {content && (
 
-  <div
-    className={
-      msg.streaming
-        ? "markdown streaming"
-        : "markdown"
-    }
-    dangerouslySetInnerHTML={{
-      __html: renderMarkdown(content)
-    }}
-  />
+  <>
+
+    {isPatchJson && (
+
+      <div
+        className="patchBox"
+      >
+
+        <div className="patchTitle">
+          AI Patch Detected
+        </div>
+
+        <div className="patchDesc">
+          WorkAI đã tạo patch JSON có thể apply tự động.
+        </div>
+
+      </div>
+
+    )}
+
+    <div
+      className={
+        msg.streaming
+          ? "markdown streaming"
+          : "markdown"
+      }
+      dangerouslySetInnerHTML={{
+        __html: renderMarkdown(content)
+      }}
+    />
+
+  </>
 
 )}
 

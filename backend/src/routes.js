@@ -50,7 +50,12 @@ import {
 import {
   buildCallGraph
 } from "./services/buildCallGraph.js";
-
+import {
+  parsePatches
+} from "./services/parsePatches.js";
+import {
+  applyPatch
+} from "./services/applyPatch.js";
 
 // =====================================
 // OCR PDF SCAN WINDOWS
@@ -861,6 +866,13 @@ ${responseFormat}
 QUY TẮC PATCH:
 PATCH FORMAT JSON:
 
+Khi user yêu cầu fix/sửa/refactor:
+
+- Ưu tiên trả PATCH FORMAT JSON
+- Không trả lời dài dòng
+- Không dump full source
+- Chỉ patch đúng phần cần sửa
+
 [
   {
     "file": "src/example.js",
@@ -1018,24 +1030,28 @@ try {
         "free"
 
     });
-	
-	if (
-	  typeof answer !== "string"
-	) {
 
-	  console.log(
-		"INVALID ANSWER:",
-		answer
-	  );
+  /* =========================
+     VALIDATE ANSWER
+  ========================= */
 
-	  answer =
-		JSON.stringify(
-		  answer,
-		  null,
-		  2
-		);
+  if (
+    typeof answer !== "string"
+  ) {
 
-	}
+    console.log(
+      "INVALID ANSWER:",
+      answer
+    );
+
+    answer =
+      JSON.stringify(
+        answer,
+        null,
+        2
+      );
+
+  }
 
   if (
     !answer ||
@@ -1046,6 +1062,24 @@ try {
       "AI không trả về nội dung.";
 
   }
+
+  /* =========================
+     PARSE PATCHES
+  ========================= */
+
+  const patches =
+    parsePatches(
+      answer
+    );
+
+  console.log(
+    "PATCHES:",
+    JSON.stringify(
+      patches,
+      null,
+      2
+    )
+  );
 
 } catch (err) {
 
@@ -1469,6 +1503,86 @@ router.post(
 
 router.post("/payment/create", authMiddleware, createPayment);
 
+/* =========================
+   APPLY PATCH
+========================= */
 
+router.post(
+  "/apply-patches",
+  async (req, res) => {
+
+    try {
+
+      const {
+        patches = []
+      } = req.body;
+
+      if (
+        !Array.isArray(
+          patches
+        )
+      ) {
+
+        return res
+          .status(400)
+          .json({
+            error:
+              "Invalid patches"
+          });
+
+      }
+
+      const results = [];
+
+      for (const p of patches) {
+
+        const result =
+          applyPatch(
+
+            p.file,
+
+            p.find,
+
+            p.replace
+
+          );
+
+        results.push({
+
+          file:
+            p.file,
+
+          ...result
+
+        });
+
+      }
+
+      return res.json({
+
+        ok: true,
+
+        results
+
+      });
+
+    } catch (err) {
+
+      console.log(
+        "APPLY PATCH ERROR:",
+        err
+      );
+
+      return res
+        .status(500)
+        .json({
+          error:
+            "Apply patch fail"
+        });
+
+    }
+
+  }
+);
 
 export default router;
