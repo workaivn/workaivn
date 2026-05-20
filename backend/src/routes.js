@@ -702,9 +702,20 @@ if (
 FORMAT:
 
 FILE:
+- tên file chính xác
+
 FUNCTION:
+- tên function chính xác
+
+LOCATION:
+- function nằm trong file nào
+- module nào
+
 EXPLAIN:
+- function dùng để làm gì
+
 CODE:
+- trích đúng snippet thật
 
 `;
 
@@ -746,6 +757,9 @@ GIẢI THÍCH:
 let ask = `
 
 Bạn là senior software engineer và technical architect.
+LUÔN trả lời bằng tiếng Việt.
+Chỉ dùng tiếng Anh cho code, function name hoặc technical keyword cần thiết.
+Không được trả lời full English.
 
 Bạn đang đọc nhiều files trong cùng một project thật.
 
@@ -785,11 +799,13 @@ QUAN TRỌNG:
 - Không được trả lời quá ngắn
 
 KHI PHÂN TÍCH:
-1. Xác định file liên quan
-2. Tìm root cause
-3. Giải thích impact
-4. Đưa patch tối thiểu
-5. Nếu cần, đề xuất refactor ngắn
+
+- Chỉ tạo PATCH nếu user thật sự yêu cầu fix bug/sửa code
+- Nếu user chỉ hỏi vị trí hoặc giải thích:
+  KHÔNG được invent bug
+  KHÔNG được invent patch
+
+- Ưu tiên trả lời trực tiếp câu hỏi user
 
 ${responseFormat}
 

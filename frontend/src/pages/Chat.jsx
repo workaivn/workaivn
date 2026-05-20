@@ -443,20 +443,32 @@ async function sendRealFiles(
       ].includes(ext)
     ) {
       return [
-        "Đang tải source code...",
-        "Đang đọc cấu trúc project...",
-        "Đang phân tích logic...",
-        "Đang tìm lỗi tiềm năng...",
-        "Đang tạo giải thích..."
-      ];
+
+		  "Đang suy nghĩ...",
+		  "Đang xử lý dữ liệu...",
+		  "Đang phân tích ngữ cảnh...",
+		  "Đang tổng hợp thông tin...",
+		  "Đang tạo phản hồi..."
+
+		];
     }
 
-    return [
-      "Đang tải file...",
-      "Đang đọc nội dung...",
-      "Đang phân tích dữ liệu...",
-      "Đang tạo kết quả..."
-    ];
+    if (hasFiles) {
+
+		  return [
+			"Đang đọc files...",
+			"Đang phân tích nội dung...",
+			"Đang tìm thông tin liên quan...",
+			"Đang xử lý yêu cầu..."
+		  ];
+
+		}
+
+		return [
+		  "Đang suy nghĩ...",
+		  "Đang xử lý yêu cầu...",
+		  "Đang tạo phản hồi..."
+		];
   }
 
   const steps =
