@@ -62,6 +62,9 @@ import {
 import {
   buildFunctionMeta
 } from "./services/buildFunctionMeta.js";
+import {
+  buildFlowMap
+} from "./services/buildFlowMap.js";
 
 // =====================================
 // OCR PDF SCAN WINDOWS
@@ -404,6 +407,7 @@ let importGraph = {};
 let callGraph = {};
 let fileMeta = [];
 let functionMeta = [];
+let flowMap = [];
 let hasCodeFile = false;
 
 for (const file of files) {
@@ -715,6 +719,10 @@ functionMeta =
   buildFunctionMeta(
     activeFiles
   );
+flowMap =
+  buildFlowMap(
+    activeFiles
+  );
  console.log(
   "CALL GRAPH:",
   JSON.stringify(
@@ -976,6 +984,14 @@ CALL GRAPH:
 
 ${JSON.stringify(
   callGraph,
+  null,
+  2
+)}
+
+FLOW MAP:
+
+${JSON.stringify(
+  flowMap,
   null,
   2
 )}
