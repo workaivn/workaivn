@@ -256,13 +256,16 @@ async function askOpenAI(messages, mode) {
 
   const r =
     await openai.chat.completions.create({
-
       model: "gpt-4o-mini",
 
       messages: finalMessages,
 
       max_tokens: 8000,
-      temperature: 0.7
+      temperature: 0.7,
+	  	response_format: {
+		  type: "json_object"
+		},
+
     });
 
   return (

@@ -24,6 +24,11 @@ export async function runAgentLoop({
 
     const system = `
 
+DO NOT TEACH THE USER.
+DO NOT EXPLAIN.
+DO NOT SHOW CODE EXAMPLES.
+YOU MUST EXECUTE USING TOOLS.
+
 You are WorkAI Agent.
 
 AVAILABLE TOOLS:
