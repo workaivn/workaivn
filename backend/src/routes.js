@@ -44,6 +44,13 @@ import {
 import {
   buildSymbolIndex
 } from "./services/buildSymbolIndex.js";
+import {
+  buildImportGraph
+} from "./services/buildImportGraph.js";
+import {
+  buildCallGraph
+} from "./services/buildCallGraph.js";
+
 
 // =====================================
 // OCR PDF SCAN WINDOWS
@@ -382,6 +389,8 @@ const {prompt,chatId}=req.body;
 let mergedText = "";
 let activeFiles = [];
 let symbolIndex = [];
+let importGraph = {};
+let callGraph = {};
 let hasCodeFile = false;
 
 for (const file of files) {
@@ -666,7 +675,16 @@ symbolIndex =
   buildSymbolIndex(
     activeFiles
   );
-
+  
+importGraph =
+  buildImportGraph(
+    activeFiles
+  );
+callGraph =
+  buildCallGraph(
+    activeFiles
+  );
+ 
 /* =====================
 PROMPT AI
 ===================== */
@@ -824,6 +842,19 @@ KHI PHÂN TÍCH:
 ${responseFormat}
 
 QUY TẮC PATCH:
+PATCH FORMAT JSON:
+
+[
+  {
+    "file": "src/example.js",
+    "find": "old code",
+    "replace": "new code"
+  }
+]
+
+- "file": file cần sửa
+- "find": đoạn code cũ
+- "replace": đoạn code mới
 
 OLD và NEW phải khác nhau thật sự
 Chỉ show phần thay đổi
@@ -862,10 +893,32 @@ ${finalPrompt}
 
 FILES:
 
+IMPORT GRAPH:
+
+${JSON.stringify(
+  importGraph,
+  null,
+  2
+)}
+
 SYMBOL INDEX:
 
 ${JSON.stringify(
   symbolIndex,
+  null,
+  2
+)}
+
+${JSON.stringify(
+  symbolIndex,
+  null,
+  2
+)}
+
+CALL GRAPH:
+
+${JSON.stringify(
+  callGraph,
   null,
   2
 )}
