@@ -992,7 +992,23 @@ try {
     "PROMPT LENGTH:",
     ask.length
   );
+const isPatchRequest =
 
+  finalPrompt
+    .toLowerCase()
+    .includes("fix") ||
+
+  finalPrompt
+    .toLowerCase()
+    .includes("replace") ||
+
+  finalPrompt
+    .toLowerCase()
+    .includes("refactor") ||
+
+  finalPrompt
+    .toLowerCase()
+    .includes("sửa");
   answer =
     await askAI({
 
@@ -1004,26 +1020,27 @@ try {
       ],
 
       mode:
-        hasCodeFile &&
-        (
-          finalPrompt
-            .toLowerCase()
-            .includes("code") ||
 
-          finalPrompt
-            .toLowerCase()
-            .includes("fix") ||
+	  isPatchRequest
 
-          finalPrompt
-            .toLowerCase()
-            .includes("bug") ||
+		? "patch"
 
-          finalPrompt
-            .toLowerCase()
-            .includes("refactor")
-        )
-          ? "code"
-          : "file",
+		:
+
+		hasCodeFile &&
+		(
+		  finalPrompt
+			.toLowerCase()
+			.includes("code") ||
+
+		  finalPrompt
+			.toLowerCase()
+			.includes("bug")
+		)
+
+		  ? "code"
+
+		  : "file",
 
       plan:
         user?.plan ||

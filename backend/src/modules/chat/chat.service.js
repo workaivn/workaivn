@@ -201,7 +201,34 @@ Từ file, tạo:
 Ưu tiên việc quan trọng trước.
 `;
 
+case "patch":
+  return `
 
+Bạn là AI patch engine.
+
+Nhiệm vụ:
+- Chỉ trả về JSON patch
+- Không giải thích dài dòng
+- Không markdown
+- Không text ngoài JSON
+
+Format:
+
+[
+  {
+    "file": "backend/src/example.js",
+    "find": "old code",
+    "replace": "new code"
+  }
+]
+
+QUY TẮC:
+
+- Chỉ patch đúng phần cần sửa
+- Không invent code không tồn tại
+- Không dump full source
+- Output phải parse được bằng JSON.parse()
+`;
     default:
       return `
 Bạn là WorkAI VN.
