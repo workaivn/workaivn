@@ -192,6 +192,32 @@ JSON only.
         result
 
       });
+	  
+	  console.log(
+		  "HISTORY LENGTH:",
+		  history.length
+		);
+		
+		if (
+		  parsed.tool === "WRITE_FILE"
+		) {
+
+		  console.log(
+			"=== WRITE COMPLETE ==="
+		  );
+
+		  return {
+
+			success: true,
+
+			final:
+			  "Patch generated successfully.",
+
+			history
+
+		  };
+
+		}
 
     }
 
