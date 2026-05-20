@@ -641,33 +641,83 @@ for (const file of files) {
 
   }
 
-  text = text
-    .replace(/\0/g, "")
-    .trim()
-    .slice(0, 50000);
+	
+	text = text
+	  .replace(/\0/g, "")
+	  .trim()
+	  .slice(0, 50000);
 
-	  const chunks =
-		  chunkText(
-			text,
-			file.originalname
+	/* =====================
+	   CHUNK FILE
+	===================== */
+
+	const chunks =
+	  chunkText(
+		text,
+		file.originalname
+	  );
+
+	/* =====================
+	   SAVE ACTIVE FILE
+	===================== */
+
+	activeFiles.push({
+
+	  name:
+		file.originalname,
+
+	  type: ext,
+
+	  summary:
+		summarizeFile(
+		  file.originalname,
+		  text
+		),
+
+	  chunks
+
+	});
+
+	/* =====================
+	   RETRIEVAL
+	===================== */
+
+	const latestUserMsg =
+
+	  (
+		prompt ||
+		""
+	  )
+	  .toLowerCase();
+
+	const matchedChunks =
+
+	  chunks.filter(c => {
+
+		const haystack = `
+
+	${c.name || ""}
+	${c.type || ""}
+	${c.content || ""}
+
+	`
+		  .toLowerCase();
+
+		return latestUserMsg
+		  .split(/\s+/)
+		  .some(k =>
+
+			k.length > 2 &&
+
+			haystack.includes(k)
+
 		  );
 
-		activeFiles.push({
+	  });
 
-		  name:
-			file.originalname,
-
-		  type: ext,
-
-		  summary:
-			summarizeFile(
-			  file.originalname,
-			  text
-			),
-
-		  chunks
-
-		});
+	/* =====================
+	   BUILD PROMPT TEXT
+	===================== */
 
 	mergedText += `
 
@@ -680,10 +730,11 @@ for (const file of files) {
 	)}
 
 	IMPORTANT CODE SNIPPETS:
-		${chunks
-	  .slice(0, 1)
+
+	${matchedChunks
+	  .slice(0, 2)
 	  .map(c => c.content)
-	  .join("\n")}
+	  .join("\n\n")}
 
 	`;
 }
@@ -750,7 +801,7 @@ const finalPrompt =
     "Giải thích kiến trúc",
     "Đề xuất cải thiện"
   ].join("\n");
-
+	
 const intent =
   detectIntent(
     finalPrompt
@@ -1049,10 +1100,10 @@ ${mergedText}
 
 /* LIMIT PROMPT */
 
-if (ask.length > 120000) {
+if (ask.length > 60000) {
 
   ask =
-    ask.slice(0, 120000);
+    ask.slice(0, 60000);
 
 }
 
