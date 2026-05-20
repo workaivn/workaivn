@@ -791,12 +791,18 @@ NGUYÊN TẮC:
 
 QUAN TRỌNG:
 - Nếu user upload nhiều files:
-  PHẢI phân tích tất cả files
-- Không được chỉ trả lời 1 file
-- Mỗi file phải có section riêng
-- Nếu có 2 files trở lên:
-  phải trả lời ít nhất 2 sections FILE:
-- Không được trả lời quá ngắn
+  PHẢI phân tích đủ context để tìm ra câu trả lời chính xác
+- Chỉ phân tích file thật sự liên quan tới câu hỏi
+- Không bắt buộc phải trả lời tất cả files nếu chỉ có 1 file liên quan
+- Nếu câu hỏi liên quan nhiều files:
+  phải chỉ rõ file nào liên quan gì
+- Nếu user hỏi 1 function hoặc vấn đề cụ thể:
+  chỉ tập trung vào function/vấn đề đó
+- Nếu đã tìm thấy exact function:
+  phải ưu tiên trả lời vị trí chính xác trước
+- Không được thêm file không liên quan
+- Không được invent bug, patch hoặc refactor nếu user không yêu cầu
+- Ưu tiên trả lời trực tiếp, rõ ràng và ngắn gọn trước
 
 KHI PHÂN TÍCH:
 
