@@ -954,11 +954,6 @@ ${JSON.stringify(
   2
 )}
 
-${JSON.stringify(
-  symbolIndex,
-  null,
-  2
-)}
 
 FILE META:
 
@@ -1025,10 +1020,6 @@ try {
     "PROMPT LENGTH:",
     ask.length
   );
-const lowerPrompt =
-  finalPrompt
-    .toLowerCase();
-
 const lowerPrompt =
   finalPrompt
     .toLowerCase();
