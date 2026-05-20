@@ -3,6 +3,7 @@
 import User from "../auth/auth.model.js";
 import { askAI } from "../../services/aiRouter.js";
 import Chat from "./chat.model.js";
+import { runAgentLoop } from "../../agent/runAgentLoop.js";
 
 /* =====================================
    SYSTEM PROMPTS (GIỮ NGUYÊN)
@@ -773,17 +774,73 @@ export async function streamChat({
 
 		}
 
-		const answer =
-		  await askAI({
+		let answer = "";
 
-			messages:
-			  cleanedMessages,
+		const latestUserMessage =
+		  messages[
+			messages.length - 1
+		  ]?.content || "";
 
-			mode,
+		const isAgentTask =
 
-			plan
+		  latestUserMessage
+			.toLowerCase()
+			.includes("fix")
 
-		  });
+		  ||
+
+		  latestUserMessage
+			.toLowerCase()
+			.includes("sửa")
+
+		  ||
+
+		  latestUserMessage
+			.toLowerCase()
+			.includes("bug")
+
+		  ||
+
+		  latestUserMessage
+			.toLowerCase()
+			.includes("refactor");
+
+		if (isAgentTask) {
+
+		  const agentResult =
+			await runAgentLoop({
+
+			  messages:
+				cleanedMessages,
+
+			  plan
+
+			});
+
+		  answer =
+			agentResult.final ||
+
+			JSON.stringify(
+			  agentResult,
+			  null,
+			  2
+			);
+
+		} else {
+
+		  answer =
+			await askAI({
+
+			  messages:
+				cleanedMessages,
+
+			  mode,
+
+			  plan
+
+			});
+
+		}
 
 
     console.log("=== DEBUG CHAT ===");
