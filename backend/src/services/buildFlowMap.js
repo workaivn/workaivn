@@ -3,28 +3,7 @@ export function buildFlowMap(
 ) {
 
   const flows = [];
-	const knownFunctions =
-	  new Set();
-
 	files.forEach(file => {
-
-	  (file.chunks || [])
-		.forEach(chunk => {
-
-		  if (
-			chunk.name
-		  ) {
-
-			knownFunctions.add(
-			  chunk.name
-			);
-
-		  }
-
-		});
-
-	});
-  files.forEach(file => {
 
     (file.chunks || [])
       .forEach(chunk => {
@@ -66,6 +45,9 @@ export function buildFlowMap(
 			  "status",
 			  "findById",
 			  "findOne",
+			  "write",
+			  "end",
+			  "findByIdAndDelete",
 			  "create",
 			  "save",
 			  "log",
@@ -82,13 +64,7 @@ export function buildFlowMap(
 
 			  unique.add(fn);
 
-			  if (
-				  knownFunctions.has(fn)
-				) {
-
-				  calls.push(fn);
-
-				}
+			  calls.push(fn);
 
 			}
 
