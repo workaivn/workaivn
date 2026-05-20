@@ -679,9 +679,9 @@ for (const file of files) {
 	  text
 	)}
 
-	CONTENT SAMPLE:
+	IMPORTANT CODE SNIPPETS:
 		${chunks
-	  .slice(0, 3)
+	  .slice(0, 1)
 	  .map(c => c.content)
 	  .join("\n")}
 
@@ -988,22 +988,14 @@ ${JSON.stringify(
   2
 )}
 
-FUNCTION META:
 
-${JSON.stringify(
-  functionMeta,
-  null,
-  2
-)}
+FLOW MAP là phần QUAN TRỌNG NHẤT của context.
 
-
-CALL GRAPH:
-
-${JSON.stringify(
-  callGraph,
-  null,
-  2
-)}
+Nếu FLOW MAP tồn tại:
+- PHẢI ưu tiên FLOW MAP hơn text summary
+- PHẢI dùng exact function names
+- PHẢI trace exact call chain
+- Không được mô tả kiến thức chung
 
 ================ FLOW MAP ================
 
