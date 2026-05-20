@@ -423,7 +423,7 @@ export async function streamChat({
 						  === k
 					  ) {
 
-						score += 10000;
+						score += 50000;
 
 					  }
 
@@ -490,7 +490,17 @@ export async function streamChat({
 
 				const finalChunks =
 				  relevantChunks
-					.slice(0, 5)
+					.slice(
+
+					  latestUserMsg.includes(
+						"ở đâu"
+					  )
+
+						? 2
+
+						: 5
+
+					)
 					.map(c => {
 
 					  if (

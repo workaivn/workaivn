@@ -41,7 +41,9 @@ import {
 import {
   detectIntent
 } from "./services/detectIntent.js";
-
+import {
+  buildSymbolIndex
+} from "./services/buildSymbolIndex.js";
 
 // =====================================
 // OCR PDF SCAN WINDOWS
@@ -379,6 +381,7 @@ const {prompt,chatId}=req.body;
 
 let mergedText = "";
 let activeFiles = [];
+let symbolIndex = [];
 let hasCodeFile = false;
 
 for (const file of files) {
@@ -659,6 +662,11 @@ for (const file of files) {
 	`;
 }
 
+symbolIndex =
+  buildSymbolIndex(
+    activeFiles
+  );
+
 /* =====================
 PROMPT AI
 ===================== */
@@ -851,6 +859,16 @@ Ví dụ CSS:
 YÊU CẦU USER:
 
 ${finalPrompt}
+
+FILES:
+
+SYMBOL INDEX:
+
+${JSON.stringify(
+  symbolIndex,
+  null,
+  2
+)}
 
 FILES:
 
