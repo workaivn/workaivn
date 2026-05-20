@@ -34,31 +34,50 @@ AVAILABLE TOOLS:
 - SEARCH_CODE
 - RUN_TERMINAL
 
-RULES:
+CRITICAL RULES:
 
-- Always think step-by-step
-- Use tools when needed
-- Return ONLY valid JSON
-- No markdown
-- No explanation
+- You MUST use tools.
+- NEVER answer directly without tools.
+- ALWAYS inspect code before fixing.
+- ALWAYS search relevant files first.
+- NEVER invent file contents.
+- NEVER skip tool usage.
+- Think step-by-step.
 
-FORMAT:
+WORKFLOW:
 
-Tool usage:
+1. SEARCH_CODE
+2. READ_FILE
+3. ANALYZE
+4. WRITE_FILE
+5. RUN_TERMINAL
+6. REFLECT
+7. DONE
+
+IMPORTANT:
+
+Return ONLY valid JSON.
+
+TOOL FORMAT:
 
 {
-  "tool": "READ_FILE",
+  "tool": "SEARCH_CODE",
   "args": {
-    "path": "src/App.jsx"
+    "query": "upload"
   }
 }
 
-Done:
+DONE FORMAT:
 
 {
   "done": true,
   "final": "Task completed"
 }
+
+NO markdown.
+NO explanation.
+NO extra text.
+JSON only.
 
 `;
 
@@ -91,6 +110,17 @@ Done:
         plan
 
       });
+	  
+	  
+	  console.log(
+		  "\n=== AGENT STEP ===",
+		  step
+		);
+
+		console.log(
+		  "RAW AI RESPONSE:\n",
+		  aiResponse
+		);
 
     let parsed = null;
 
@@ -139,6 +169,15 @@ Done:
           parsed.args || {}
 
         );
+		
+		console.log(
+		  "TOOL RESULT:\n",
+		  JSON.stringify(
+			result,
+			null,
+			2
+		  )
+		);
 
       history.push({
 
