@@ -31,7 +31,11 @@ export function buildFlowMap(
 
         const text =
           chunk.content || "";
-
+		if (
+		  !chunk.name
+		) {
+		  return;
+		}
         const calls =
           [];
 		const unique =
