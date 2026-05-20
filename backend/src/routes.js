@@ -992,23 +992,68 @@ try {
     "PROMPT LENGTH:",
     ask.length
   );
-const isPatchRequest =
-
+const lowerPrompt =
   finalPrompt
-    .toLowerCase()
-    .includes("fix") ||
+    .toLowerCase();
 
+const lowerPrompt =
   finalPrompt
-    .toLowerCase()
-    .includes("replace") ||
+    .toLowerCase();
 
-  finalPrompt
-    .toLowerCase()
-    .includes("refactor") ||
+const isAutoPatchRequest =
 
-  finalPrompt
-    .toLowerCase()
-    .includes("sửa");
+  lowerPrompt.includes(
+    "apply patch"
+  ) ||
+
+  lowerPrompt.includes(
+    "auto fix"
+  ) ||
+
+  lowerPrompt.includes(
+    "edit file now"
+  );
+
+const isPatchSuggestRequest =
+
+  (
+    lowerPrompt.includes(
+      "fix"
+    ) ||
+
+    lowerPrompt.includes(
+      "replace"
+    ) ||
+
+    lowerPrompt.includes(
+      "refactor"
+    ) ||
+
+    lowerPrompt.includes(
+      "sửa"
+    )
+  )
+
+  &&
+
+  (
+
+    hasCodeFile ||
+
+    lowerPrompt.includes(
+      ".js"
+    ) ||
+
+    lowerPrompt.includes(
+      ".jsx"
+    ) ||
+
+    lowerPrompt.includes(
+      ".ts"
+    )
+
+  );
+  
   answer =
     await askAI({
 
@@ -1021,26 +1066,19 @@ const isPatchRequest =
 
       mode:
 
-	  isPatchRequest
+  isAutoPatchRequest
 
-		? "patch"
+    ? "patch"
 
-		:
+    :
 
-		hasCodeFile &&
-		(
-		  finalPrompt
-			.toLowerCase()
-			.includes("code") ||
+    isPatchSuggestRequest
 
-		  finalPrompt
-			.toLowerCase()
-			.includes("bug")
-		)
+      ? "code"
 
-		  ? "code"
+      :
 
-		  : "file",
+      "file",
 
       plan:
         user?.plan ||
