@@ -680,11 +680,28 @@ importGraph =
   buildImportGraph(
     activeFiles
   );
+  
+  console.log(
+  "IMPORT GRAPH:",
+  JSON.stringify(
+    importGraph,
+    null,
+    2
+  )
+);
+  
 callGraph =
   buildCallGraph(
     activeFiles
   );
- 
+ console.log(
+  "CALL GRAPH:",
+  JSON.stringify(
+    callGraph,
+    null,
+    2
+  )
+);
 /* =====================
 PROMPT AI
 ===================== */

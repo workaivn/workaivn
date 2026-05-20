@@ -366,11 +366,7 @@ export async function streamChat({
 				.toLowerCase()
 				.replace(/[^\w\s]/g, " ")
 				.split(/\s+/)
-				.filter(
-				  k =>
-					k &&
-					k.length > 2
-				);
+				.filter(Boolean);
 
 			  const relevantChunks =
 				  (f.chunks || [])
@@ -399,6 +395,17 @@ export async function streamChat({
 						.toLowerCase();
 
 					  let score = 0;
+					  if (
+						  f.name
+							?.toLowerCase()
+							?.includes(
+							  latestUserMsg
+							)
+						) {
+
+						  score += 3000;
+
+						}
 					  
 					  const fullQuery =
 						  latestUserMsg
@@ -455,7 +462,7 @@ export async function streamChat({
 
 						} {
 
-						score += 5;
+						score += 20;
 
 					  }
 
@@ -496,9 +503,9 @@ export async function streamChat({
 						"ở đâu"
 					  )
 
-						? 2
+						? 3
 
-						: 5
+						: 8
 
 					)
 					.map(c => {
@@ -558,7 +565,7 @@ export async function streamChat({
 
 		const recentMessages =
 		  existingChat.messages
-			.slice(-20);
+			.slice(-40);
 
 		finalMessages.push(
 		  ...recentMessages
