@@ -510,15 +510,37 @@ export async function streamChat({
 				console.log(
 				  "TOP CHUNKS:",
 				  JSON.stringify(
+
 					relevantChunks
 					  .slice(0, 3)
+
 					  .map(x => ({
-						name: x.name,
-						type: x.type,
-						score: x.score
+
+						file:
+						  x.file,
+
+						name:
+						  x.name,
+
+						type:
+						  x.type,
+
+						score:
+						  x.score,
+
+						preview:
+
+						  String(
+							x.content || ""
+						  )
+						  .replace(/\s+/g, " ")
+						  .slice(0, 120)
+
 					  })),
+
 					null,
 					2
+
 				  )
 				);
 

@@ -1031,7 +1031,7 @@ ${JSON.stringify(
 )}
 
 
-FILE META:
+FILE SUMMARY:
 
 ${JSON.stringify(
   fileMeta,
@@ -1063,15 +1063,37 @@ THÌ:
 - Không được invent
 - Không được trả lời kiến thức chung
 
-FLOW MAP:
+TOP EXECUTION FLOWS:
 
 ${JSON.stringify(
+
   flowMap
-    .slice(0, 30),
+
+    .filter(f => {
+
+      const q =
+        finalPrompt
+          .toLowerCase();
+
+      return (
+
+        q.includes(
+          String(
+            f.function || ""
+          )
+          .toLowerCase()
+        )
+
+      );
+
+    })
+
+    .slice(0, 5),
+
   null,
   2
-)}
 
+)}
 ==========================================
 
 ================ IMPORTANT ================
