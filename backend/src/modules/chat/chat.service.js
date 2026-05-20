@@ -607,20 +607,47 @@ export async function streamChat({
 
 	  }
 
-	  if (
-		existingChat?.messages
-		  ?.length
-	  ) {
+		 if (
+		  existingChat?.messages
+			?.length
+		) {
 
-		const recentMessages =
-		  existingChat.messages
-			.slice(-40);
+		  const recentHistory =
 
-		finalMessages.push(
-		  ...recentMessages
-		);
+			existingChat.messages
 
-	  }
+			  /* chỉ lấy user msg */
+
+			  .filter(
+				m =>
+				  m.role === "user"
+			  )
+
+			  /* lấy ít thôi */
+
+			  .slice(-6)
+
+			  /* limit size */
+
+			  .map(m => ({
+
+				role:
+				  m.role,
+
+				content:
+
+				  String(
+					m.content || ""
+				  )
+				  .slice(0, 2000)
+
+			  }));
+
+		  finalMessages.push(
+			...recentHistory
+		  );
+
+		}
 
 	}
 
@@ -699,13 +726,64 @@ export async function streamChat({
 
 		}));
 
-    const answer =
-	  await askAI({
-		messages:
-		  finalMessages,
-		mode,
-		plan
-	  });
+	const cleanedMessages =
+  finalMessages;
+
+		if (
+		  activeFilesText
+		) {
+
+		  cleanedMessages.push({
+
+			role: "system",
+
+			content: `
+
+		IMPORTANT:
+
+		- Nếu thấy exact function/class:
+		  PHẢI quote đúng nội dung thật.
+		- Không được đoán code không tồn tại.
+		- Nếu function tồn tại:
+		  phải nói rõ FILE + FUNCTION NAME.
+		- Không được invent patch nếu chưa thấy code thật.
+
+		QUAN TRỌNG:
+
+		- Nếu user hỏi:
+		  "ở đâu"
+		  "nằm ở đâu"
+		  "file nào"
+
+		THÌ PHẢI trả lời:
+
+		1. FILE NAME
+		2. FUNCTION NAME
+		3. Code snippet thật
+
+		Không được trả lời chung chung.
+
+		ACTIVE FILES:
+
+		${activeFilesText}
+
+		`
+
+		  });
+
+		}
+
+		const answer =
+		  await askAI({
+
+			messages:
+			  cleanedMessages,
+
+			mode,
+
+			plan
+
+		  });
 
 
     console.log("=== DEBUG CHAT ===");
