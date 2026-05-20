@@ -56,6 +56,12 @@ import {
 import {
   applyPatch
 } from "./services/applyPatch.js";
+import {
+  buildFileMeta
+} from "./services/buildFileMeta.js";
+import {
+  buildFunctionMeta
+} from "./services/buildFunctionMeta.js";
 
 // =====================================
 // OCR PDF SCAN WINDOWS
@@ -396,6 +402,8 @@ let activeFiles = [];
 let symbolIndex = [];
 let importGraph = {};
 let callGraph = {};
+let fileMeta = [];
+let functionMeta = [];
 let hasCodeFile = false;
 
 for (const file of files) {
@@ -699,6 +707,14 @@ callGraph =
   buildCallGraph(
     activeFiles
   );
+fileMeta =
+  buildFileMeta(
+    activeFiles
+  );
+functionMeta =
+  buildFunctionMeta(
+    activeFiles
+  );
  console.log(
   "CALL GRAPH:",
   JSON.stringify(
@@ -943,6 +959,23 @@ ${JSON.stringify(
   null,
   2
 )}
+
+FILE META:
+
+${JSON.stringify(
+  fileMeta,
+  null,
+  2
+)}
+
+FUNCTION META:
+
+${JSON.stringify(
+  functionMeta,
+  null,
+  2
+)}
+
 
 CALL GRAPH:
 
