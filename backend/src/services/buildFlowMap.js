@@ -14,7 +14,8 @@ export function buildFlowMap(
 
         const calls =
           [];
-
+		const unique =
+		  new Set();
         const matches =
           text.matchAll(
             /([a-zA-Z0-9_]+)\s*\(/g
@@ -36,15 +37,27 @@ export function buildFlowMap(
             ].includes(fn)
           ) {
 
-            calls.push(fn);
+            if (
+			  !unique.has(fn)
+			) {
+
+			  unique.add(fn);
+
+			  calls.push(fn);
+
+			}
 
           }
 
         }
 
         if (
-          calls.length
-        ) {
+
+		  calls.length &&
+
+		  chunk.name
+
+		) {
 
           flows.push({
 

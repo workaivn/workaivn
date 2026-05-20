@@ -1005,20 +1005,49 @@ ${JSON.stringify(
   2
 )}
 
+================ FLOW MAP ================
+
+Đây là execution chain thật từ source code.
+
+Khi user hỏi:
+- flow
+- execution
+- xử lý như thế nào
+- gọi function nào
+
+THÌ:
+- PHẢI dùng FLOW MAP
+- Không được invent
+- Không được trả lời kiến thức chung
+
 FLOW MAP:
 
-FLOW MAP là source of truth cho execution chain.
-Khi user hỏi flow:
-- PHẢI ưu tiên FLOW MAP
-- Không được trả lời chung chung
-- Không invent steps
-- Chỉ dùng function thật từ FLOW MAP
-
 ${JSON.stringify(
-  flowMap,
+  flowMap
+    .slice(0, 30),
   null,
   2
 )}
+
+==========================================
+
+================ IMPORTANT ================
+
+PHẢI ưu tiên:
+- FLOW MAP
+- FUNCTION META
+- FILE META
+- SOURCE CODE thật
+
+Không được trả lời theo kiến thức chung chung.
+
+Nếu FLOW MAP có dữ liệu:
+- PHẢI dùng exact function names
+- PHẢI trace exact execution flow
+
+Không được mô tả upload flow chung chung.
+
+===========================================
 
 FILES:
 
