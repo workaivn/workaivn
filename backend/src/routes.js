@@ -38,6 +38,9 @@ import {
   chunkText,
   summarizeFile
 } from "./services/chunker.js";
+import {
+  detectIntent
+} from "./services/detectIntent.js";
 
 
 // =====================================
@@ -676,6 +679,70 @@ const finalPrompt =
     "Đề xuất cải thiện"
   ].join("\n");
 
+const intent =
+  detectIntent(
+    finalPrompt
+  );
+
+let responseFormat = `
+
+FORMAT:
+
+FILE:
+PHÂN TÍCH:
+GIẢI THÍCH:
+
+`;
+if (
+  intent === "locate"
+) {
+
+  responseFormat = `
+
+FORMAT:
+
+FILE:
+FUNCTION:
+EXPLAIN:
+CODE:
+
+`;
+
+}
+
+else if (
+  intent === "bugfix"
+) {
+
+  responseFormat = `
+
+FORMAT:
+
+FILE:
+VẤN ĐỀ:
+ẢNH HƯỞNG:
+FIX:
+PATCH:
+
+`;
+
+}
+
+else if (
+  intent === "explain"
+) {
+
+  responseFormat = `
+
+FORMAT:
+
+FILE:
+FLOW:
+GIẢI THÍCH:
+
+`;
+
+}
 let ask = `
 
 Bạn là senior software engineer và technical architect.
@@ -724,29 +791,7 @@ KHI PHÂN TÍCH:
 4. Đưa patch tối thiểu
 5. Nếu cần, đề xuất refactor ngắn
 
-FORMAT TRẢ LỜI:
-
-================================================
-
-FILE: xxx.js
-
-VẤN ĐỀ:
-- lỗi gì
-- vì sao xảy ra
-
-ẢNH HƯỞNG:
-- bug gây gì
-- runtime/build/UI issue gì
-- liên quan file nào khác
-
-FIX:
-- hướng sửa
-
-PATCH:
-- chỉ show phần code cần sửa
-- không dump full source
-
-================================================
+${responseFormat}
 
 QUY TẮC PATCH:
 
