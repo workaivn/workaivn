@@ -3713,11 +3713,13 @@ FINAL CODE BLOCK FIX
 .patchBox{
 
   margin-bottom:12px;
-  padding:12px;
-  border-radius:12px;
+  padding:14px;
 
-  background:#1e293b;
-  border:1px solid #334155;
+  border-radius:14px;
+
+  background:#f8fafc;
+
+  border:1px solid #dbeafe;
 
 }
 
@@ -3726,11 +3728,21 @@ FINAL CODE BLOCK FIX
   font-weight:700;
   margin-bottom:6px;
 
+  color:#1e3a8a;
+
 }
 
 .patchDesc{
 
-  opacity:.8;
+  color:#475569;
   font-size:14px;
+  line-height:1.5;
+
+}
+
+.patchBox::before{
+
+  content:"🛠️";
+  margin-right:6px;
 
 }
