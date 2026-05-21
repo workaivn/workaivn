@@ -674,6 +674,8 @@ for (const file of files) {
 
 	  type: ext,
 
+	  content: text,
+
 	  summary:
 		summarizeFile(
 		  file.originalname,
