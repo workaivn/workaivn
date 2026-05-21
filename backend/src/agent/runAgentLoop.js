@@ -246,33 +246,38 @@ JSON only.
 
     if (parsed.tool) {
 		
-		const toolMessages = {
+		if (
 
-		  SEARCH_CODE:
-			`🔍 Đang tìm "${parsed.args?.query || ""}"`,
+		  parsed.tool ===
+		  "SEARCH_CODE"
 
-		  READ_FILE:
-			`📄 Đang đọc ${parsed.args?.path || "file"}`,
+		) {
 
-		  APPLY_PATCH:
-			"🧩 Đang tạo patch...",
+		  const q =
+			parsed.args?.query;
 
-		  RUN_TERMINAL:
-			"⚙️ Đang chạy terminal..."
+		  if (
 
-		};
+			q &&
 
-		emitStatus(
+			memory.searchedQueries.includes(q)
 
-		  history,
+		  ) {
 
-		  toolMessages[
-			parsed.tool
-		  ] ||
+			emitStatus(
 
-		  `Using ${parsed.tool}`
+			  history,
 
-		);
+			  `⚠️ Skip duplicate search: "${q}"`
+
+			);
+
+			continue;
+
+		  }
+
+		}
+		
 	const result =
         await executeTool(
 
@@ -431,20 +436,12 @@ JSON only.
 		  "APPLY_PATCH"
 		) {
 
-		  emitStatus(
-
-			history,
-
-			"✅ Patch ready"
-
-		  );
-
 		  return {
 
 			success: true,
 
 			final:
-			  "Patch generated successfully.",
+				"",
 
 			patch:
 			  parsed.args,

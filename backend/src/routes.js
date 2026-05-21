@@ -1221,27 +1221,6 @@ const isPatchSuggestRequest =
 	`;
 
 	if (
-	  agentResult.patch
-	) {
-
-	  answer += `
-
-	PATCH:
-
-	${JSON.stringify(
-
-	  agentResult.patch,
-
-	  null,
-	  2
-
-	)}
-
-	`;
-
-	}
-
-	if (
 	  agentResult.final
 	) {
 

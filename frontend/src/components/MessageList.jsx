@@ -11,7 +11,7 @@ function extractPatch(content) {
 
     const match =
       content.match(
-        /\[\s*\{[\s\S]*"file"[\s\S]*\}\s*\]/m
+        /\[\s*\{[\s\S]*("file"|"path")[\s\S]*"find"[\s\S]*"replace"[\s\S]*\}\s*\]/m
       );
 
     if (!match) {
@@ -126,79 +126,63 @@ className={`bubble ${msg.role}`}
 
   <>
 
-    {isPatchJson && (
+    {hasPatch && (
 
-      <div
-        className="patchBox"
-      >
+	  <div className="patchView">
 
-        <div className="patchTitle">
-          {hasPatch && (
+		{patches.map((p,i)=>(
 
-			  <div className="patchBox">
+		  <div
+			key={i}
+			className="patchItem"
+		  >
 
-				<div className="patchTitle">
-				  🧩 Patch Ready
-				</div>
+			<div className="patchFile">
 
-				{patches.map((p,i)=>(
+			  📄 File:
+			  {" "}
+			  {p.file || p.path}
 
-				  <div
-					key={i}
-					className="patchItem"
-				  >
+			</div>
 
-					<div className="patchFile">
-					  {p.file}
-					</div>
+			<div className="patchTitle">
+			  TÌM ĐOẠN NÀY:
+			</div>
 
-					<div className="patchChange">
+			<pre className="patchCode">
+			  {p.find}
+			</pre>
 
-					  <div>
-						<b>Find:</b>
-						<pre>{p.find}</pre>
-					  </div>
+			<div className="patchTitle">
+			  THAY THÀNH:
+			</div>
 
-					  <div>
-						<b>Replace:</b>
-						<pre>{p.replace}</pre>
-					  </div>
+			<pre className="patchCode">
+			  {p.replace}
+			</pre>
 
-					</div>
+		  </div>
 
-				  </div>
+		))}
 
-				))}
+	  </div>
 
-				<button
-				  className="applyPatchBtn"
-				>
-				  Apply Patch
-				</button>
+	)}
 
-			  </div>
+    {!hasPatch && (
 
-			)}
-        </div>
+	  <div
+		className={
+		  msg.streaming
+			? "markdown streaming"
+			: "markdown"
+		}
+		dangerouslySetInnerHTML={{
+		  __html: renderMarkdown(content)
+		}}
+	  />
 
-        <div className="patchDesc">
-          WorkAI đã tạo patch JSON có thể apply tự động.
-        </div>
-
-      </div>
-
-    )}
-
-    <div
-      className={
-        msg.streaming
-          ? "markdown streaming"
-          : "markdown"
-      }
-      dangerouslySetInnerHTML={{
-        __html: renderMarkdown(content)
-      }}
-    />
+	)}
 
   </>
 
