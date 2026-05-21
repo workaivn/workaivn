@@ -405,6 +405,17 @@ const {prompt,chatId}=req.body;
 
 let mergedText = "";
 let activeFiles = [];
+if (
+
+  existingChat?.activeFiles
+    ?.length
+
+) {
+
+  activeFiles =
+    existingChat.activeFiles;
+
+}
 let symbolIndex = [];
 let importGraph = {};
 let callGraph = {};
