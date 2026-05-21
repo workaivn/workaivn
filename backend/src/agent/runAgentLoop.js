@@ -109,11 +109,22 @@ CRITICAL RULES:
 - NEVER invent file contents.
 - NEVER skip tool usage.
 - Think step-by-step.
-- NEVER repeat the same patch twice.
-- ALWAYS check previously modified files.
-- ALWAYS review previous fixes before generating new patches.
-- If a file was already modified, continue from latest state.
-- Avoid duplicate fixes.
+- Think like a senior software engineer debugging a real production app.
+- Search semantically, not literally.
+- Infer related concepts from the bug description.
+- If user mentions image preview, also inspect:
+  - upload handlers
+  - multer config
+  - image URLs
+  - response JSON
+  - frontend rendering
+  - static file serving
+  - cloudinary
+  - image src paths
+- Do not rely only on exact keyword matches.
+- Follow code flow across related files.
+- Use reasoning before generating patches.
+- NEVER conclude "code not found" only because an exact keyword does not exist.
 
 WORKFLOW:
 
