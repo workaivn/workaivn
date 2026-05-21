@@ -698,7 +698,7 @@ for (const file of files) {
 	text = text
 	  .replace(/\0/g, "")
 	  .trim()
-	  .slice(0, 15000);
+	  .slice(0, 40000);
 
 	/* =====================
 	   CHUNK FILE

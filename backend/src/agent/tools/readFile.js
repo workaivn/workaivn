@@ -66,17 +66,21 @@ export async function readFileTool({
 
   const content =
 
-    found.chunks
-      ?.map(c => c.content)
-      ?.join("\n\n")
+	  found.content
 
-    ||
+	  ||
 
-    found.content
+	  found.chunks
+		?.map(c => c.content)
+		?.join("\n\n")
 
-    ||
+	  ||
 
-    "";
+	  "";
+  console.log(
+  "READ_FILE LENGTH:",
+  content.length
+);
 
   return {
 
