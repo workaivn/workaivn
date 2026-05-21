@@ -817,14 +817,48 @@ export async function streamChat({
 
 			});
 
-		  answer =
-			agentResult.final ||
+		  answer = `
 
-			JSON.stringify(
-			  agentResult,
+			${agentResult.history
+			  ?.filter(
+				(x) =>
+				  x.type ===
+				  "status"
+			  )
+			  ?.map(
+				(x) => x.text
+			  )
+			  ?.join("\n")}
+
+			`;
+
+			if (
+			  agentResult.patch
+			) {
+
+			  answer += `
+
+			PATCH:
+
+			${JSON.stringify(
+
+			  agentResult.patch,
+
 			  null,
+
 			  2
-			);
+
+			)}
+
+			`;
+
+			}
+
+			answer += `
+
+			${agentResult.final}
+
+			`;
 
 		} else {
 

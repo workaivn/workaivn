@@ -4,6 +4,28 @@ import { askAI }
 import { executeTool }
   from "./toolExecutor.js";
 
+function emitStatus(
+
+  history,
+
+  text
+
+) {
+
+  history.push({
+
+    type: "status",
+
+    text,
+
+    time:
+      Date.now()
+
+  });
+
+}
+
+
 export async function runAgentLoop({
 
   messages = [],
@@ -165,6 +187,35 @@ JSON only.
     ===================== */
 
     if (parsed.tool) {
+		
+		const toolMessages = {
+
+		  SEARCH_CODE:
+			"🔍 Searching codebase...",
+
+		  READ_FILE:
+			"📄 Reading file...",
+
+		  APPLY_PATCH:
+			"🧩 Generating patch...",
+
+		  RUN_TERMINAL:
+			"⚙️ Running terminal..."
+
+		};
+
+		emitStatus(
+
+		  history,
+
+		  toolMessages[
+			parsed.tool
+		  ] ||
+
+		  `Using ${parsed.tool}`
+
+		);
+
 
       const result =
         await executeTool(
@@ -204,8 +255,33 @@ JSON only.
 		);
 		
 		if (
-		  parsed.tool === "APPLY_PATCH"
+		  parsed.tool ===
+		  "APPLY_PATCH"
 		) {
+
+		  emitStatus(
+
+			history,
+
+			"✅ Patch ready"
+
+		  );
+
+		  return {
+
+			success: true,
+
+			final:
+			  "Patch generated successfully.",
+
+			patch:
+			  parsed.args,
+
+			history
+
+		  };
+
+		} {
 
 		  console.log(
 			"=== PATCH COMPLETE ==="
@@ -225,7 +301,7 @@ JSON only.
 		}
 
     }
-
+	
   }
 
   return {
