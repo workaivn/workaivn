@@ -11,25 +11,41 @@ export async function readFileTool({
       .toLowerCase()
       .trim();
 
-  const found =
-    activeFiles.find(f => {
+  const normalized =
+	  String(path || "")
+		.replace(/\\/g,"/")
+		.toLowerCase()
+		.trim();
 
-      const name =
-        String(
-          f.name || ""
-        ).toLowerCase();
+	const found =
+	  activeFiles.find(f => {
 
-      return (
+		const filePath =
+		  String(
 
-        name === normalized ||
+			f.path ||
+			f.name ||
+			""
 
-        name.endsWith(
-          normalized
-        )
+		  )
+		  .replace(/\\/g,"/")
+		  .toLowerCase();
 
-      );
+		return (
 
-    });
+		  filePath === normalized ||
+
+		  filePath.endsWith(
+			"/" + normalized
+		  ) ||
+
+		  filePath.endsWith(
+			normalized
+		  )
+
+		);
+
+	  });
 
   if (!found) {
 

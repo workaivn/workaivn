@@ -230,7 +230,22 @@ JSON only.
     /* =====================
        DONE
     ===================== */
+	const lastTool =
+	  history[
+		history.length - 1
+	  ];
 
+	if (
+
+	  parsed.done &&
+
+	  lastTool?.result?.success === false
+
+	) {
+
+	  continue;
+
+	}
     if (parsed.done) {
 
       return {
