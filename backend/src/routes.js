@@ -395,14 +395,37 @@ try{
 const files =
   req.files || [];
 
-if (!files.length) {
-return res.status(400).json({
-error:"No file"
-});
+const {prompt,chatId}=req.body;
+
+const existingChat =
+  chatId
+    ? await Chat.findById(chatId)
+    : null;
+
+const hasExistingFiles =
+
+  existingChat?.activeFiles
+    ?.length > 0;
+
+if (
+
+  !files.length &&
+
+  !hasExistingFiles
+
+) {
+
+  return res.status(400).json({
+    error:"No file"
+  });
+
 }
 
 const {prompt,chatId}=req.body;
-
+const existingChat =
+  chatId
+    ? await Chat.findById(chatId)
+    : null;
 let mergedText = "";
 let activeFiles = [];
 if (
@@ -414,6 +437,25 @@ if (
 
   activeFiles =
     existingChat.activeFiles;
+
+}
+for (const file of activeFiles) {
+
+  mergedText += `
+
+===== FILE: ${file.name} =====
+
+SUMMARY:
+${file.summary || ""}
+
+IMPORTANT CODE SNIPPETS:
+
+${file.chunks
+  ?.slice(0,2)
+  ?.map(c => c.content)
+  ?.join("\n\n")}
+
+`;
 
 }
 let symbolIndex = [];
@@ -675,7 +717,14 @@ for (const file of files) {
 	   SAVE ACTIVE FILE
 	===================== */
 
-	activeFiles.push({
+	const existingIndex =
+	  activeFiles.findIndex(
+		x =>
+		  x.name ===
+		  file.originalname
+	  );
+
+	const newFile = {
 
 	  name:
 		file.originalname,
@@ -695,7 +744,23 @@ for (const file of files) {
 
 	  chunks
 
-	});
+	};
+
+	if (
+	  existingIndex >= 0
+	) {
+
+	  activeFiles[
+		existingIndex
+	  ] = newFile;
+
+	} else {
+
+	  activeFiles.push(
+		newFile
+	  );
+
+	}
 
 	/* =====================
 	   RETRIEVAL
@@ -805,10 +870,10 @@ flowMap =
 PROMPT AI
 ===================== */
 const totalFiles =
-  files.length;
+  activeFiles.length;
 
 const fileNames =
-  files
+  activeFiles
     .map(f => f.originalname)
     .join(", ");
 
@@ -1291,21 +1356,7 @@ const isPatchSuggestRequest =
       answer
     );
 	
-	if (
-	  Array.isArray(patches) &&
-	  patches.length > 0
-	) {
-
-	  answer =
-		JSON.stringify(
-		  patches,
-		  null,
-		  2
-		);
-
-	}
-
-  console.log(
+	console.log(
     "PATCHES:",
     JSON.stringify(
       patches,
@@ -1327,11 +1378,6 @@ const isPatchSuggestRequest =
 }
   
   
-  const existingChat =
-  chatId
-    ? await Chat.findById(chatId)
-    : null;
-
 	const mergedMap =
 	  new Map();
 
