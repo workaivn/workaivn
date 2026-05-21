@@ -51,33 +51,20 @@ export async function runAgentLoop({
 
   const history = [];
 	const memory = {
-
 	  objective: "",
-
 	  discoveredFiles: [],
-
 	  discoveredFunctions: [],
-
 	  searchedQueries: [],
-
 	  bugsFound: [],
-
 	  hypotheses: [],
-
 	  fixesAttempted: [],
-
 	  successfulFixes: [],
-
 	  failedFixes: [],
-
 	  currentPlan: [],
-
 	  reasoning: [],
-
 	  patches: [],
-
+	  modifiedFiles: [],
 	  terminalOutputs: []
-
 	};
 	memory.objective =
 
@@ -117,6 +104,12 @@ CRITICAL RULES:
 - NEVER invent file contents.
 - NEVER skip tool usage.
 - Think step-by-step.
+
+- NEVER repeat the same patch twice.
+- ALWAYS check previously modified files.
+- ALWAYS review previous fixes before generating new patches.
+- If a file was already modified, continue from latest state.
+- Avoid duplicate fixes.
 
 WORKFLOW:
 
@@ -416,7 +409,6 @@ JSON only.
 	  /* =====================
 	   MEMORY UPDATE
 	===================== */
-
 	if (
 	  parsed.tool ===
 	  "SEARCH_CODE"
@@ -470,10 +462,49 @@ JSON only.
 	  "APPLY_PATCH"
 	) {
 
+		const alreadyPatched =
+
+			  memory.modifiedFiles.some(
+
+				x =>
+
+				  x.file ===
+					parsed.args?.file
+
+				  &&
+
+				  x.find ===
+					parsed.args?.find
+
+			  );
+
+			if (
+			  alreadyPatched
+			) {
+
+			  continue;
+
+			}
+
+
 	  memory.patches.push(
 		parsed.args
 	  );
+	memory.modifiedFiles.push({
 
+	  file:
+		parsed.args?.file,
+
+	  find:
+		parsed.args?.find,
+
+	  replace:
+		parsed.args?.replace,
+
+	  time:
+		Date.now()
+
+	});
 	  memory.successfulFixes.push(
 		parsed.args?.file ||
 		"unknown"
@@ -522,6 +553,11 @@ JSON only.
 		memory.patches,
 		10
 	  );
+	  memory.modifiedFiles =
+	  limitMemory(
+		memory.modifiedFiles,
+		20
+	  );
 
 	memory.terminalOutputs =
 	  limitMemory(
@@ -533,7 +569,14 @@ JSON only.
 		  "HISTORY LENGTH:",
 		  history.length
 		);
-		
+		console.log(
+		  "MODIFIED FILES:",
+		  JSON.stringify(
+			memory.modifiedFiles,
+			null,
+			2
+		  )
+		);
 		if (
 		  parsed.tool ===
 		  "APPLY_PATCH"
