@@ -71,6 +71,7 @@ export async function runAgentLoop({
 	  reflections: [],
 	  nextActions: [],
 	  rootCauses: [],
+	  evidence: [],
 	  architectureSummary: "",
 	  patches: [],
 	  modifiedFiles: [],
@@ -144,6 +145,11 @@ Only patch after sufficient evidence exists.
 
 Before generating a patch:
 
+Explain:
+- why this code is the root cause
+- why the patch fixes it
+- what evidence supports the fix
+
 - Criticize your own reasoning.
 - Ask what assumptions may be wrong.
 - Ask whether another root cause exists.
@@ -178,6 +184,20 @@ REASONING PROCESS:
 3. Search relevant files semantically.
 4. Read the most relevant files.
 5. Trace execution flow.
+Trace data flow end-to-end.
+
+For upload/image bugs:
+- inspect request flow
+- inspect backend processing
+- inspect response payload
+- inspect frontend rendering
+- inspect state updates
+- inspect URL generation
+- inspect static serving
+- inspect image src rendering
+
+Do not patch the nearest code.
+Patch the actual root cause.
 6. Identify likely root cause.
 7. Verify reasoning against actual code.
 8. Generate minimal accurate patch.
@@ -393,6 +413,18 @@ JSON only.
 		`THINKING DEPTH:
 
 		${memory.thinkingDepth}`
+		},
+		
+		{
+		  role: "system",
+		  content:
+		`EVIDENCE:
+
+		${JSON.stringify(
+		  memory.evidence,
+		  null,
+		  2
+		)}`
 		},
 		
 		{
@@ -739,6 +771,24 @@ if (
 	   Decide what to inspect next.`
 
 	);
+	
+	memory.evidence.push({
+
+	  tool:
+		parsed.tool,
+
+	  evidence:
+		JSON.stringify(result)
+		  .slice(0,300)
+
+	});
+
+	memory.evidence =
+	  limitMemory(
+		memory.evidence,
+		20
+	  );
+	
 	  if (
 
 	  parsed.tool ===
