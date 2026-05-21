@@ -246,6 +246,32 @@ JSON only.
 	  continue;
 
 	}
+	
+	if (
+
+	  parsed.PATCH?.length ||
+
+	  parsed.patch?.length
+
+	) {
+
+	  return {
+
+		success: true,
+
+		final:
+		  JSON.stringify(
+			parsed,
+			null,
+			2
+		  ),
+
+		history
+
+	  };
+
+	}
+	
     if (parsed.done) {
 
       return {
