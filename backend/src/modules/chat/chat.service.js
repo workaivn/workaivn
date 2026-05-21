@@ -854,11 +854,17 @@ export async function streamChat({
 
 			}
 
-			answer += `
+			if (
+			  agentResult.final
+			) {
+
+			  answer += `
 
 			${agentResult.final}
 
 			`;
+
+			}
 
 		} else {
 

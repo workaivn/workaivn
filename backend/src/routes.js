@@ -65,6 +65,9 @@ import {
 import {
   buildFlowMap
 } from "./services/buildFlowMap.js";
+import {
+  runAgentLoop
+} from "./agent/runAgentLoop.js";
 
 // =====================================
 // OCR PDF SCAN WINDOWS
@@ -1186,37 +1189,69 @@ const isPatchSuggestRequest =
 
   );
   
-  answer =
-    await askAI({
+  const agentResult =
+	  await runAgentLoop({
 
-      messages: [
-        {
-          role: "user",
-          content: ask
-        }
-      ],
+		messages: [
+		  {
+			role: "user",
+			content: ask
+		  }
+		],
 
-      mode:
+		plan:
+		  user?.plan ||
+		  "free"
 
-  isAutoPatchRequest
+	  });
 
-    ? "patch"
+	answer = `
 
-    :
+	${agentResult.history
+	  ?.filter(
+		(x) =>
+		  x.type ===
+		  "status"
+	  )
+	  ?.map(
+		(x) => x.text
+	  )
+	  ?.join("\n")}
 
-    isPatchSuggestRequest
+	`;
 
-      ? "code"
+	if (
+	  agentResult.patch
+	) {
 
-      :
+	  answer += `
 
-      "file",
+	PATCH:
 
-      plan:
-        user?.plan ||
-        "free"
+	${JSON.stringify(
 
-    });
+	  agentResult.patch,
+
+	  null,
+	  2
+
+	)}
+
+	`;
+
+	}
+
+	if (
+	  agentResult.final
+	) {
+
+	  answer += `
+
+	${agentResult.final}
+
+	`;
+
+	}
 
   /* =========================
      VALIDATE ANSWER
