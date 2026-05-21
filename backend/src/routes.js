@@ -1272,6 +1272,20 @@ const isPatchSuggestRequest =
     parsePatches(
       answer
     );
+	
+	if (
+	  Array.isArray(patches) &&
+	  patches.length > 0
+	) {
+
+	  answer =
+		JSON.stringify(
+		  patches,
+		  null,
+		  2
+		);
+
+	}
 
   console.log(
     "PATCHES:",

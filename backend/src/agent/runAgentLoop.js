@@ -264,14 +264,6 @@ JSON only.
 
 		  ) {
 
-			emitStatus(
-
-			  history,
-
-			  `⚠️ Skip duplicate search: "${q}"`
-
-			);
-
 			continue;
 
 		  }
