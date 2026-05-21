@@ -25,6 +25,17 @@ function emitStatus(
 
 }
 
+function limitMemory(
+
+  arr,
+
+  max = 20
+
+) {
+
+  return arr.slice(-max);
+
+}
 
 export async function runAgentLoop({
 
@@ -37,7 +48,40 @@ export async function runAgentLoop({
 }) {
 
   const history = [];
+	const memory = {
 
+	  objective: "",
+
+	  discoveredFiles: [],
+
+	  discoveredFunctions: [],
+
+	  searchedQueries: [],
+
+	  bugsFound: [],
+
+	  hypotheses: [],
+
+	  fixesAttempted: [],
+
+	  successfulFixes: [],
+
+	  failedFixes: [],
+
+	  currentPlan: [],
+
+	  reasoning: [],
+
+	  patches: [],
+
+	  terminalOutputs: []
+
+	};
+	memory.objective =
+
+	  messages
+		?.slice(-1)?.[0]
+		?.content || "";
   for (
     let step = 0;
     step < maxSteps;
@@ -113,24 +157,38 @@ JSON only.
 
         messages: [
 
-          {
-            role: "system",
-            content: system
-          },
+		  {
+			role: "system",
+			content: system
+		  },
 
-          ...messages,
+		  {
+			role: "system",
+			content:
+		`AGENT MEMORY:
 
-          {
-            role: "system",
-            content:
-              JSON.stringify(
-                history,
-                null,
-                2
-              )
-          }
+		${JSON.stringify(
+		  memory,
+		  null,
+		  2
+		)}`
+		  },
 
-        ],
+		  ...messages,
+
+		  {
+			role: "system",
+			content:
+		`TOOL HISTORY:
+
+		${JSON.stringify(
+		  history,
+		  null,
+		  2
+		)}`
+		  }
+
+		],
 
         mode: "agent",
 
@@ -191,16 +249,16 @@ JSON only.
 		const toolMessages = {
 
 		  SEARCH_CODE:
-			"🔍 Searching codebase...",
+			`🔍 Đang tìm "${parsed.args?.query || ""}"`,
 
 		  READ_FILE:
-			"📄 Reading file...",
+			`📄 Đang đọc ${parsed.args?.path || "file"}`,
 
 		  APPLY_PATCH:
-			"🧩 Generating patch...",
+			"🧩 Đang tạo patch...",
 
 		  RUN_TERMINAL:
-			"⚙️ Running terminal..."
+			"⚙️ Đang chạy terminal..."
 
 		};
 
@@ -215,9 +273,7 @@ JSON only.
 		  `Using ${parsed.tool}`
 
 		);
-
-
-      const result =
+	const result =
         await executeTool(
 
           parsed.tool,
@@ -249,6 +305,122 @@ JSON only.
 
       });
 	  
+	  /* =====================
+	   MEMORY UPDATE
+	===================== */
+
+	if (
+	  parsed.tool ===
+	  "SEARCH_CODE"
+	) {
+
+	  if (
+		parsed.args?.query &&
+		!memory.searchedQueries.includes(
+		  parsed.args.query
+		)
+	  ) {
+
+		memory.searchedQueries.push(
+		  parsed.args.query
+		);
+
+	  }
+
+	  memory.reasoning.push(
+		`Searched codebase for: ${parsed.args.query}`
+	  );
+
+	}
+
+	if (
+	  parsed.tool ===
+	  "READ_FILE"
+	) {
+
+	  if (
+		parsed.args?.path &&
+		!memory.discoveredFiles.includes(
+		  parsed.args.path
+		)
+	  ) {
+
+		memory.discoveredFiles.push(
+		  parsed.args.path
+		);
+
+	  }
+
+	  memory.reasoning.push(
+		`Read file: ${parsed.args.path}`
+	  );
+
+	}
+
+	if (
+	  parsed.tool ===
+	  "APPLY_PATCH"
+	) {
+
+	  memory.patches.push(
+		parsed.args
+	  );
+
+	  memory.successfulFixes.push(
+		parsed.args?.file ||
+		"unknown"
+	  );
+
+	  memory.reasoning.push(
+		`Generated patch for ${parsed.args?.file}`
+	  );
+
+	}
+
+	if (
+	  parsed.tool ===
+	  "RUN_TERMINAL"
+	) {
+
+	  memory.terminalOutputs.push(
+
+		String(
+		  result?.output || ""
+		).slice(0, 2000)
+
+	  );
+
+	}
+		  memory.reasoning =
+	  limitMemory(
+		memory.reasoning,
+		30
+	  );
+
+	memory.discoveredFiles =
+	  limitMemory(
+		memory.discoveredFiles,
+		30
+	  );
+
+	memory.searchedQueries =
+	  limitMemory(
+		memory.searchedQueries,
+		20
+	  );
+
+	memory.patches =
+	  limitMemory(
+		memory.patches,
+		10
+	  );
+
+	memory.terminalOutputs =
+	  limitMemory(
+		memory.terminalOutputs,
+		10
+	  );
+  
 	  console.log(
 		  "HISTORY LENGTH:",
 		  history.length

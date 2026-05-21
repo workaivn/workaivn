@@ -5,6 +5,38 @@ import {
   renderMarkdown
 } from "../utils/markdown";
 
+function extractPatch(content) {
+
+  try {
+
+    const match =
+      content.match(
+        /\[\s*\{[\s\S]*"file"[\s\S]*\}\s*\]/m
+      );
+
+    if (!match) {
+      return null;
+    }
+
+    const parsed =
+      JSON.parse(match[0]);
+
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
+
+    return parsed;
+
+  } catch {
+
+    return null;
+
+  }
+
+}
+
+
+
 export default function MessageList({
 messages=[],
 loading=false
@@ -21,19 +53,12 @@ const content =
     ? msg.content
     : "";
 
-const isPatchJson =
+const patches =
+  extractPatch(content);
 
-  content.includes(
-    '"file"'
-  ) &&
-
-  content.includes(
-    '"find"'
-  ) &&
-
-  content.includes(
-    '"replace"'
-  );
+const hasPatch =
+  Array.isArray(patches) &&
+  patches.length > 0;
 
 const imageSrc =
   typeof msg.image === "string"
@@ -108,7 +133,52 @@ className={`bubble ${msg.role}`}
       >
 
         <div className="patchTitle">
-          AI Patch Detected
+          {hasPatch && (
+
+			  <div className="patchBox">
+
+				<div className="patchTitle">
+				  🧩 Patch Ready
+				</div>
+
+				{patches.map((p,i)=>(
+
+				  <div
+					key={i}
+					className="patchItem"
+				  >
+
+					<div className="patchFile">
+					  {p.file}
+					</div>
+
+					<div className="patchChange">
+
+					  <div>
+						<b>Find:</b>
+						<pre>{p.find}</pre>
+					  </div>
+
+					  <div>
+						<b>Replace:</b>
+						<pre>{p.replace}</pre>
+					  </div>
+
+					</div>
+
+				  </div>
+
+				))}
+
+				<button
+				  className="applyPatchBtn"
+				>
+				  Apply Patch
+				</button>
+
+			  </div>
+
+			)}
         </div>
 
         <div className="patchDesc">
