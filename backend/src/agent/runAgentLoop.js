@@ -281,24 +281,7 @@ JSON only.
 
 		  };
 
-		} {
-
-		  console.log(
-			"=== PATCH COMPLETE ==="
-		  );
-
-		  return {
-
-			success: true,
-
-			final:
-			  "Patch generated successfully.",
-
-			history
-
-		  };
-
-		}
+		} 
 
     }
 	
