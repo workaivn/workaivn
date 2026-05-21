@@ -1,15 +1,28 @@
-import fs from "fs/promises";
-
 export async function listFilesTool({
-  path,
+
+  activeFiles = []
+
 }) {
 
-  const files =
-    await fs.readdir(path);
-
   return {
+
     success: true,
-    files,
+
+    files:
+
+      activeFiles.map(f => ({
+
+        name:
+          f.name,
+
+        path:
+          f.path,
+
+        type:
+          f.type
+
+      }))
+
   };
 
 }

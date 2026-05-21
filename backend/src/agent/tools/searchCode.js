@@ -1,25 +1,52 @@
 import { exec }
   from "child_process";
 
-export function searchCodeTool({
+export async function searchCodeTool({
+
   query,
+
+  activeFiles = []
+
 }) {
 
-  return new Promise((resolve) => {
+  const q =
+    String(query || "")
+      .toLowerCase();
 
-    exec(
-      `rg "${query}" .`,
-      (error, stdout, stderr) => {
+  const results = [];
 
-        resolve({
-          success: !error,
-          stdout,
-          stderr,
-        });
+  for (const f of activeFiles) {
 
-      }
-    );
+    const text =
+      String(
+        f.content || ""
+      );
 
-  });
+    if (
+      text.toLowerCase().includes(q)
+    ) {
+
+      results.push({
+
+        file:
+          f.name,
+
+        preview:
+          text
+            .slice(0, 500)
+
+      });
+
+    }
+
+  }
+
+  return {
+
+    success: true,
+
+    results
+
+  };
 
 }

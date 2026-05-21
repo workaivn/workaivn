@@ -11,7 +11,16 @@ export async function readFileTool({
 		.replace(/\\/g,"/")
 		.toLowerCase()
 		.trim();
+	console.log(
 
+	  "ACTIVE FILES:",
+
+	  activeFiles.map(f => ({
+		name: f.name,
+		path: f.path
+	  }))
+
+	);
 	const found =
 	  activeFiles.find(f => {
 
