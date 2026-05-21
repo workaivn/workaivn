@@ -7,11 +7,6 @@ export async function readFileTool({
 }) {
 
   const normalized =
-    String(path || "")
-      .toLowerCase()
-      .trim();
-
-  const normalized =
 	  String(path || "")
 		.replace(/\\/g,"/")
 		.toLowerCase()
