@@ -421,13 +421,9 @@ if (
 
 }
 
-const {prompt,chatId}=req.body;
-const existingChat =
-  chatId
-    ? await Chat.findById(chatId)
-    : null;
 let mergedText = "";
 let activeFiles = [];
+
 if (
 
   existingChat?.activeFiles
@@ -439,6 +435,7 @@ if (
     existingChat.activeFiles;
 
 }
+
 for (const file of activeFiles) {
 
   mergedText += `
