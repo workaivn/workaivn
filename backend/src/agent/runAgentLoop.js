@@ -524,11 +524,45 @@ JSON only.
 	  Array.isArray(parsed.plan)
 	) {
 
+	  const samePlan =
+
+		JSON.stringify(
+		  parsed.plan
+		) ===
+
+		JSON.stringify(
+		  memory.currentPlan
+		);
+
 	  memory.currentPlan =
 		limitMemory(
 		  parsed.plan,
 		  10
 		);
+
+	  // prevent infinite planning loop
+
+	  if (
+		samePlan
+	  ) {
+
+		history.push({
+
+		  type: "status",
+
+		  text:
+			"Planning complete. Executing next action...",
+
+		  time:
+			Date.now()
+
+		});
+
+	  } else {
+
+		continue;
+
+	  }
 
 	}
 
