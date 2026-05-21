@@ -62,10 +62,16 @@ export async function runAgentLoop({
 	  hypotheses: [],
 	  fixesAttempted: [],
 	  successfulFixes: [],
+	  successfulPatterns: [],
 	  failedFixes: [],
 	  rejectedHypotheses: [],
 	  currentPlan: [],
 	  reasoning: [],
+	  thinkingDepth: 0,
+	  reflections: [],
+	  nextActions: [],
+	  rootCauses: [],
+	  architectureSummary: "",
 	  patches: [],
 	  modifiedFiles: [],
 	  terminalOutputs: []
@@ -136,6 +142,15 @@ First:
 
 Only patch after sufficient evidence exists.
 
+Before generating a patch:
+
+- Criticize your own reasoning.
+- Ask what assumptions may be wrong.
+- Ask whether another root cause exists.
+- Verify assumptions against actual code.
+- Avoid premature fixes.
+- Prefer evidence over guessing.
+
 IMPORTANT BEHAVIORS:
 
 - Think semantically, not literally.
@@ -189,6 +204,23 @@ WORKFLOW:
 4. APPLY_PATCH
 5. RUN_TERMINAL
 6. REFLECT
+SELF-REFLECTION RULES:
+
+- After every tool result,
+  reflect deeply before next action.
+
+- Ask yourself:
+  - What did I learn?
+  - Which hypothesis became stronger?
+  - Which hypothesis became weaker?
+  - Explicitly reject weak hypotheses. 
+  - What should I inspect next?
+  - Did the tool result reveal architecture knowledge?
+  - Am I missing related files?
+
+- Avoid random searching.
+- Build reasoning incrementally.
+- Think like a senior debugging engineer.
 7. DONE
 
 IMPORTANT:
@@ -212,6 +244,16 @@ TOOL FORMAT:
   "args": {
     "query": "upload"
   }
+}
+
+REFLECTION FORMAT:
+
+{
+  "reflection":
+    "The upload route exists, but image URLs may not be returned correctly.",
+    
+  "next":
+    "Inspect frontend image rendering"
 }
 
 DONE FORMAT:
@@ -301,6 +343,70 @@ JSON only.
 		)}`
 		},
 		
+		{
+		  role: "system",
+		  content:
+		`SELF REFLECTIONS:
+
+		${JSON.stringify(
+		  memory.reflections,
+		  null,
+		  2
+		)}`
+		},
+
+		{
+		  role: "system",
+		  content:
+		`NEXT ACTIONS:
+
+		${JSON.stringify(
+		  memory.nextActions,
+		  null,
+		  2
+		)}`
+		},
+		
+		{
+		  role: "system",
+		  content:
+		`ROOT CAUSES:
+
+		${JSON.stringify(
+		  memory.rootCauses,
+		  null,
+		  2
+		)}`
+		},
+			
+		{
+		  role: "system",
+		  content:
+		`ARCHITECTURE SUMMARY:
+
+		${memory.architectureSummary}`
+		},
+		
+		{
+		  role: "system",
+		  content:
+		`THINKING DEPTH:
+
+		${memory.thinkingDepth}`
+		},
+		
+		{
+		  role: "system",
+		  content:
+		`FAILED ATTEMPTS:
+
+		${JSON.stringify(
+		  memory.failedFixes,
+		  null,
+		  2
+		)}`
+		},
+		
 		 ],
 
 			mode: "agent",
@@ -309,7 +415,7 @@ JSON only.
 
 		  });
 	  
-	  
+		
 	  console.log(
 		  "\n=== AGENT STEP ===",
 		  step
@@ -415,6 +521,71 @@ JSON only.
 
 		);
 	}
+	
+	if (
+  parsed.reflection
+) {
+
+  memory.reflections.push(
+    parsed.reflection
+  );
+
+}
+
+if (
+  parsed.next
+) {
+
+  memory.nextActions.push(
+    parsed.next
+  );
+
+}
+
+if (
+  parsed.rootCause
+) {
+
+ memory.rootCauses =
+  limitMemory(
+
+    [
+
+      ...memory.rootCauses,
+
+      parsed.rootCause
+
+    ],
+
+    20
+
+  );
+
+}
+
+	if (
+	  Array.isArray(
+		parsed.rejectedHypotheses
+	  )
+	) {
+
+	  memory.rejectedHypotheses =
+		limitMemory(
+
+		  [
+
+			...memory.rejectedHypotheses,
+
+			...parsed.rejectedHypotheses
+
+		  ],
+
+		  20
+
+		);
+
+	}
+	
     if (parsed.done) {
 
       return {
@@ -490,6 +661,37 @@ JSON only.
 
 		);
 		
+		if (
+		  result?.success === false
+		) {
+
+		  memory.failedFixes.push({
+
+			tool:
+			  parsed.tool,
+
+			args:
+			  parsed.args,
+
+			error:
+			  result?.error ||
+
+			  result?.stderr ||
+
+			  "Unknown error"
+
+		  });
+		  
+		  
+		  memory.failedFixes =
+		  limitMemory(
+			memory.failedFixes,
+			20
+		  );
+
+		}
+		
+		
 		console.log(
 		  "TOOL RESULT:\n",
 		  JSON.stringify(
@@ -512,11 +714,29 @@ JSON only.
         result
 
       });
+	  
+	  memory.thinkingDepth++;
 	  memory.reasoning.push(
 
 	  `After ${parsed.tool},
 	   learned:
 	   ${JSON.stringify(result).slice(0,300)}`
+
+	);
+	
+	memory.reflections.push(
+
+	  `Reflection after ${parsed.tool}:
+
+	   Tool result suggests:
+	   ${JSON.stringify(result).slice(0,400)}
+
+	   Current hypotheses:
+	   ${JSON.stringify(
+		 memory.hypotheses
+	   ).slice(0,300)}
+
+	   Decide what to inspect next.`
 
 	);
 	  if (
@@ -569,6 +789,7 @@ JSON only.
 
 	  }
 
+	  memory.thinkingDepth++;
 	  memory.reasoning.push(
 		`Searched codebase for: ${parsed.args.query}`
 	  );
@@ -593,6 +814,7 @@ JSON only.
 
 	  }
 
+	  memory.thinkingDepth++;
 	  memory.reasoning.push(
 		`Read file: ${parsed.args.path}`
 	  );
@@ -602,6 +824,44 @@ JSON only.
 	  `${parsed.args.path} is part of the application flow`
 
 	);
+	
+	memory.architectureSummary =
+
+	  limitMemory(
+
+		memory.architectureKnowledge,
+
+		10
+
+	  ).join("\n");
+	
+	const content =
+	  String(
+		result?.content || ""
+	  );
+
+	const imports =
+
+	  [...content.matchAll(
+		/import\s+.*?from\s+["'](.+?)["']/g
+	  )]
+
+	  .map(x => x[1]);
+
+	if (
+	  imports.length
+	) {
+
+	  memory.fileRelationships.push({
+
+		file:
+		  parsed.args.path,
+
+		imports
+
+	  });
+
+	}
 
 	}
 
@@ -638,6 +898,23 @@ JSON only.
 	  memory.patches.push(
 		parsed.args
 	  );
+	  memory.patchConfidence.push({
+
+	  file:
+		parsed.args?.file,
+
+	  confidence:
+		0.75,
+
+	  reasoning:
+		memory.hypotheses.slice(-2)
+
+	});
+	memory.patchConfidence =
+	  limitMemory(
+		memory.patchConfidence,
+		20
+	  );
 	memory.modifiedFiles.push({
 
 	  file:
@@ -657,7 +934,27 @@ JSON only.
 		parsed.args?.file ||
 		"unknown"
 	  );
+	  
+	  memory.successfulPatterns.push({
 
+		  tool:
+			parsed.tool,
+
+		  file:
+			parsed.args?.file,
+
+		  pattern:
+			parsed.args?.find
+
+		});
+		
+		memory.successfulPatterns =
+		  limitMemory(
+			memory.successfulPatterns,
+			20
+		  );
+
+	  memory.thinkingDepth++;
 	  memory.reasoning.push(
 		`Generated patch for ${parsed.args?.file}`
 	  );
@@ -678,7 +975,13 @@ JSON only.
 	  );
 
 	}
-		  memory.reasoning =
+	
+	memory.reflections =
+	  limitMemory(
+		memory.reflections,
+		20
+	  );
+	memory.reasoning =
 	  limitMemory(
 		memory.reasoning,
 		30
