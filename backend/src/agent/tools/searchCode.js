@@ -45,8 +45,10 @@ export async function searchCodeTool({
           f.name,
 
         preview:
-          text
-            .slice(0, 500)
+		  text
+			.split("\n")
+			.slice(0, 40)
+			.join("\n")
 
       });
 
