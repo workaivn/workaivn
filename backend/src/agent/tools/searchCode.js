@@ -25,24 +25,66 @@ export async function searchCodeTool({
     const keywords =
 	  q.split(/\s+/);
 
-	if (
+	let score = 0;
 
-	  keywords.some(k =>
+	for (const k of keywords) {
 
-		k.length > 1 &&
+	  if (
+		k.length < 2
+	  ) continue;
+
+	  if (
 
 		text
 		  .toLowerCase()
 		  .includes(k)
 
-	  )
+	  ) {
 
+		score += 10;
+
+	  }
+
+	}
+
+	// semantic boosts
+
+	if (
+	  q.includes("preview")
+	) {
+
+	  if (
+		text.includes("upload")
+	  ) score += 20;
+
+	  if (
+		text.includes("image")
+	  ) score += 20;
+
+	  if (
+		text.includes("multer")
+	  ) score += 25;
+
+	  if (
+		text.includes("cloudinary")
+	  ) score += 20;
+
+	  if (
+		text.includes("url")
+	  ) score += 15;
+
+	}
+
+	if (
+	  score > 0
 	) {
 
       results.push({
 
         file:
           f.name,
+		
+		score,
 
         preview:
 		  text
@@ -56,12 +98,18 @@ export async function searchCodeTool({
 
   }
 
-  return {
+  results.sort(
+	  (a,b) =>
+		b.score - a.score
+	);
 
-    success: true,
+	return {
 
-    results
+	  success: true,
 
-  };
+	  results:
+		results.slice(0,5)
+
+	};
 
 }
