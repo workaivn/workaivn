@@ -54,12 +54,16 @@ export async function runAgentLoop({
 	  objective: "",
 	  discoveredFiles: [],
 	  discoveredFunctions: [],
+	  architectureKnowledge: [],
+	  fileRelationships: [],
+	  patchConfidence: [],
 	  searchedQueries: [],
 	  bugsFound: [],
 	  hypotheses: [],
 	  fixesAttempted: [],
 	  successfulFixes: [],
 	  failedFixes: [],
+	  rejectedHypotheses: [],
 	  currentPlan: [],
 	  reasoning: [],
 	  patches: [],
@@ -117,6 +121,20 @@ trace code flows,
 reason about bugs,
 infer hidden causes,
 and generate accurate fixes.
+If evidence disproves a hypothesis,
+reject it and move to a better theory.
+Always inspect multiple related files before concluding.
+
+Do not generate patches immediately.
+
+First:
+- identify likely root causes
+- verify evidence
+- inspect execution flow
+- inspect related files
+- confirm the failure point
+
+Only patch after sufficient evidence exists.
 
 IMPORTANT BEHAVIORS:
 
@@ -245,11 +263,35 @@ JSON only.
 		)}`
 		  },
 
-		  ...messages,
+		{
+		  role: "system",
+		  content:
+		`CURRENT PLAN:
 
-		  {
-			role: "system",
-			content:
+		${JSON.stringify(
+		  memory.currentPlan,
+		  null,
+		  2
+		)}`
+		},
+
+		{
+		  role: "system",
+		  content:
+		`CURRENT HYPOTHESES:
+
+		${JSON.stringify(
+		  memory.hypotheses,
+		  null,
+		  2
+		)}`
+		},
+
+		...messages,
+
+		{
+		  role: "system",
+		  content:
 		`TOOL HISTORY:
 
 		${JSON.stringify(
@@ -257,15 +299,15 @@ JSON only.
 		  null,
 		  2
 		)}`
-		  }
+		},
+		
+		 ],
 
-		],
+			mode: "agent",
 
-        mode: "agent",
+			plan
 
-        plan
-
-      });
+		  });
 	  
 	  
 	  console.log(
@@ -345,10 +387,33 @@ JSON only.
 	) {
 
 	  memory.currentPlan =
-		parsed.plan;
+		limitMemory(
+		  parsed.plan,
+		  10
+		);
 
-	  continue;
+	}
 
+	if (
+	  Array.isArray(
+		parsed.hypotheses
+	  )
+	) {
+
+	  memory.hypotheses =
+		limitMemory(
+
+		  [
+
+			...memory.hypotheses,
+
+			...parsed.hypotheses
+
+		  ],
+
+		  20
+
+		);
 	}
     if (parsed.done) {
 
@@ -447,7 +512,13 @@ JSON only.
         result
 
       });
-	  
+	  memory.reasoning.push(
+
+	  `After ${parsed.tool},
+	   learned:
+	   ${JSON.stringify(result).slice(0,300)}`
+
+	);
 	  if (
 
 	  parsed.tool ===
@@ -525,6 +596,12 @@ JSON only.
 	  memory.reasoning.push(
 		`Read file: ${parsed.args.path}`
 	  );
+	  
+	  memory.architectureKnowledge.push(
+
+	  `${parsed.args.path} is part of the application flow`
+
+	);
 
 	}
 
