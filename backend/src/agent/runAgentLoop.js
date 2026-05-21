@@ -521,50 +521,64 @@ JSON only.
 
 	}
 	if (
-	  Array.isArray(parsed.plan)
-	) {
+		Array.isArray(parsed.plan)
+		) {
 
-	  const samePlan =
+		  const samePlan =
 
-		JSON.stringify(
-		  parsed.plan
-		) ===
+			JSON.stringify(
+			  parsed.plan
+			) ===
 
-		JSON.stringify(
-		  memory.currentPlan
-		);
+			JSON.stringify(
+			  memory.currentPlan
+			);
 
-	  memory.currentPlan =
-		limitMemory(
-		  parsed.plan,
-		  10
-		);
+		  memory.currentPlan =
+			limitMemory(
+			  parsed.plan,
+			  10
+			);
 
-	  // prevent infinite planning loop
+		  // first planning pass
+		  if (!samePlan) {
 
-	  if (
-		samePlan
-	  ) {
+			continue;
 
-		history.push({
+		  }
 
-		  type: "status",
+		  // planner loop detected
+		  if (
+			!parsed.tool &&
+			!parsed.done
+		  ) {
 
-		  text:
-			"Planning complete. Executing next action...",
+			history.push({
 
-		  time:
-			Date.now()
+			  type: "warning",
 
-		});
+			  text:
+				"Planner loop detected",
 
-	  } else {
+			  time:
+				Date.now()
 
-		continue;
+			});
 
-	  }
+			messages.push({
 
-	}
+			  role: "system",
+
+			  content:
+				"STOP PLANNING. EXECUTE A TOOL NOW."
+
+			});
+
+			continue;
+
+		  }
+
+		}
 
 	if (
 	  Array.isArray(
@@ -1099,7 +1113,34 @@ if (
 		memory.terminalOutputs,
 		10
 	  );
-  
+	  const recentActions =
+
+		  history
+			.slice(-3)
+			.map(
+			  x => x.tool || x.type
+			)
+			.join("|");
+
+		if (
+
+		  recentActions ===
+		  "status|status|status"
+
+		) {
+
+		  return {
+
+			success: false,
+
+			final:
+			  "Agent stuck in planning loop.",
+
+			history
+
+		  };
+
+	}
 	  console.log(
 		  "HISTORY LENGTH:",
 		  history.length
