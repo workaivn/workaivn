@@ -84,6 +84,7 @@ export async function runAgentLoop({
 	  messages
 		?.slice(-1)?.[0]
 		?.content || "";
+  let emptySearchCount = 0;
   for (
     let step = 0;
     step < maxSteps;
@@ -153,7 +154,20 @@ NO extra text.
 JSON only.
 
 `;
+	if (
+	  emptySearchCount >= 3
+	) {
 
+	  return {
+
+		final:
+	`Không tìm thấy đoạn code liên quan trong project.`,
+
+		history
+
+	  };
+
+	}
     const aiResponse =
       await askAI({
 
@@ -282,6 +296,27 @@ JSON only.
       };
 
     }
+	
+	if (
+
+	  parsed.final &&
+
+	  !parsed.tool
+
+	) {
+
+	  return {
+
+		success: false,
+
+		final:
+		  parsed.final,
+
+		history
+
+	  };
+
+	}
 
     /* =====================
        TOOL
@@ -301,15 +336,17 @@ JSON only.
 
 		  if (
 
-			q &&
+			  q &&
 
-			memory.searchedQueries.includes(q)
+			  memory.searchedQueries.includes(q)
 
-		  ) {
+			) {
 
-			continue;
+			  emptySearchCount++;
 
-		  }
+			  continue;
+
+			}
 
 		}
 		
@@ -346,6 +383,35 @@ JSON only.
         result
 
       });
+	  
+	  if (
+
+	  parsed.tool ===
+		"SEARCH_CODE"
+
+	  &&
+
+	  result?.success
+
+	  &&
+
+	  Array.isArray(
+		result.results
+	  )
+
+	  &&
+
+	  result.results.length === 0
+
+	) {
+
+	  emptySearchCount++;
+
+	} else {
+
+	  emptySearchCount = 0;
+
+	}
 	  
 	  /* =====================
 	   MEMORY UPDATE
@@ -478,7 +544,15 @@ JSON only.
 			success: true,
 
 			final:
-				"",
+			  JSON.stringify(
+				{
+				  PATCH: [
+					parsed.args
+				  ]
+				},
+				null,
+				2
+			  ),
 
 			patch:
 			  parsed.args,
@@ -494,9 +568,14 @@ JSON only.
   }
 
   return {
-    success: false,
-    error:
-      "Agent max steps reached"
-  };
+
+  success: false,
+
+  final:
+    "Agent không tìm thấy kết quả phù hợp.",
+
+  history
+
+};
 
 }

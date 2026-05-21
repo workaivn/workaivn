@@ -22,9 +22,22 @@ export async function searchCodeTool({
         f.content || ""
       );
 
-    if (
-      text.toLowerCase().includes(q)
-    ) {
+    const keywords =
+	  q.split(/\s+/);
+
+	if (
+
+	  keywords.some(k =>
+
+		k.length > 1 &&
+
+		text
+		  .toLowerCase()
+		  .includes(k)
+
+	  )
+
+	) {
 
       results.push({
 
