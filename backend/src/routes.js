@@ -669,6 +669,9 @@ for (const file of files) {
 	  name:
 		file.originalname,
 
+	  path:
+		file.originalname,
+
 	  type: ext,
 
 	  summary:
@@ -1201,7 +1204,9 @@ const isPatchSuggestRequest =
 
 		plan:
 		  user?.plan ||
-		  "free"
+		  "free",
+		
+		activeFiles
 
 	  });
 

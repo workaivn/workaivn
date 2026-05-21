@@ -34,7 +34,8 @@ const tools = {
 
 export async function executeTool(
   toolName,
-  args
+  args,
+  activeFiles = []
 ) {
 
   const tool = tools[toolName];
@@ -51,7 +52,13 @@ export async function executeTool(
   try {
 
     const result =
-      await tool(args);
+      await tool({
+
+		  ...args,
+
+		  activeFiles
+
+		});
 
     return result;
 

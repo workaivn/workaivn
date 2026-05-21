@@ -43,6 +43,8 @@ export async function runAgentLoop({
 
   plan = "free",
 
+  activeFiles = [],
+
   maxSteps = 10
 
 }) {
@@ -273,11 +275,13 @@ JSON only.
 	const result =
         await executeTool(
 
-          parsed.tool,
+		  parsed.tool,
 
-          parsed.args || {}
+		  parsed.args || {},
 
-        );
+		  activeFiles || []
+
+		);
 		
 		console.log(
 		  "TOOL RESULT:\n",
