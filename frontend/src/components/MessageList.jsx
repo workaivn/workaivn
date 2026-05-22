@@ -123,69 +123,38 @@ className={`bubble ${msg.role}`}
 )}
 
 {content && (
-
   <>
-
-    {hasPatch && (
-
-	  <div className="patchView">
-
-		{patches.map((p,i)=>(
-
-		  <div
-			key={i}
-			className="patchItem"
-		  >
-
-			<div className="patchFile">
-
-			  📄 File:
-			  {" "}
-			  {p.file || p.path}
-
-			</div>
-
-			<div className="patchTitle">
-			  TÌM ĐOẠN NÀY:
-			</div>
-
-			<pre className="patchCode">
-			  {p.find}
-			</pre>
-
-			<div className="patchTitle">
-			  THAY THÀNH:
-			</div>
-
-			<pre className="patchCode">
-			  {p.replace}
-			</pre>
-
-		  </div>
-
-		))}
-
-	  </div>
-
-	)}
-
-    {!hasPatch && (
-
-	  <div
-		className={
-		  msg.streaming
-			? "markdown streaming"
-			: "markdown"
-		}
-		dangerouslySetInnerHTML={{
-		  __html: renderMarkdown(content)
-		}}
-	  />
-
-	)}
-
+    {/* Trường hợp 1: Nếu là tin nhắn báo cáo DONE cuối cùng của Agent (Có chữ BÁO CÁO KẾT QUẢ) */}
+    {content.includes("BÁO CÁO KẾT QUẢ") ? (
+      <div 
+        className="msgText agent-report-markdown"
+        style={{ padding: '10px', lineHeight: '1.6' }}
+        dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+      />
+    ) : (
+      /* Trường hợp 2: Các tin nhắn code hoặc text thông thường trong quá trình chạy loop */
+      <>
+        {hasPatch && (
+          <div className="patchView">
+            {patches.map((p, i) => (
+              <div key={i} className="patchItem">
+                <div className="patchFile">📄 File: {p.file || p.path}</div>
+                <div className="patchTitle">TÌM ĐOẠN NÀY:</div>
+                <pre className="patchCode"><code>{p.find}</code></pre>
+                <div className="patchTitle">THAY BẰNG ĐOẠN NÀY:</div>
+                <pre className="patchCode patchReplace"><code>{p.replace}</code></pre>
+              </div>
+            ))}
+          </div>
+        )}
+        
+        <div 
+          className="msgText"
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+        />
+      </>
+    )}
   </>
-
 )}
 
 </div>
