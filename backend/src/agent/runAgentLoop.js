@@ -157,6 +157,7 @@ Explain:
 - Avoid premature fixes.
 - Prefer evidence over guessing.
 
+
 IMPORTANT BEHAVIORS:
 
 - Think semantically, not literally.
@@ -523,13 +524,23 @@ JSON only.
 
 	}
 	
+	const detectedPatch =
+
+	  parsed.PATCH ||
+
+	  parsed.patch ||
+
+	  (
+		parsed.tool === "APPLY_PATCH"
+		  ? [parsed.args]
+		  : []
+	  );
+
 	if (
 
-	  parsed.PATCH?.length ||
+	  Array.isArray(detectedPatch) &&
 
-	  parsed.patch?.length ||
-
-	  parsed.tool === "APPLY_PATCH"
+	  detectedPatch.length > 0
 
 	) {
 
@@ -573,6 +584,10 @@ JSON only.
 				- are not supported by evidence
 				- patch symptoms instead of root cause
 				- do not directly relate to the user bug
+				Reject patches if:
+				- only one file was inspected
+				- frontend rendering was never inspected
+				- backend response was never cross-checked with frontend usage
 
 				If the user bug is image preview related,
 				the patch must directly affect:
@@ -606,7 +621,7 @@ JSON only.
 			  content:
 	JSON.stringify(
 	  {
-		patch: parsed,
+		patch: detectedPatch,
 		memory,
 		history
 	  },
@@ -658,20 +673,25 @@ JSON only.
 
 	  }
 
-	  return {
+	  history.push({
 
-		success: true,
+		  type: "critic",
 
-		final:
-		  JSON.stringify(
-			parsed,
-			null,
-			2
-		  ),
+		  text:
+			"Patch approved by critic",
 
-		history
+		  time:
+			Date.now()
 
-	  };
+		});
+
+		parsed.tool =
+		  "APPLY_PATCH";
+
+		parsed.args =
+		  detectedPatch[0];
+
+		continue;
 
 	}
 	if (
@@ -1284,8 +1304,9 @@ if (
 
 		if (
 
-		  recentActions ===
-		  "status|status|status"
+		  recentActions.includes(
+			"warning|warning|warning"
+		  )
 
 		) {
 
