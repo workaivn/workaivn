@@ -248,7 +248,13 @@ export default function Chat({ tab, setTab }) {
 
 		const latestChatId =
 		  chatIdRef.current;
-
+			setMessages(prev => [
+			  ...prev,
+			  {
+				role: "assistant",
+				content: ""
+			  }
+			]);
 		const r =
 		  await apiPost(
 			"/chat",
@@ -264,34 +270,130 @@ export default function Chat({ tab, setTab }) {
 				latestChatId
 			}
 		  );
+if (!r.body) {
+  throw new Error(
+    "Streaming not supported."
+  );
+}
 
-		const answer =
-		  await r.text();
+const reader =
+  r.body.getReader();
 
-		setMessages(prev => [
+const decoder =
+  new TextDecoder();
 
-		  ...prev,
+let finalText = "";
+let streamedText = "";
 
-		  {
-			role: "assistant",
-			content: answer,
-			streaming: false
-		  }
+while (true) {
 
-		]);
+  const {
+    done,
+    value
+  } = await reader.read();
 
+  if (done) break;
+
+  const chunk =
+    decoder.decode(value, {
+	  stream: true
+	});
+
+  const lines =
+    chunk
+      .split("\n")
+      .filter(x =>
+        x.startsWith("data:")
+      );
+
+  for (const line of lines) {
+
+    try {
+
+      const json =
+        JSON.parse(
+          line.replace(
+            "data:",
+            ""
+          )
+        );
+
+      if (
+        json.type ===
+        "token"
+      ) {
+
+        streamedText =
+          json.content || "";
+
+        setMessages(prev => {
+
+          const copy = [...prev];
+
+          copy[
+            copy.length - 1
+          ] = {
+            role: "assistant",
+            content:
+              streamedText
+          };
+
+          return copy;
+        });
+
+      }
+
+      if (
+        json.type ===
+        "done"
+      ) {
+
+        finalText =
+          json.final || "";
+
+      }
+
+    } catch {}
+
+  }
+
+}
+
+if (finalText) {
+
+  setMessages(prev => {
+
+    const copy = [...prev];
+
+    copy[
+      copy.length - 1
+    ] = {
+      role: "assistant",
+      content: finalText
+    };
+
+    return copy;
+  });
+
+}
 		await loadChats();
 
 	  } catch {
 
-		setMessages(prev => [
-		  ...prev,
-		  {
+		setMessages(prev => {
+
+		  const copy = [...prev];
+
+		  copy[
+			copy.length - 1
+		  ] = {
 			role: "assistant",
 			content:
 			  "Lỗi phản hồi AI."
-		  }
-		]);
+		  };
+
+		  return copy;
+		});
 
 	  } finally {
 
@@ -453,7 +555,7 @@ async function sendRealFiles(
 		];
     }
 
-    if (hasFiles) {
+    if (useFiles?.length) {
 
 		  return [
 			"Đang đọc files...",
@@ -473,66 +575,8 @@ async function sendRealFiles(
 
   const steps =
     getSteps();
-
-	  setMessages((prev) => {
-
-	  const copy = [...prev];
-
-	  copy.push({
-		role: "assistant",
-		content: steps[0]
-	  });
-
-	  return copy;
-
-	});
-
   setLoadingType("file");
   setLoading(true);
-
-  let stepIndex = 0;
-
-  const timer =
-    setInterval(() => {
-      stepIndex++;
-
-      setMessages(
-        (prev) => {
-          const copy = [
-            ...prev
-          ];
-
-          const lastAssistantIndex =
-			  [...copy]
-				.reverse()
-				.findIndex(
-				  x => x.role === "assistant"
-				);
-
-			if (lastAssistantIndex !== -1) {
-
-			  const realIndex =
-				copy.length - 1 - lastAssistantIndex;
-
-			  copy[realIndex] = {
-              role:
-                "assistant",
-              content:
-                steps[
-                  Math.min(
-                    stepIndex,
-                    steps.length -
-                      1
-                  )
-                ]
-            };
-          }
-
-          return copy;
-        }
-      );
-    }, 1300);
-
   try {
     const fd =
       new FormData();
@@ -572,6 +616,14 @@ async function sendRealFiles(
         .VITE_API_URL ||
       "https://api.workaivn.com/api";
 
+	setMessages(prev => [
+	  ...prev,
+	  {
+		role: "assistant",
+		content: ""
+	  }
+	]);
+
     const r =
       await fetch(
         `${API}/upload-file`,
@@ -585,56 +637,115 @@ async function sendRealFiles(
           body: fd
         }
       );
+	if (!r.body) {
+	  throw new Error(
+		"Streaming not supported."
+	  );
+	}
+    const reader =
+  r.body.getReader();
 
-    const d =
-      await r.json();
+const decoder =
+  new TextDecoder();
 
-    clearInterval(
-      timer
-    );
+let finalText = "";
+let streamedText = "";
 
-    setMessages(
-      (prev) => {
-        const copy = [
-          ...prev
-        ];
+while (true) {
 
-        copy[
-		  copy.length - 1
-		] = {
-		  role: "assistant",
-		  content:
-			finalText ||
-			"Hoàn tất."
-		};
+  const {
+    done,
+    value
+  } = await reader.read();
 
-				? d.final
+  if (done) break;
 
-				: typeof d.answer === "string"
+  const chunk =
+    decoder.decode(value, {
+	  stream: true
+	});
+;
 
-				  ? d.answer
-
-				  : d.error ||
-					JSON.stringify(d, null, 2)
-        };
-
-        return copy;
-      }
-    );
-
-    if (d.chatId) {
-      setChatId(
-        d.chatId
+  const lines =
+    chunk
+      .split("\n")
+      .filter(x =>
+        x.startsWith("data:")
       );
-    }
+
+  for (const line of lines) {
+
+    try {
+
+      const json =
+        JSON.parse(
+          line.replace(
+            "data:",
+            ""
+          )
+        );
+
+      if (
+        json.type ===
+        "token"
+      ) {
+
+        streamedText =
+          json.content || "";
+
+        setMessages(prev => {
+
+          const copy = [...prev];
+
+          copy[
+            copy.length - 1
+          ] = {
+            role: "assistant",
+            content: streamedText
+          };
+
+          return copy;
+        });
+
+      }
+
+      if (
+        json.type ===
+        "done"
+      ) {
+
+        finalText =
+          json.final || "";
+
+      }
+
+    } catch {}
+
+  }
+
+}
+
+    if (finalText) {
+
+		  setMessages(prev => {
+
+			const copy = [...prev];
+
+			copy[
+			  copy.length - 1
+			] = {
+			  role: "assistant",
+			  content: finalText
+			};
+
+			return copy;
+		  });
+
+		}
 
     await loadChats();
 
   } catch {
-
-    clearInterval(
-      timer
-    );
 
     setMessages(
       (prev) => {
@@ -732,150 +843,7 @@ if (fileInputRef.current) {
         }
       );
 
-
-		const reader =
-  r.body.getReader();
-
-const decoder =
-  new TextDecoder();
-
-let finalText = "";
-
-while (true) {
-
-  const {
-    done,
-    value
-  } = await reader.read();
-
-  if (done) break;
-
-  const chunk =
-    decoder.decode(value);
-
-  const lines =
-    chunk
-      .split("\n")
-      .filter(x =>
-        x.startsWith("data:")
-      );
-
-  for (const line of lines) {
-
-    try {
-
-      const json =
-        JSON.parse(
-          line.replace(
-            "data:",
-            ""
-          )
-        );
-
-      if (
-        json.type ===
-        "thinking"
-      ) {
-
-        setMessages(prev => {
-
-          const copy = [...prev];
-
-          copy[
-            copy.length - 1
-          ] = {
-            role: "assistant",
-            content:
-              `Đang phân tích bước ${json.step + 1}...`
-          };
-
-          return copy;
-        });
-
-      }
-
-      if (
-        json.type ===
-        "tool"
-      ) {
-
-        setMessages(prev => {
-
-          const copy = [...prev];
-
-          copy[
-            copy.length - 1
-          ] = {
-            role: "assistant",
-            content:
-              `Đang chạy ${json.tool}...`
-          };
-
-          return copy;
-        });
-
-      }
-
-      if (
-        json.type ===
-        "patch"
-      ) {
-
-        setMessages(prev => {
-
-          const copy = [...prev];
-
-          copy[
-            copy.length - 1
-          ] = {
-            role: "assistant",
-            content:
-              `Đang sửa file ${json.file}...`
-          };
-
-          return copy;
-        });
-
-      }
-
-      if (
-        json.type ===
-        "validate"
-      ) {
-
-        setMessages(prev => {
-
-          const copy = [...prev];
-
-          copy[
-            copy.length - 1
-          ] = {
-            role: "assistant",
-            content:
-              `Đang kiểm tra lỗi ${json.file}...`
-          };
-
-          return copy;
-        });
-
-      }
-
-      if (
-        json.type ===
-        "done"
-      ) {
-
-        finalText =
-          json.final || "";
-
-      }
-
-    } catch {}
-
-  }
-
-}
-
+		const d = await r.json();
 
 		setMessages((prev) => {
 		  const copy = [...prev];
@@ -891,26 +859,27 @@ while (true) {
 		  return copy;
 		});
 
-
-
-
-
       if (d.chatId) {
         setChatId(d.chatId);
       }
 
       await loadChats();
-    } catch {
-      setMessages((prev) => {
-        const copy = [...prev];
+			} catch {
+			  setMessages((prev) => {
 
-        copy[copy.length - 1] = {
-          role: "assistant",
-          content: "Lỗi tạo ảnh."
-        };
+				const copy = [...prev];
 
-        return copy;
-      });
+				copy[
+				  copy.length - 1
+				] = {
+				  role: "assistant",
+				  content: "Lỗi tạo ảnh."
+				};
+
+				return copy;
+			  });
+
+			}
     } finally {
       setLoading(false);
 	  setLoadingType("none");
@@ -1256,7 +1225,13 @@ async function runTool(item) {
 				  "file",
 				  files[0]
 				);
-
+				setMessages(prev => [
+				  ...prev,
+				  {
+					role: "assistant",
+					content: ""
+				  }
+				]);
 				const r =
 				  await fetch(
 					`${API_URL}/generate-image`,
@@ -1285,28 +1260,39 @@ async function runTool(item) {
 
 				}
 
-				setMessages(prev => [
-				  ...prev,
-				  {
+				setMessages(prev => {
+
+				  const copy = [...prev];
+
+				  copy[
+					copy.length - 1
+				  ] = {
 					role: "assistant",
 					content:
 					  typeof d.answer ===
 					  "string"
 						? d.answer
 						: "Không đọc được ảnh."
-				  }
-				]);
+				  };
+
+				  return copy;
+				});
 
 			  } catch {
 
-				setMessages(prev => [
-				  ...prev,
-				  {
+				setMessages(prev => {
+
+				  const copy = [...prev];
+
+				  copy[
+					copy.length - 1
+				  ] = {
 					role: "assistant",
-					content:
-					  "Lỗi đọc ảnh."
-				  }
-				]);
+					content: "Lỗi đọc ảnh."
+				  };
+
+				  return copy;
+				});
 
 			  } finally {
 

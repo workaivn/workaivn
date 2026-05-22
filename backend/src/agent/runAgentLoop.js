@@ -406,6 +406,28 @@ REJECT: { "approve": false, "reason": "Reason here" }`
 
 			---
 			**Kết luận chung:** ${parsed.final || "Đã khắc phục hoàn toàn sự cố lỗi."}`;
+			
+			  /* STREAM TOKEN REALTIME */
+
+				  const finalText =
+					finalReport || "";
+
+				  for (
+					let i = 0;
+					i < finalText.length;
+					i += 10
+				  ) {
+
+					onEvent({
+					  type: "token",
+					  content:
+						finalText.slice(0, i + 10)
+					});
+
+					await new Promise(r =>
+					  setTimeout(r, 5)
+					);
+				  }
 
 				  return {
 					success: true,

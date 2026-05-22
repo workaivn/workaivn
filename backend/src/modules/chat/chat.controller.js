@@ -37,15 +37,16 @@ export async function chat(req, res) {
       mode = "normal"
     } = req.body;
 
-    res.setHeader(
-      "Content-Type",
-      "text/plain; charset=utf-8"
-    );
+    res.writeHead(200, {
+	  "Content-Type":
+		"text/event-stream",
 
-    res.setHeader(
-      "Transfer-Encoding",
-      "chunked"
-    );
+	  "Cache-Control":
+		"no-cache",
+
+	  Connection:
+		"keep-alive"
+	});
 
     await service.streamChat({
       userId,
