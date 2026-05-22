@@ -166,6 +166,12 @@ IMPORTANT BEHAVIORS:
 - Understand uploads, rendering, APIs, state, URLs, middleware, database flow, and UI behavior.
 - Search by meaning, not exact words.
 - If user mentions "preview image":
+You MUST inspect BOTH:
+- backend upload logic
+- frontend rendering logic
+
+Never conclude from backend only.
+Never patch backend responses before inspecting frontend usage.
   think about:
   - upload routes
   - multer
@@ -685,11 +691,28 @@ JSON only.
 
 		});
 
-		parsed.tool =
-		  "APPLY_PATCH";
+		const patchResult =
+		  await executeTool(
 
-		parsed.args =
-		  detectedPatch[0];
+			"APPLY_PATCH",
+
+			detectedPatch[0],
+
+			activeFiles || []
+
+		  );
+
+		history.push({
+
+		  type: "patch",
+
+		  result:
+			patchResult,
+
+		  time:
+			Date.now()
+
+		});
 
 		continue;
 
@@ -1071,7 +1094,22 @@ if (
 	  memory.reasoning.push(
 		`Searched codebase for: ${parsed.args.query}`
 	  );
+		const query =
+		  String(
+			parsed.args?.query || ""
+		  ).toLowerCase();
 
+		if (
+		  query.includes("image") ||
+		  query.includes("upload") ||
+		  query.includes("preview")
+		) {
+
+		  memory.nextActions.push(
+			"Inspect frontend rendering components"
+		  );
+
+		}
 	}
 
 	if (
@@ -1296,7 +1334,7 @@ if (
 	  const recentActions =
 
 		  history
-			.slice(-3)
+			.slice(-5)
 			.map(
 			  x => x.tool || x.type
 			)
