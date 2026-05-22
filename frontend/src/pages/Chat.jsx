@@ -605,12 +605,16 @@ async function sendRealFiles(
           role:
             "assistant",
           content:
-			  typeof d.answer === "string"
+			  typeof d.final === "string"
 
-				? d.answer
+				? d.final
 
-				: d.error ||
-				  JSON.stringify(d)
+				: typeof d.answer === "string"
+
+				  ? d.answer
+
+				  : d.error ||
+					JSON.stringify(d, null, 2)
         };
 
         return copy;

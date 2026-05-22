@@ -9,10 +9,14 @@ function extractPatch(content) {
 
   try {
 
-    const match =
-      content.match(
-        /\[\s*\{[\s\S]*("file"|"path")[\s\S]*"find"[\s\S]*"replace"[\s\S]*\}\s*\]/m
-      );
+    const clean = content
+	  .replace(/```json/g, "")
+	  .replace(/```/g, "");
+
+	const match =
+	  clean.match(
+		/\[\s*\{[\s\S]*("file"|"path")[\s\S]*"find"[\s\S]*"replace"[\s\S]*\}\s*\]/m
+	  );
 
     if (!match) {
       return null;
@@ -125,12 +129,15 @@ className={`bubble ${msg.role}`}
 {content && (
   <>
     {/* Trường hợp 1: Nếu là tin nhắn báo cáo DONE cuối cùng của Agent (Có chữ BÁO CÁO KẾT QUẢ) */}
-    {content.includes("BÁO CÁO KẾT QUẢ") ? (
-      <div 
-        className="msgText agent-report-markdown"
-        style={{ padding: '10px', lineHeight: '1.6' }}
-        dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
-      />
+    {content?.includes("BÁO CÁO KẾT QUẢ") ? (
+      {!hasPatch && (
+		  <div 
+			className="msgText"
+			dangerouslySetInnerHTML={{
+			  __html: renderMarkdown(content)
+			}}
+		  />
+		)}
     ) : (
       /* Trường hợp 2: Các tin nhắn code hoặc text thông thường trong quá trình chạy loop */
       <>
