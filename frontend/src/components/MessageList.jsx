@@ -130,15 +130,15 @@ className={`bubble ${msg.role}`}
   <>
     {/* Trường hợp 1: Nếu là tin nhắn báo cáo DONE cuối cùng của Agent (Có chữ BÁO CÁO KẾT QUẢ) */}
     {content?.includes("BÁO CÁO KẾT QUẢ") ? (
-      {!hasPatch && (
-		  <div 
-			className="msgText"
-			dangerouslySetInnerHTML={{
-			  __html: renderMarkdown(content)
-			}}
-		  />
-		)}
-    ) : (
+	  !hasPatch ? (
+		<div
+		  className="msgText"
+		  dangerouslySetInnerHTML={{
+			__html: renderMarkdown(content)
+		  }}
+		/>
+	  ) : null
+	) : (
       /* Trường hợp 2: Các tin nhắn code hoặc text thông thường trong quá trình chạy loop */
       <>
         {hasPatch && (

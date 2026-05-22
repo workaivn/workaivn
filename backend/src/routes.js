@@ -1279,32 +1279,21 @@ const isPatchSuggestRequest =
 
 	  });
 
-	answer = `
+	const statusText =
+	  agentResult.history
+		?.filter(
+		  (x) =>
+			x.type === "status"
+		)
+		?.map(
+		  (x) => x.text
+		)
+		?.join("\n") || "";
 
-	${agentResult.history
-	  ?.filter(
-		(x) =>
-		  x.type ===
-		  "status"
-	  )
-	  ?.map(
-		(x) => x.text
-	  )
-	  ?.join("\n")}
-
-	`;
-
-	if (
-	  agentResult.final
-	) {
-
-	  answer += `
-
-	${agentResult.final}
-
-	`;
-
-	}
+	answer =
+	  typeof agentResult.final === "string"
+		? agentResult.final
+		: statusText || "Không có kết quả.";
 
   /* =========================
      VALIDATE ANSWER

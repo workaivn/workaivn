@@ -406,7 +406,7 @@ REJECT: { "approve": false, "reason": "Reason here" }`
 
   return {
     success: false,
-    final: "Agent không tìm thấy kết quả phù hợp hoặc hết số bước chạy.",
+    final: "Không tìm thấy vị trí lỗi phù hợp trong source code đã upload.",
     history
   };
 }
