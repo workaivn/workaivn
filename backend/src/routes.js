@@ -1261,7 +1261,13 @@ const isPatchSuggestRequest =
 
   );
   
-  const agentResult =
+  res.writeHead(200, {
+	  "Content-Type": "text/event-stream",
+	  "Cache-Control": "no-cache",
+	  Connection: "keep-alive"
+	});
+
+	const agentResult =
 	  await runAgentLoop({
 
 		messages: [
@@ -1274,26 +1280,32 @@ const isPatchSuggestRequest =
 		plan:
 		  user?.plan ||
 		  "free",
-		
-		activeFiles
+
+		activeFiles,
+
+		onEvent(data) {
+
+		  res.write(
+			`data: ${JSON.stringify(data)}\n\n`
+		  );
+
+		}
 
 	  });
-
-	const statusText =
-	  agentResult.history
-		?.filter(
-		  (x) =>
-			x.type === "status"
-		)
-		?.map(
-		  (x) => x.text
-		)
-		?.join("\n") || "";
 
 	answer =
 	  typeof agentResult.final === "string"
 		? agentResult.final
-		: statusText || "Không có kết quả.";
+		: "Không có kết quả.";
+
+	res.write(
+	  `data: ${JSON.stringify({
+		type: "done",
+		final: answer
+	  })}\n\n`
+	);
+
+	res.end();
 
   /* =========================
      VALIDATE ANSWER

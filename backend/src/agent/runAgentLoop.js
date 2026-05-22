@@ -17,7 +17,8 @@ export async function runAgentLoop({
   messages = [],
   plan = "free",
   activeFiles = [],
-  maxSteps = 20
+  maxSteps = 20,
+  onEvent = () => {}
 }) {
   const history = [];
   const memory = {
@@ -142,6 +143,11 @@ Return ONLY valid JSON.
 
     console.log("\n=== AGENT STEP ===", step);
     console.log("RAW AI RESPONSE:\n", aiResponse);
+	
+	onEvent({
+	  type: "thinking",
+	  step
+	});
 
     let parsed = null;
     try {
@@ -232,6 +238,10 @@ REJECT: { "approve": false, "reason": "Reason here" }`
         time: Date.now()
       });
 
+	onEvent({
+	  type: "patch",
+	  file: detectedPatch[0]?.file
+	});
       // --- BƯỚC 4: PATCH (APPLY_PATCH) ---
       const patchResult = await executeTool("APPLY_PATCH", detectedPatch[0], activeFiles || []);
       
@@ -255,6 +265,10 @@ REJECT: { "approve": false, "reason": "Reason here" }`
         memory.thinkingDepth++;
         memory.reasoning.push(`Generated patch for ${detectedPatch[0]?.file}`);
 
+		onEvent({
+		  type: "validate",
+		  file: detectedPatch[0]?.file
+		});
         // --- BƯỚC 5: VALIDATE (Tự động kích hoạt VALIDATE_PATCH ngay lập tức sau khi patch) ---
         emitStatus(history, `Running validation for patch on ${detectedPatch[0]?.file}`);
         const valResult = await executeTool("VALIDATE_PATCH", { file: detectedPatch[0]?.file }, activeFiles || []);
@@ -291,6 +305,11 @@ REJECT: { "approve": false, "reason": "Reason here" }`
       }
 
       const result = await executeTool(parsed.tool, parsed.args || {}, activeFiles || []);
+	  onEvent({
+		  type: "tool",
+		  tool: parsed.tool,
+		  args: parsed.args
+		});
 
       if (result?.success === false) {
         memory.failedFixes.push({

@@ -600,12 +600,13 @@ async function sendRealFiles(
         ];
 
         copy[
-          copy.length - 1
-        ] = {
-          role:
-            "assistant",
-          content:
-			  typeof d.final === "string"
+		  copy.length - 1
+		] = {
+		  role: "assistant",
+		  content:
+			finalText ||
+			"Hoàn tất."
+		};
 
 				? d.final
 
@@ -732,7 +733,148 @@ if (fileInputRef.current) {
       );
 
 
-		const d = await r.json();
+		const reader =
+  r.body.getReader();
+
+const decoder =
+  new TextDecoder();
+
+let finalText = "";
+
+while (true) {
+
+  const {
+    done,
+    value
+  } = await reader.read();
+
+  if (done) break;
+
+  const chunk =
+    decoder.decode(value);
+
+  const lines =
+    chunk
+      .split("\n")
+      .filter(x =>
+        x.startsWith("data:")
+      );
+
+  for (const line of lines) {
+
+    try {
+
+      const json =
+        JSON.parse(
+          line.replace(
+            "data:",
+            ""
+          )
+        );
+
+      if (
+        json.type ===
+        "thinking"
+      ) {
+
+        setMessages(prev => {
+
+          const copy = [...prev];
+
+          copy[
+            copy.length - 1
+          ] = {
+            role: "assistant",
+            content:
+              `Đang phân tích bước ${json.step + 1}...`
+          };
+
+          return copy;
+        });
+
+      }
+
+      if (
+        json.type ===
+        "tool"
+      ) {
+
+        setMessages(prev => {
+
+          const copy = [...prev];
+
+          copy[
+            copy.length - 1
+          ] = {
+            role: "assistant",
+            content:
+              `Đang chạy ${json.tool}...`
+          };
+
+          return copy;
+        });
+
+      }
+
+      if (
+        json.type ===
+        "patch"
+      ) {
+
+        setMessages(prev => {
+
+          const copy = [...prev];
+
+          copy[
+            copy.length - 1
+          ] = {
+            role: "assistant",
+            content:
+              `Đang sửa file ${json.file}...`
+          };
+
+          return copy;
+        });
+
+      }
+
+      if (
+        json.type ===
+        "validate"
+      ) {
+
+        setMessages(prev => {
+
+          const copy = [...prev];
+
+          copy[
+            copy.length - 1
+          ] = {
+            role: "assistant",
+            content:
+              `Đang kiểm tra lỗi ${json.file}...`
+          };
+
+          return copy;
+        });
+
+      }
+
+      if (
+        json.type ===
+        "done"
+      ) {
+
+        finalText =
+          json.final || "";
+
+      }
+
+    } catch {}
+
+  }
+
+}
 
 
 		setMessages((prev) => {
