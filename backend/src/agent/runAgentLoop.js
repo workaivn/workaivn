@@ -527,7 +527,9 @@ JSON only.
 
 	  parsed.PATCH?.length ||
 
-	  parsed.patch?.length
+	  parsed.patch?.length ||
+
+	  parsed.tool === "APPLY_PATCH"
 
 	) {
 
@@ -551,7 +553,7 @@ JSON only.
 
 		continue;
 
-	  } {
+	  }
 
 	  const criticResponse =
 		await askAI({
