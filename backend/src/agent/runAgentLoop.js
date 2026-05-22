@@ -201,6 +201,12 @@ Patch the actual root cause.
 6. Identify likely root cause.
 7. Verify reasoning against actual code.
 8. Generate minimal accurate patch.
+8.5 BEFORE PATCHING:
+- prove the root cause using actual code evidence
+- identify the exact failing line
+- explain why alternative hypotheses are wrong
+- explain why the patch changes runtime behavior
+- never patch defensive conditions unless evidence proves null/undefined failure
 9. Avoid hallucinated code.
 10. Never generate patches before understanding the code.
 
@@ -242,7 +248,21 @@ SELF-REFLECTION RULES:
 - Build reasoning incrementally.
 - Think like a senior debugging engineer.
 7. DONE
+After APPLY_PATCH:
 
+- decide whether runtime validation is needed
+- if the patch changes:
+  - async logic
+  - rendering
+  - upload flow
+  - API response
+  - React state
+  - imports
+  - backend execution
+
+then use RUN_TERMINAL before DONE
+
+Do not finish immediately after patching.
 IMPORTANT:
 
 Return ONLY valid JSON.
@@ -263,6 +283,13 @@ TOOL FORMAT:
   "tool": "SEARCH_CODE",
   "args": {
     "query": "upload"
+  }
+}
+
+{
+  "tool": "RUN_TERMINAL",
+  "args": {
+    "command": "npm run build"
   }
 }
 
@@ -357,7 +384,7 @@ JSON only.
 		`TOOL HISTORY:
 
 		${JSON.stringify(
-		  history,
+		  history.slice(-8),
 		  null,
 		  2
 		)}`
@@ -503,6 +530,131 @@ JSON only.
 	  parsed.patch?.length
 
 	) {
+
+	  if (
+
+		memory.discoveredFiles.length < 2
+
+	  ) {
+
+		history.push({
+
+		  type: "warning",
+
+		  text:
+			"Patch rejected: insufficient code context",
+
+		  time:
+			Date.now()
+
+		});
+
+		continue;
+
+	  } {
+
+	  const criticResponse =
+		await askAI({
+
+		  messages: [
+
+			{
+			  role: "system",
+
+			  content:
+				`You are a brutal senior code reviewer.
+
+				Reject patches that:
+				- add useless null checks
+				- do not change runtime behavior
+				- are speculative
+				- are not supported by evidence
+				- patch symptoms instead of root cause
+				- do not directly relate to the user bug
+
+				If the user bug is image preview related,
+				the patch must directly affect:
+				- rendering
+				- state
+				- upload flow
+				- response payload
+				- image URL
+				- frontend display
+
+				Reject patches that only add defensive null checks
+				without fixing image preview behavior.
+
+				Return ONLY valid JSON.
+
+				APPROVE:
+				{
+				  "approve": true
+				}
+
+				REJECT:
+				{
+				  "approve": false,
+				  "reason": "Patch is speculative"
+				}`
+			},
+
+			{
+			  role: "user",
+
+			  content:
+	JSON.stringify(
+	  {
+		patch: parsed,
+		memory,
+		history
+	  },
+	  null,
+	  2
+	)
+			}
+
+		  ]
+
+		});
+
+	  let critic = null;
+
+	  try {
+
+		critic =
+		  JSON.parse(
+			criticResponse
+		  );
+
+	  } catch {
+
+		critic = {
+		  approve: false,
+		  reason:
+			"Critic invalid JSON"
+		};
+
+	  }
+
+	  if (
+		!critic.approve
+	  ) {
+
+		history.push({
+
+		  type: "warning",
+
+		  text:
+			`Patch rejected: ${critic.reason}`,
+
+		  time:
+			Date.now()
+
+		});
+
+		continue;
+
+	  }
 
 	  return {
 
@@ -819,6 +971,12 @@ if (
 	   Decide what to inspect next.`
 
 	);
+	
+	memory.reflections =
+	  limitMemory(
+		memory.reflections,
+		10
+	  );
 	
 	memory.evidence.push({
 
@@ -1158,29 +1316,21 @@ if (
 		  "APPLY_PATCH"
 		) {
 
-		  return {
+		  history.push({
 
-			success: true,
+			type: "status",
 
-			final:
-			  JSON.stringify(
-				{
-				  PATCH: [
-					parsed.args
-				  ]
-				},
-				null,
-				2
-			  ),
+			text:
+			  "Patch applied. Continue validating.",
 
-			patch:
-			  parsed.args,
+			time:
+			  Date.now()
 
-			history
+		  });
 
-		  };
+		  continue;
 
-		} 
+		}
 
     }
 	
