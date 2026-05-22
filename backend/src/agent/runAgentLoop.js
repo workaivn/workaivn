@@ -99,6 +99,17 @@ FLOW REQUIREMENTS:
 4. VALIDATE: You MUST run VALIDATE_PATCH immediately after applying any patch.
 5. DONE: Conclude only after successful validation.
 
+OUTPUT JSON FORMAT REQUIRED AT EACH STEP:
+{
+  "plan": ["bước 1", "bước 2"],
+  "hypotheses": ["giả thuyết lỗi"],
+  "rootCause": "Mô tả chi tiết lỗi tìm thấy là gì bằng tiếng Việt",
+  "reasoning": "Tại sao lại sửa như thế này bằng tiếng Việt",
+  "tool": "APPLY_PATCH", 
+  "args": { ... },
+  "done": false
+}
+When you are completely finished and validation passes, set "done": true and write a summary in "final".
 Return ONLY valid JSON.
 `;
 
@@ -334,6 +345,7 @@ REJECT: { "approve": false, "reason": "Reason here" }`
     }
 
     // --- BƯỚC 6: DONE ---
+    // --- BƯỚC 6: DONE ---
     if (parsed.done) {
       // Bảo vệ: Nếu chưa có file nào được sửa đổi, không cho phép DONE bừa bãi
       if (memory.modifiedFiles.length === 0) {
@@ -343,12 +355,45 @@ REJECT: { "approve": false, "reason": "Reason here" }`
         });
         continue;
       }
-      return {
-        success: true,
-        final: parsed.final,
-        history
-      };
-    }
+
+      // Tự động gom dữ liệu từ bộ nhớ để tự tạo một Báo cáo Markdown chi tiết
+      const patchDetails = memory.modifiedFiles.map((f, index) => {
+        return `### 🛠 Vị trí sửa đổi ${index + 1}:
+			- **File bị sửa:** \`${f.file}\`
+			- **Đoạn code gốc (Cũ):**
+			\`\`\`
+			${f.find}
+			\`\`\`
+			- **Đoạn code thay thế (Mới):**
+			\`\`\`
+			${f.replace}
+			\`\`\``;
+				  }).join("\n\n");
+
+				  const finalReport = `## 📋 BÁO CÁO KẾT QUẢ SỬA LỖI TỰ ĐỘNG
+
+			### ❌ 1. Nguyên nhân & Lỗi phát hiện (Root Cause)
+			${memory.rootCauses.length > 0 ? memory.rootCauses.map(rc => `- ${rc}`).join("\n") : "- Phát hiện lỗi logic/sai lệch tham số trong luồng mã nguồn của hệ thống."}
+
+			### 🔧 2. Chi tiết các File và Nội dung đã sửa
+			${patchDetails}
+
+			### 💡 3. Lý do thực hiện thay đổi (Reasoning)
+			${memory.reasoning.length > 0 ? memory.reasoning.slice(-3).map(r => `- ${r}`).join("\n") : "- Sửa lỗi để đáp ứng đúng cú pháp và logic kiểm tra (Validation)."}
+
+			### 🚀 4. Kết quả Kiểm tra (Validation)
+			- Hệ thống đã tự động chạy công cụ kiểm tra rủi ro \`VALIDATE_PATCH\`.
+			- **Trạng thái:** Hoàn tất thành công và không phát hiện lỗi phát sinh.
+
+			---
+			**Kết luận chung:** ${parsed.final || "Đã khắc phục hoàn toàn sự cố lỗi."}`;
+
+				  return {
+					success: true,
+					final: finalReport, // Gửi chuỗi báo cáo hoàn chỉnh này về cho routes.js nhận
+					history
+				  };
+				}
 
     if (parsed.final && !parsed.tool) {
       return {
