@@ -104,7 +104,21 @@ AVAILABLE TOOLS:
 - APPLY_PATCH
 - LIST_FILES
 - SEARCH_CODE
-- RUN_TERMINAL
+- VALIDATE_PATCH
+
+VALIDATE_PATCH checks:
+- syntax risks
+- runtime risks
+- frontend/backend mismatch
+- useless patches
+- duplicate fixes
+- invalid imports
+- invalid JSX
+- non-functional fixes
+
+Do NOT run npm build commands.
+Do NOT assume full local project exists.
+Validate logically from uploaded files only.
 
 CRITICAL RULES:
 
@@ -235,7 +249,7 @@ WORKFLOW:
 2. READ_FILE
 3. ANALYZE
 4. APPLY_PATCH
-5. RUN_TERMINAL
+5. VALIDATE_PATCH
 6. REFLECT
 SELF-REFLECTION RULES:
 
@@ -293,12 +307,6 @@ TOOL FORMAT:
   }
 }
 
-{
-  "tool": "RUN_TERMINAL",
-  "args": {
-    "command": "npm run build"
-  }
-}
 
 REFLECTION FORMAT:
 
@@ -740,9 +748,40 @@ JSON only.
 		  // first planning pass
 		  if (!samePlan) {
 
-			continue;
+			  history.push({
 
-		  }
+				type: "status",
+
+				text:
+				  "New plan accepted",
+
+				time:
+				  Date.now()
+
+			  });
+
+			  continue;
+
+			}
+			
+			if (
+
+			  samePlan &&
+
+			  memory.discoveredFiles.length < 2
+
+			) {
+
+			  messages.push({
+
+				role: "system",
+
+				content:
+				  "STOP REPEATING PLAN. EXECUTE READ_FILE OR SEARCH_CODE NOW."
+
+			  });
+
+			}
 
 		  // planner loop detected
 		  if (
@@ -1279,7 +1318,7 @@ if (
 
 	if (
 	  parsed.tool ===
-	  "RUN_TERMINAL"
+	  "VALIDATE_PATCH"
 	) {
 
 	  memory.terminalOutputs.push(
@@ -1331,20 +1370,25 @@ if (
 		memory.terminalOutputs,
 		10
 	  );
-	  const recentActions =
+	  const recentPlans =
 
 		  history
-			.slice(-5)
-			.map(
-			  x => x.tool || x.type
-			)
-			.join("|");
+			.slice(-8)
+			.filter(
+
+			  x =>
+
+				x.type === "warning" &&
+
+				x.text?.includes(
+				  "Planner loop detected"
+				)
+
+			);
 
 		if (
 
-		  recentActions.includes(
-			"warning|warning|warning"
-		  )
+		  recentPlans.length >= 3
 
 		) {
 
@@ -1358,6 +1402,8 @@ if (
 			history
 
 		  };
+
+		}
 
 	}
 	  console.log(
