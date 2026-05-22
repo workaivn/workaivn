@@ -1,6 +1,3 @@
-import { exec }
-  from "child_process";
-
 export async function searchCodeTool({
 
   query,
@@ -21,11 +18,80 @@ export async function searchCodeTool({
       String(
         f.content || ""
       );
+	 const lowerText =
+	  text.toLowerCase();
+
+	const fileName =
+	  String(
+		f.name || ""
+	  ).toLowerCase();
+
+	const pathName =
+	  String(
+		f.path || ""
+	  ).toLowerCase();
 
     const keywords =
 	  q.split(/\s+/);
 
 	let score = 0;
+	const ext =
+	  fileName
+		.split(".")
+		.pop();
+
+	if (
+	  q.includes("react") &&
+	  ["jsx","tsx"].includes(ext)
+	) {
+
+	  score += 25;
+
+	}
+
+	if (
+	  q.includes("backend") &&
+	  ["js","ts"].includes(ext)
+	) {
+
+	  score += 15;
+
+	}
+	const semanticMap = {
+
+			  image: [
+				"upload",
+				"multer",
+				"cloudinary",
+				"sharp",
+				"image",
+				"preview",
+				"src",
+				"url"
+			  ],
+
+			  auth: [
+				"jwt",
+				"token",
+				"authorization",
+				"login",
+				"user"
+			  ],
+
+			  chat: [
+				"message",
+				"conversation",
+				"chat",
+				"history"
+			  ],
+
+			  patch: [
+				"replace",
+				"applyPatch",
+				"writeFile"
+			  ]
+
+			};
 
 	for (const k of keywords) {
 
@@ -34,19 +100,53 @@ export async function searchCodeTool({
 	  ) continue;
 
 	  if (
+		  lowerText.includes(k)
+		) {
 
-		text
-		  .toLowerCase()
-		  .includes(k)
+		  score += 10;
 
+		}
+
+		if (
+		  fileName.includes(k)
+		) {
+
+		  score += 20;
+
+		}
+
+		if (
+		  pathName.includes(k)
+		) {
+
+		  score += 15;
+
+		}
+
+	}
+	for (const [topic, related] of Object.entries(semanticMap)) {
+
+	  if (
+		q.includes(topic)
 	  ) {
 
-		score += 10;
+		for (const word of related) {
+
+		  if (
+			lowerText.includes(
+			  word.toLowerCase()
+			)
+		  ) {
+
+			score += 12;
+
+		  }
+
+		}
 
 	  }
 
 	}
-
 	// semantic boosts
 
 	if (
@@ -79,30 +179,68 @@ export async function searchCodeTool({
 	  score > 0
 	) {
 
-      results.push({
+      const lines =
+		text.split("\n");
 
-        file:
-          f.name,
-		
-		score,
+		let preview = "";
 
-        preview:
-		  text
-			.split("\n")
+		const matchIndex =
+		  lines.findIndex(line =>
+
+			keywords.some(k =>
+
+			  line
+				.toLowerCase()
+				.includes(k)
+
+			)
+
+		  );
+
+		if (matchIndex >= 0) {
+
+		  preview = lines
+			.slice(
+			  Math.max(0, matchIndex - 10),
+			  matchIndex + 25
+			)
+			.join("\n");
+
+		} else {
+
+		  preview = lines
 			.slice(0, 40)
-			.join("\n")
+			.join("\n");
 
-      });
+		}
+
+		results.push({
+
+		  file:
+			f.name,
+
+		  score,
+
+		  preview
+
+		});
 
     }
 
   }
 
-  results.sort(
-	  (a,b) =>
-		b.score - a.score
-	);
+	results.sort((a,b) => {
 
+	  // exact filename boost
+	  if (
+		  a.file.toLowerCase() ===
+		  q
+		) return -1;
+
+	  return b.score - a.score;
+
+	});
+	
 	return {
 
 	  success: true,

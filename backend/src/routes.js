@@ -445,12 +445,9 @@ for (const file of activeFiles) {
 SUMMARY:
 ${file.summary || ""}
 
-IMPORTANT CODE SNIPPETS:
+FULL SOURCE:
 
-${file.chunks
-  ?.slice(0,2)
-  ?.map(c => c.content)
-  ?.join("\n\n")}
+${text.slice(0, 12000)}
 
 `;
 
@@ -810,12 +807,9 @@ for (const file of files) {
 	  text
 	)}
 
-	IMPORTANT CODE SNIPPETS:
+	FULL SOURCE:
 
-	${matchedChunks
-	  .slice(0, 2)
-	  .map(c => c.content)
-	  .join("\n\n")}
+	${text.slice(0, 12000)}
 
 	`;
 }

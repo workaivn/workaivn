@@ -45,7 +45,7 @@ export async function runAgentLoop({
 
   activeFiles = [],
 
-  maxSteps = 10
+  maxSteps = 20
 
 }) {
 
@@ -800,7 +800,7 @@ if (
 
 	  `After ${parsed.tool},
 	   learned:
-	   ${JSON.stringify(result).slice(0,300)}`
+	   ${JSON.stringify(result).slice(0,120)}`
 
 	);
 	
@@ -809,7 +809,7 @@ if (
 	  `Reflection after ${parsed.tool}:
 
 	   Tool result suggests:
-	   ${JSON.stringify(result).slice(0,400)}
+	   ${JSON.stringify(result).slice(0,120)}
 
 	   Current hypotheses:
 	   ${JSON.stringify(
