@@ -1,96 +1,58 @@
-import { askAI }
-  from "../services/aiRouter.js";
+import { askAI } from "../services/aiRouter.js";
+import { executeTool } from "./toolExecutor.js";
 
-import { executeTool }
-  from "./toolExecutor.js";
-
-function emitStatus(
-
-  history,
-
-  text
-
-) {
-
+function emitStatus(history, text) {
   history.push({
-
     type: "status",
-
     text,
-
-    time:
-      Date.now()
-
+    time: Date.now()
   });
-
 }
 
-function limitMemory(
-
-  arr,
-
-  max = 20
-
-) {
-
+function limitMemory(arr, max = 20) {
   return arr.slice(-max);
-
 }
 
 export async function runAgentLoop({
-
   messages = [],
-
   plan = "free",
-
   activeFiles = [],
-
   maxSteps = 20
-
 }) {
-
   const history = [];
-	const memory = {
-	  objective: "",
-	  discoveredFiles: [],
-	  discoveredFunctions: [],
-	  architectureKnowledge: [],
-	  fileRelationships: [],
-	  patchConfidence: [],
-	  searchedQueries: [],
-	  bugsFound: [],
-	  hypotheses: [],
-	  fixesAttempted: [],
-	  successfulFixes: [],
-	  successfulPatterns: [],
-	  failedFixes: [],
-	  rejectedHypotheses: [],
-	  currentPlan: [],
-	  reasoning: [],
-	  thinkingDepth: 0,
-	  reflections: [],
-	  nextActions: [],
-	  rootCauses: [],
-	  evidence: [],
-	  architectureSummary: "",
-	  patches: [],
-	  modifiedFiles: [],
-	  terminalOutputs: []
-	};
-	memory.objective =
+  const memory = {
+    objective: "",
+    discoveredFiles: [],
+    discoveredFunctions: [],
+    architectureKnowledge: [],
+    fileRelationships: [],
+    patchConfidence: [],
+    searchedQueries: [],
+    bugsFound: [],
+    hypotheses: [],
+    fixesAttempted: [],
+    successfulFixes: [],
+    successfulPatterns: [],
+    failedFixes: [],
+    rejectedHypotheses: [],
+    currentPlan: [],
+    reasoning: [],
+    thinkingDepth: 0,
+    reflections: [],
+    nextActions: [],
+    rootCauses: [],
+    evidence: [],
+    architectureSummary: "",
+    patches: [],
+    modifiedFiles: [],
+    terminalOutputs: []
+  };
 
-	  messages
-		?.slice(-1)?.[0]
-		?.content || "";
+  memory.objective = messages?.slice(-1)?.[0]?.content || "";
   let emptySearchCount = 0;
-  for (
-    let step = 0;
-    step < maxSteps;
-    step++
-  ) {
 
+  for (let step = 0; step < maxSteps; step++) {
     const system = `
-
 DO NOT TEACH THE USER.
 DO NOT EXPLAIN.
 DO NOT SHOW CODE EXAMPLES.
@@ -99,7 +61,6 @@ YOU MUST EXECUTE USING TOOLS.
 You are WorkAI Agent.
 
 AVAILABLE TOOLS:
-
 - READ_FILE
 - APPLY_PATCH
 - LIST_FILES
@@ -121,1337 +82,286 @@ Do NOT assume full local project exists.
 Validate logically from uploaded files only.
 
 CRITICAL RULES:
-
 - You MUST use tools.
 - NEVER answer directly without tools.
 - ALWAYS inspect code before fixing.
 - ALWAYS search relevant files first.
 - Search semantically, not literally.
-- If user mentions "preview image", also inspect upload, multer, image routes, file URLs, frontend rendering, response JSON, and image paths.
-- Infer related code concepts from the bug description.
-- Do not rely only on exact keyword matches.
 - Think like a senior software engineer debugging a real app.
 - NEVER invent file contents.
 - NEVER skip tool usage.
 - Think step-by-step.
-You are an elite senior software engineer AI agent.
 
-Your job is NOT to keyword search.
-Your job is to deeply understand the application architecture,
-trace code flows,
-reason about bugs,
-infer hidden causes,
-and generate accurate fixes.
-If evidence disproves a hypothesis,
-reject it and move to a better theory.
-Always inspect multiple related files before concluding.
-
-Do not generate patches immediately.
-
-First:
-- identify likely root causes
-- verify evidence
-- inspect execution flow
-- inspect related files
-- confirm the failure point
-
-Only patch after sufficient evidence exists.
-
-Before generating a patch:
-
-Explain:
-- why this code is the root cause
-- why the patch fixes it
-- what evidence supports the fix
-
-- Criticize your own reasoning.
-- Ask what assumptions may be wrong.
-- Ask whether another root cause exists.
-- Verify assumptions against actual code.
-- Avoid premature fixes.
-- Prefer evidence over guessing.
-
-
-IMPORTANT BEHAVIORS:
-
-- Think semantically, not literally.
-- Infer related systems from the user bug report.
-- Trace data flow across backend and frontend.
-- Understand uploads, rendering, APIs, state, URLs, middleware, database flow, and UI behavior.
-- Search by meaning, not exact words.
-- If user mentions "preview image":
-You MUST inspect BOTH:
-- backend upload logic
-- frontend rendering logic
-
-Never conclude from backend only.
-Never patch backend responses before inspecting frontend usage.
-  think about:
-  - upload routes
-  - multer
-  - cloudinary
-  - image URLs
-  - frontend rendering
-  - response JSON
-  - static serving
-  - image src
-  - React state
-  - message rendering
-
-REASONING PROCESS:
-
-1. Understand the user bug deeply.
-2. Infer related systems.
-3. Search relevant files semantically.
-4. Read the most relevant files.
-5. Trace execution flow.
-Trace data flow end-to-end.
-
-For upload/image bugs:
-- inspect request flow
-- inspect backend processing
-- inspect response payload
-- inspect frontend rendering
-- inspect state updates
-- inspect URL generation
-- inspect static serving
-- inspect image src rendering
-
-Do not patch the nearest code.
-Patch the actual root cause.
-6. Identify likely root cause.
-7. Verify reasoning against actual code.
-8. Generate minimal accurate patch.
-8.5 BEFORE PATCHING:
-- prove the root cause using actual code evidence
-- identify the exact failing line
-- explain why alternative hypotheses are wrong
-- explain why the patch changes runtime behavior
-- never patch defensive conditions unless evidence proves null/undefined failure
-9. Avoid hallucinated code.
-10. Never generate patches before understanding the code.
-
-CRITICAL:
-
-- NEVER repeat the same failed search.
-- NEVER repeat the same patch.
-- NEVER conclude too early.
-- NEVER rely on exact keyword matching.
-- NEVER invent functions or files.
-- ALWAYS reason from real uploaded code.
-- ALWAYS continue from previous memory state.
-
-You are thinking like Cursor, Claude Code, and ChatGPT combined.
-
-WORKFLOW:
-
-1. SEARCH_CODE
-2. READ_FILE
-3. ANALYZE
-4. APPLY_PATCH
-5. VALIDATE_PATCH
-6. REFLECT
-SELF-REFLECTION RULES:
-
-- After every tool result,
-  reflect deeply before next action.
-
-- Ask yourself:
-  - What did I learn?
-  - Which hypothesis became stronger?
-  - Which hypothesis became weaker?
-  - Explicitly reject weak hypotheses. 
-  - What should I inspect next?
-  - Did the tool result reveal architecture knowledge?
-  - Am I missing related files?
-
-- Avoid random searching.
-- Build reasoning incrementally.
-- Think like a senior debugging engineer.
-7. DONE
-After APPLY_PATCH:
-
-- decide whether runtime validation is needed
-- if the patch changes:
-  - async logic
-  - rendering
-  - upload flow
-  - API response
-  - React state
-  - imports
-  - backend execution
-
-then use RUN_TERMINAL before DONE
-
-Do not finish immediately after patching.
-IMPORTANT:
+FLOW REQUIREMENTS:
+1. PLAN: Define your investigation path.
+2. READ/SEARCH: Inspect codebases to find root causes.
+3. CRITIC & PATCH: Submit a patch to the critic, then apply it if approved.
+4. VALIDATE: You MUST run VALIDATE_PATCH immediately after applying any patch.
+5. DONE: Conclude only after successful validation.
 
 Return ONLY valid JSON.
-
-PLAN FORMAT:
-
-{
-  "plan": [
-    "Inspect upload routes",
-    "Trace image response flow",
-    "Check frontend rendering"
-  ]
-}
-
-TOOL FORMAT:
-
-{
-  "tool": "SEARCH_CODE",
-  "args": {
-    "query": "upload"
-  }
-}
-
-
-REFLECTION FORMAT:
-
-{
-  "reflection":
-    "The upload route exists, but image URLs may not be returned correctly.",
-    
-  "next":
-    "Inspect frontend image rendering"
-}
-
-DONE FORMAT:
-
-{
-  "done": true,
-  "final": "Task completed"
-}
-
-NO markdown.
-NO explanation.
-NO extra text.
-JSON only.
-
 `;
-	if (
-	  emptySearchCount >= 3
-	) {
 
-	  return {
-
-		final:
-	`Không tìm thấy đoạn code liên quan trong project.`,
-
-		history
-
-	  };
-
-	}
-    const aiResponse =
-      await askAI({
-
-        messages: [
-
-		  {
-			role: "system",
-			content: system
-		  },
-
-		  {
-			role: "system",
-			content:
-		`AGENT MEMORY:
-
-		${JSON.stringify(
-		  memory,
-		  null,
-		  2
-		)}`
-		  },
-
-		{
-		  role: "system",
-		  content:
-		`CURRENT PLAN:
-
-		${JSON.stringify(
-		  memory.currentPlan,
-		  null,
-		  2
-		)}`
-		},
-
-		{
-		  role: "system",
-		  content:
-		`CURRENT HYPOTHESES:
-
-		${JSON.stringify(
-		  memory.hypotheses,
-		  null,
-		  2
-		)}`
-		},
-
-		...messages,
-
-		{
-		  role: "system",
-		  content:
-		`TOOL HISTORY:
-
-		${JSON.stringify(
-		  history.slice(-8),
-		  null,
-		  2
-		)}`
-		},
-		
-		{
-		  role: "system",
-		  content:
-		`SELF REFLECTIONS:
-
-		${JSON.stringify(
-		  memory.reflections,
-		  null,
-		  2
-		)}`
-		},
-
-		{
-		  role: "system",
-		  content:
-		`NEXT ACTIONS:
-
-		${JSON.stringify(
-		  memory.nextActions,
-		  null,
-		  2
-		)}`
-		},
-		
-		{
-		  role: "system",
-		  content:
-		`ROOT CAUSES:
-
-		${JSON.stringify(
-		  memory.rootCauses,
-		  null,
-		  2
-		)}`
-		},
-			
-		{
-		  role: "system",
-		  content:
-		`ARCHITECTURE SUMMARY:
-
-		${memory.architectureSummary}`
-		},
-		
-		{
-		  role: "system",
-		  content:
-		`THINKING DEPTH:
-
-		${memory.thinkingDepth}`
-		},
-		
-		{
-		  role: "system",
-		  content:
-		`EVIDENCE:
-
-		${JSON.stringify(
-		  memory.evidence,
-		  null,
-		  2
-		)}`
-		},
-		
-		{
-		  role: "system",
-		  content:
-		`FAILED ATTEMPTS:
-
-		${JSON.stringify(
-		  memory.failedFixes,
-		  null,
-		  2
-		)}`
-		},
-		
-		 ],
-
-			mode: "agent",
-
-			plan
-
-		  });
-	  
-		
-	  console.log(
-		  "\n=== AGENT STEP ===",
-		  step
-		);
-
-		console.log(
-		  "RAW AI RESPONSE:\n",
-		  aiResponse
-		);
-
-    let parsed = null;
-
-    try {
-
-      parsed =
-        JSON.parse(aiResponse);
-
-    } catch {
-
+    if (emptySearchCount >= 3) {
       return {
-        success: false,
-        error:
-          "AI returned invalid JSON",
-        raw: aiResponse
-      };
-
-    }
-
-    /* =====================
-       DONE
-    ===================== */
-	const lastTool =
-	  history[
-		history.length - 1
-	  ];
-
-	if (
-
-	  parsed.done &&
-
-	  lastTool?.result?.success === false
-
-	) {
-
-	  continue;
-
-	}
-	
-	const detectedPatch =
-
-	  parsed.PATCH ||
-
-	  parsed.patch ||
-
-	  (
-		parsed.tool === "APPLY_PATCH"
-		  ? [parsed.args]
-		  : []
-	  );
-
-	if (
-
-	  Array.isArray(detectedPatch) &&
-
-	  detectedPatch.length > 0
-
-	) {
-
-	  if (
-
-		memory.discoveredFiles.length < 2
-
-	  ) {
-
-		history.push({
-
-		  type: "warning",
-
-		  text:
-			"Patch rejected: insufficient code context",
-
-		  time:
-			Date.now()
-
-		});
-
-		continue;
-
-	  }
-
-	  const criticResponse =
-		await askAI({
-
-		  messages: [
-
-			{
-			  role: "system",
-
-			  content:
-				`You are a brutal senior code reviewer.
-
-				Reject patches that:
-				- add useless null checks
-				- do not change runtime behavior
-				- are speculative
-				- are not supported by evidence
-				- patch symptoms instead of root cause
-				- do not directly relate to the user bug
-				Reject patches if:
-				- only one file was inspected
-				- frontend rendering was never inspected
-				- backend response was never cross-checked with frontend usage
-
-				If the user bug is image preview related,
-				the patch must directly affect:
-				- rendering
-				- state
-				- upload flow
-				- response payload
-				- image URL
-				- frontend display
-
-				Reject patches that only add defensive null checks
-				without fixing image preview behavior.
-
-				Return ONLY valid JSON.
-
-				APPROVE:
-				{
-				  "approve": true
-				}
-
-				REJECT:
-				{
-				  "approve": false,
-				  "reason": "Patch is speculative"
-				}`
-			},
-
-			{
-			  role: "user",
-
-			  content:
-	JSON.stringify(
-	  {
-		patch: detectedPatch,
-		memory,
-		history
-	  },
-	  null,
-	  2
-	)
-			}
-
-		  ]
-
-		});
-
-	  let critic = null;
-
-	  try {
-
-		critic =
-		  JSON.parse(
-			criticResponse
-		  );
-
-	  } catch {
-
-		critic = {
-		  approve: false,
-		  reason:
-			"Critic invalid JSON"
-		};
-
-	  }
-
-	  if (
-		!critic.approve
-	  ) {
-
-		history.push({
-
-		  type: "warning",
-
-		  text:
-			`Patch rejected: ${critic.reason}`,
-
-		  time:
-			Date.now()
-
-		});
-
-		continue;
-
-	  }
-
-	  history.push({
-
-		  type: "critic",
-
-		  text:
-			"Patch approved by critic",
-
-		  time:
-			Date.now()
-
-		});
-
-		const patchResult =
-		  await executeTool(
-
-			"APPLY_PATCH",
-
-			detectedPatch[0],
-
-			activeFiles || []
-
-		  );
-
-		history.push({
-
-		  type: "patch",
-
-		  result:
-			patchResult,
-
-		  time:
-			Date.now()
-
-		});
-
-		continue;
-
-	}
-	if (
-		Array.isArray(parsed.plan)
-		) {
-
-		  const samePlan =
-
-			JSON.stringify(
-			  parsed.plan
-			) ===
-
-			JSON.stringify(
-			  memory.currentPlan
-			);
-
-		  memory.currentPlan =
-			limitMemory(
-			  parsed.plan,
-			  10
-			);
-
-		  // first planning pass
-		  if (!samePlan) {
-
-			  history.push({
-
-				type: "status",
-
-				text:
-				  "New plan accepted",
-
-				time:
-				  Date.now()
-
-			  });
-
-			  continue;
-
-			}
-			
-			if (
-
-			  samePlan &&
-
-			  memory.discoveredFiles.length < 2
-
-			) {
-
-			  messages.push({
-
-				role: "system",
-
-				content:
-				  "STOP REPEATING PLAN. EXECUTE READ_FILE OR SEARCH_CODE NOW."
-
-			  });
-
-			}
-
-		  // planner loop detected
-		  if (
-			!parsed.tool &&
-			!parsed.done
-		  ) {
-
-			history.push({
-
-			  type: "warning",
-
-			  text:
-				"Planner loop detected",
-
-			  time:
-				Date.now()
-
-			});
-
-			messages.push({
-
-			  role: "system",
-
-			  content:
-				"STOP PLANNING. EXECUTE A TOOL NOW."
-
-			});
-
-			continue;
-
-		  }
-
-		}
-
-	if (
-	  Array.isArray(
-		parsed.hypotheses
-	  )
-	) {
-
-	  memory.hypotheses =
-		limitMemory(
-
-		  [
-
-			...memory.hypotheses,
-
-			...parsed.hypotheses
-
-		  ],
-
-		  20
-
-		);
-	}
-	
-	if (
-  parsed.reflection
-) {
-
-  memory.reflections.push(
-    parsed.reflection
-  );
-
-}
-
-if (
-  parsed.next
-) {
-
-  memory.nextActions.push(
-    parsed.next
-  );
-
-}
-
-if (
-  parsed.rootCause
-) {
-
- memory.rootCauses =
-  limitMemory(
-
-    [
-
-      ...memory.rootCauses,
-
-      parsed.rootCause
-
-    ],
-
-    20
-
-  );
-
-}
-
-	if (
-	  Array.isArray(
-		parsed.rejectedHypotheses
-	  )
-	) {
-
-	  memory.rejectedHypotheses =
-		limitMemory(
-
-		  [
-
-			...memory.rejectedHypotheses,
-
-			...parsed.rejectedHypotheses
-
-		  ],
-
-		  20
-
-		);
-
-	}
-	
-    if (parsed.done) {
-
-      return {
-        success: true,
-        final:
-          parsed.final,
+        final: `Không tìm thấy đoạn code liên quan trong project.`,
         history
       };
-
     }
-	
-	if (
 
-	  parsed.final &&
+    const aiResponse = await askAI({
+      messages: [
+        { role: "system", content: system },
+        { role: "system", content: `AGENT MEMORY:\n${JSON.stringify(memory, null, 2)}` },
+        { role: "system", content: `CURRENT PLAN:\n${JSON.stringify(memory.currentPlan, null, 2)}` },
+        { role: "system", content: `CURRENT HYPOTHESES:\n${JSON.stringify(memory.hypotheses, null, 2)}` },
+        ...messages,
+        { role: "system", content: `TOOL HISTORY:\n${JSON.stringify(history.slice(-8), null, 2)}` },
+        { role: "system", content: `SELF REFLECTIONS:\n${JSON.stringify(memory.reflections, null, 2)}` },
+        { role: "system", content: `NEXT ACTIONS:\n${JSON.stringify(memory.nextActions, null, 2)}` },
+        { role: "system", content: `ROOT CAUSES:\n${JSON.stringify(memory.rootCauses, null, 2)}` },
+        { role: "system", content: `ARCHITECTURE SUMMARY:\n${memory.architectureSummary}` },
+        { role: "system", content: `THINKING DEPTH:\n${memory.thinkingDepth}` },
+        { role: "system", content: `EVIDENCE:\n${JSON.stringify(memory.evidence, null, 2)}` },
+        { role: "system", content: `FAILED ATTEMPTS:\n${JSON.stringify(memory.failedFixes, null, 2)}` }
+      ],
+      mode: "agent",
+      plan
+    });
 
-	  !parsed.tool
+    console.log("\n=== AGENT STEP ===", step);
+    console.log("RAW AI RESPONSE:\n", aiResponse);
 
-	) {
+    let parsed = null;
+    try {
+      parsed = JSON.parse(aiResponse);
+    } catch {
+      return {
+        success: false,
+        error: "AI returned invalid JSON",
+        raw: aiResponse
+      };
+    }
 
-	  return {
+    // 1. Cập nhật Kế hoạch (PLAN)
+    if (Array.isArray(parsed.plan)) {
+      const samePlan = JSON.stringify(parsed.plan) === JSON.stringify(memory.currentPlan);
+      memory.currentPlan = limitMemory(parsed.plan, 10);
 
-		success: false,
+      if (!samePlan) {
+        emitStatus(history, "New plan accepted");
+      }
 
-		final:
-		  parsed.final,
+      if (samePlan && memory.discoveredFiles.length < 2) {
+        messages.push({
+          role: "system",
+          content: "STOP REPEATING PLAN. EXECUTE READ_FILE OR SEARCH_CODE NOW."
+        });
+      }
+    }
 
-		history
+    // Cập nhật các thông tin Memory cơ bản
+    if (Array.isArray(parsed.hypotheses)) memory.hypotheses = limitMemory([...memory.hypotheses, ...parsed.hypotheses], 20);
+    if (parsed.reflection) memory.reflections.push(parsed.reflection);
+    if (parsed.next) memory.nextActions.push(parsed.next);
+    if (parsed.rootCause) memory.rootCauses = limitMemory([...memory.rootCauses, parsed.rootCause], 20);
+    if (Array.isArray(parsed.rejectedHypotheses)) memory.rejectedHypotheses = limitMemory([...memory.rejectedHypotheses, ...parsed.rejectedHypotheses], 20);
 
-	  };
+    // 2. Kiểm tra và Đánh chặn để đưa vào quy trình CRITIC -> PATCH
+    const detectedPatch = parsed.PATCH || parsed.patch || (parsed.tool === "APPLY_PATCH" ? [parsed.args] : []);
+    const hasPatchAction = Array.isArray(detectedPatch) && detectedPatch.length > 0;
 
-	}
+    if (hasPatchAction) {
+      if (memory.discoveredFiles.length < 2) {
+        history.push({
+          type: "warning",
+          text: "Patch rejected: insufficient code context (Read at least 2 files before patching)",
+          time: Date.now()
+        });
+        continue;
+      }
 
-    /* =====================
-       TOOL
-    ===================== */
+      // --- BƯỚC 3: CRITIC ---
+      const criticResponse = await askAI({
+        messages: [
+          {
+            role: "system",
+            content: `You are a brutal senior code reviewer.
+Reject patches that add useless null checks, do not change runtime behavior, or lack evidence.
+Return ONLY valid JSON.
+APPROVE: { "approve": true }
+REJECT: { "approve": false, "reason": "Reason here" }`
+          },
+          {
+            role: "user",
+            content: JSON.stringify({ patch: detectedPatch, memory, history }, null, 2)
+          }
+        ]
+      });
 
-    if (parsed.tool) {
-		
-		if (
+      let critic = null;
+      try {
+        critic = JSON.parse(criticResponse);
+      } catch {
+        critic = { approve: false, reason: "Critic invalid JSON" };
+      }
 
-		  parsed.tool ===
-		  "SEARCH_CODE"
-
-		) {
-
-		  const q =
-			parsed.args?.query;
-
-		  if (
-
-			  q &&
-
-			  memory.searchedQueries.includes(q)
-
-			) {
-
-			  emptySearchCount++;
-
-			  continue;
-
-			}
-
-		}
-		
-	const result =
-        await executeTool(
-
-		  parsed.tool,
-
-		  parsed.args || {},
-
-		  activeFiles || []
-
-		);
-		
-		if (
-		  result?.success === false
-		) {
-
-		  memory.failedFixes.push({
-
-			tool:
-			  parsed.tool,
-
-			args:
-			  parsed.args,
-
-			error:
-			  result?.error ||
-
-			  result?.stderr ||
-
-			  "Unknown error"
-
-		  });
-		  
-		  
-		  memory.failedFixes =
-		  limitMemory(
-			memory.failedFixes,
-			20
-		  );
-
-		}
-		
-		
-		console.log(
-		  "TOOL RESULT:\n",
-		  JSON.stringify(
-			result,
-			null,
-			2
-		  )
-		);
+      if (!critic.approve) {
+        history.push({
+          type: "warning",
+          text: `Patch rejected by Critic: ${critic.reason}`,
+          time: Date.now()
+        });
+        continue;
+      }
 
       history.push({
-
-        step,
-
-        tool:
-          parsed.tool,
-
-        args:
-          parsed.args,
-
-        result
-
+        type: "critic",
+        text: "Patch approved by critic",
+        time: Date.now()
       });
-	  
-	  memory.thinkingDepth++;
-	  memory.reasoning.push(
 
-	  `After ${parsed.tool},
-	   learned:
-	   ${JSON.stringify(result).slice(0,120)}`
-
-	);
-	
-	memory.reflections.push(
-
-	  `Reflection after ${parsed.tool}:
-
-	   Tool result suggests:
-	   ${JSON.stringify(result).slice(0,120)}
-
-	   Current hypotheses:
-	   ${JSON.stringify(
-		 memory.hypotheses
-	   ).slice(0,300)}
-
-	   Decide what to inspect next.`
-
-	);
-	
-	memory.reflections =
-	  limitMemory(
-		memory.reflections,
-		10
-	  );
-	
-	memory.evidence.push({
-
-	  tool:
-		parsed.tool,
-
-	  evidence:
-		JSON.stringify(result)
-		  .slice(0,300)
-
-	});
-
-	memory.evidence =
-	  limitMemory(
-		memory.evidence,
-		20
-	  );
-	
-	  if (
-
-	  parsed.tool ===
-		"SEARCH_CODE"
-
-	  &&
-
-	  result?.success
-
-	  &&
-
-	  Array.isArray(
-		result.results
-	  )
-
-	  &&
-
-	  result.results.length === 0
-
-	) {
-
-	  emptySearchCount++;
-
-	} else {
-
-	  emptySearchCount = 0;
-
-	}
-	  
-	  /* =====================
-	   MEMORY UPDATE
-	===================== */
-	if (
-	  parsed.tool ===
-	  "SEARCH_CODE"
-	) {
-
-	  if (
-		parsed.args?.query &&
-		!memory.searchedQueries.includes(
-		  parsed.args.query
-		)
-	  ) {
-
-		memory.searchedQueries.push(
-		  parsed.args.query
-		);
-
-	  }
-
-	  memory.thinkingDepth++;
-	  memory.reasoning.push(
-		`Searched codebase for: ${parsed.args.query}`
-	  );
-		const query =
-		  String(
-			parsed.args?.query || ""
-		  ).toLowerCase();
-
-		if (
-		  query.includes("image") ||
-		  query.includes("upload") ||
-		  query.includes("preview")
-		) {
-
-		  memory.nextActions.push(
-			"Inspect frontend rendering components"
-		  );
-
-		}
-	}
-
-	if (
-	  parsed.tool ===
-	  "READ_FILE"
-	) {
-
-	  if (
-		parsed.args?.path &&
-		!memory.discoveredFiles.includes(
-		  parsed.args.path
-		)
-	  ) {
-
-		memory.discoveredFiles.push(
-		  parsed.args.path
-		);
-
-	  }
-
-	  memory.thinkingDepth++;
-	  memory.reasoning.push(
-		`Read file: ${parsed.args.path}`
-	  );
-	  
-	  memory.architectureKnowledge.push(
-
-	  `${parsed.args.path} is part of the application flow`
-
-	);
-	
-	memory.architectureSummary =
-
-	  limitMemory(
-
-		memory.architectureKnowledge,
-
-		10
-
-	  ).join("\n");
-	
-	const content =
-	  String(
-		result?.content || ""
-	  );
-
-	const imports =
-
-	  [...content.matchAll(
-		/import\s+.*?from\s+["'](.+?)["']/g
-	  )]
-
-	  .map(x => x[1]);
-
-	if (
-	  imports.length
-	) {
-
-	  memory.fileRelationships.push({
-
-		file:
-		  parsed.args.path,
-
-		imports
-
-	  });
-
-	}
-
-	}
-
-	if (
-	  parsed.tool ===
-	  "APPLY_PATCH"
-	) {
-
-		const alreadyPatched =
-
-			  memory.modifiedFiles.some(
-
-				x =>
-
-				  x.file ===
-					parsed.args?.file
-
-				  &&
-
-				  x.find ===
-					parsed.args?.find
-
-			  );
-
-			if (
-			  alreadyPatched
-			) {
-
-			  continue;
-
-			}
-
-
-	  memory.patches.push(
-		parsed.args
-	  );
-	  memory.patchConfidence.push({
-
-	  file:
-		parsed.args?.file,
-
-	  confidence:
-		0.75,
-
-	  reasoning:
-		memory.hypotheses.slice(-2)
-
-	});
-	memory.patchConfidence =
-	  limitMemory(
-		memory.patchConfidence,
-		20
-	  );
-	memory.modifiedFiles.push({
-
-	  file:
-		parsed.args?.file,
-
-	  find:
-		parsed.args?.find,
-
-	  replace:
-		parsed.args?.replace,
-
-	  time:
-		Date.now()
-
-	});
-	  memory.successfulFixes.push(
-		parsed.args?.file ||
-		"unknown"
-	  );
-	  
-	  memory.successfulPatterns.push({
-
-		  tool:
-			parsed.tool,
-
-		  file:
-			parsed.args?.file,
-
-		  pattern:
-			parsed.args?.find
-
-		});
-		
-		memory.successfulPatterns =
-		  limitMemory(
-			memory.successfulPatterns,
-			20
-		  );
-
-	  memory.thinkingDepth++;
-	  memory.reasoning.push(
-		`Generated patch for ${parsed.args?.file}`
-	  );
-
-	}
-
-	if (
-	  parsed.tool ===
-	  "VALIDATE_PATCH"
-	) {
-
-	  memory.terminalOutputs.push(
-
-		String(
-		  result?.output || ""
-		).slice(0, 2000)
-
-	  );
-
-	}
-	
-	memory.reflections =
-	  limitMemory(
-		memory.reflections,
-		20
-	  );
-	memory.reasoning =
-	  limitMemory(
-		memory.reasoning,
-		30
-	  );
-
-	memory.discoveredFiles =
-	  limitMemory(
-		memory.discoveredFiles,
-		30
-	  );
-
-	memory.searchedQueries =
-	  limitMemory(
-		memory.searchedQueries,
-		20
-	  );
-
-	memory.patches =
-	  limitMemory(
-		memory.patches,
-		10
-	  );
-	  memory.modifiedFiles =
-	  limitMemory(
-		memory.modifiedFiles,
-		20
-	  );
-
-	memory.terminalOutputs =
-	  limitMemory(
-		memory.terminalOutputs,
-		10
-	  );
-	  const recentPlans =
-
-		  history
-			.slice(-8)
-			.filter(
-
-			  x =>
-
-				x.type === "warning" &&
-
-				x.text?.includes(
-				  "Planner loop detected"
-				)
-
-			);
-
-		if (
-
-		  recentPlans.length >= 3
-
-		) {
-
-		  return {
-
-			success: false,
-
-			final:
-			  "Agent stuck in planning loop.",
-
-			history
-
-		  };
-
-		}
-
-	}
-	  console.log(
-		  "HISTORY LENGTH:",
-		  history.length
-		);
-		console.log(
-		  "MODIFIED FILES:",
-		  JSON.stringify(
-			memory.modifiedFiles,
-			null,
-			2
-		  )
-		);
-		if (
-		  parsed.tool ===
-		  "APPLY_PATCH"
-		) {
-
-		  history.push({
-
-			type: "status",
-
-			text:
-			  "Patch applied. Continue validating.",
-
-			time:
-			  Date.now()
-
-		  });
-
-		  continue;
-
-		}
-
+      // --- BƯỚC 4: PATCH (APPLY_PATCH) ---
+      const patchResult = await executeTool("APPLY_PATCH", detectedPatch[0], activeFiles || []);
+      
+      history.push({
+        step,
+        tool: "APPLY_PATCH",
+        args: detectedPatch[0],
+        result: patchResult,
+        time: Date.now()
+      });
+
+      if (patchResult?.success) {
+        memory.patches.push(detectedPatch[0]);
+        memory.modifiedFiles.push({
+          file: detectedPatch[0]?.file,
+          find: detectedPatch[0]?.find,
+          replace: detectedPatch[0]?.replace,
+          time: Date.now()
+        });
+        memory.successfulFixes.push(detectedPatch[0]?.file || "unknown");
+        memory.thinkingDepth++;
+        memory.reasoning.push(`Generated patch for ${detectedPatch[0]?.file}`);
+
+        // --- BƯỚC 5: VALIDATE (Tự động kích hoạt VALIDATE_PATCH ngay lập tức sau khi patch) ---
+        emitStatus(history, `Running validation for patch on ${detectedPatch[0]?.file}`);
+        const valResult = await executeTool("VALIDATE_PATCH", { file: detectedPatch[0]?.file }, activeFiles || []);
+        
+        history.push({
+          step,
+          tool: "VALIDATE_PATCH",
+          args: { file: detectedPatch[0]?.file },
+          result: valResult,
+          time: Date.now()
+        });
+
+        if (valResult?.output) {
+          memory.terminalOutputs.push(String(valResult.output).slice(0, 2000));
+        }
+      } else {
+        memory.failedFixes.push({
+          tool: "APPLY_PATCH",
+          args: detectedPatch[0],
+          error: patchResult?.error || "Unknown patch error"
+        });
+      }
+      continue; // Chuyển sang bước tiếp theo sau khi đã Patch & Validate xong
     }
-	
+
+    // 3. Xử lý các TOOL khác ngoại trừ APPLY_PATCH (Read / Search / Validate thủ công)
+    if (parsed.tool && parsed.tool !== "APPLY_PATCH") {
+      if (parsed.tool === "SEARCH_CODE") {
+        const q = parsed.args?.query;
+        if (q && memory.searchedQueries.slice(-3).includes(q)) {
+          emptySearchCount++;
+          continue;
+        }
+      }
+
+      const result = await executeTool(parsed.tool, parsed.args || {}, activeFiles || []);
+
+      if (result?.success === false) {
+        memory.failedFixes.push({
+          tool: parsed.tool,
+          args: parsed.args,
+          error: result?.error || result?.stderr || "Unknown error"
+        });
+      }
+
+      history.push({
+        step,
+        tool: parsed.tool,
+        args: parsed.args,
+        result
+      });
+
+      // Cập nhật bộ nhớ sau khi chạy Tool dữ liệu (Read/Search)
+      memory.thinkingDepth++;
+      memory.reasoning.push(`After ${parsed.tool}, learned: ${JSON.stringify(result).slice(0, 120)}`);
+      memory.evidence.push({ tool: parsed.tool, evidence: JSON.stringify(result).slice(0, 300) });
+
+      if (parsed.tool === "SEARCH_CODE") {
+        if (parsed.args?.query && !memory.searchedQueries.includes(parsed.args.query)) {
+          memory.searchedQueries.push(parsed.args.query);
+        }
+        if (result?.success && Array.isArray(result.results) && result.results.length === 0) {
+          emptySearchCount++;
+        } else {
+          emptySearchCount = 0;
+        }
+      }
+
+      if (parsed.tool === "READ_FILE") {
+        if (parsed.args?.path && !memory.discoveredFiles.includes(parsed.args.path)) {
+          memory.discoveredFiles.push(parsed.args.path);
+        }
+        memory.architectureKnowledge.push(`${parsed.args.path} is part of the application flow`);
+        memory.architectureSummary = limitMemory(memory.architectureKnowledge, 10).join("\n");
+
+        const content = String(result?.content || "");
+        const imports = [...content.matchAll(/import\s+.*?from\s+["'](.+?)["']/g)].map(x => x[1]);
+        if (imports.length) {
+          memory.fileRelationships.push({ file: parsed.args.path, imports });
+        }
+      }
+
+      if (parsed.tool === "VALIDATE_PATCH" && result?.output) {
+        memory.terminalOutputs.push(String(result.output).slice(0, 2000));
+      }
+
+      continue;
+    }
+
+    // --- BƯỚC 6: DONE ---
+    if (parsed.done) {
+      // Bảo vệ: Nếu chưa có file nào được sửa đổi, không cho phép DONE bừa bãi
+      if (memory.modifiedFiles.length === 0) {
+        messages.push({
+          role: "system",
+          content: "You cannot mark DONE without proposing and validating a fix first."
+        });
+        continue;
+      }
+      return {
+        success: true,
+        final: parsed.final,
+        history
+      };
+    }
+
+    if (parsed.final && !parsed.tool) {
+      return {
+        success: false,
+        final: parsed.final,
+        history
+      };
+    }
   }
 
   return {
-
-  success: false,
-
-  final:
-    "Agent không tìm thấy kết quả phù hợp.",
-
-  history
-
-};
-
+    success: false,
+    final: "Agent không tìm thấy kết quả phù hợp hoặc hết số bước chạy.",
+    history
+  };
 }
