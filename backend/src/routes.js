@@ -1498,13 +1498,21 @@ console.log(
 err
 );
 
-return res
-.status(500)
-.json({
-error:
-err.message ||
-"Upload fail"
-});
+if (!res.writableEnded) {
+
+  res.write(
+    `data: ${JSON.stringify({
+      type: "error",
+      error:
+        err.message ||
+        "Upload fail"
+    })}\n\n`
+  );
+
+  res.end();
+}
+
+return;
 
 }
 }

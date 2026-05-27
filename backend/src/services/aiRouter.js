@@ -255,18 +255,14 @@ async function askOpenAI(messages, mode) {
   ];
 
   const r =
-    await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+	  await openai.chat.completions.create({
+		model: "gpt-4o-mini",
 
-      messages: finalMessages,
+		messages: finalMessages,
 
-      max_tokens: 8000,
-      temperature: 0.7,
-	  	response_format: {
-		  type: "json_object"
-		},
-
-    });
+		max_tokens: 8000,
+		temperature: 0.7
+	  });
 
   return (
     r?.choices?.[0]
