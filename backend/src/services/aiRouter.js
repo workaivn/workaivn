@@ -274,6 +274,59 @@ async function askOpenAI(messages, mode) {
   );
 }
 
+
+export async function askOpenAIStream({
+  messages = [],
+  mode = "chat",
+  onToken = () => {}
+}) {
+
+  const system =
+    getSystemPrompt(mode);
+
+  const finalMessages = [
+    {
+      role: "system",
+      content: system
+    },
+    ...messages
+  ];
+
+  const stream =
+    await openai.chat.completions.create({
+
+      model: "gpt-4o-mini",
+
+      messages: finalMessages,
+
+      temperature: 0.7,
+
+      stream: true
+
+    });
+
+  let full = "";
+
+  for await (const chunk of stream) {
+
+    const token =
+      chunk
+        ?.choices?.[0]
+        ?.delta?.content || "";
+
+    if (!token) {
+      continue;
+    }
+
+    full += token;
+
+    onToken(full);
+  }
+
+  return full;
+}
+
+
 /* =========================
    GEMINI
 ========================= */

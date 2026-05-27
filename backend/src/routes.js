@@ -447,7 +447,7 @@ ${file.summary || ""}
 
 FULL SOURCE:
 
-${text.slice(0, 12000)}
+${file.content?.slice(0, 12000)}
 
 `;
 
@@ -809,7 +809,7 @@ for (const file of files) {
 
 	FULL SOURCE:
 
-	${text.slice(0, 12000)}
+	${file.content?.slice(0, 12000)}
 
 	`;
 }

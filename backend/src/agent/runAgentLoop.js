@@ -1,4 +1,4 @@
-import { askAI } from "../services/aiRouter.js";
+import {  askAI,  askOpenAIStream} from "../services/aiRouter.js";
 import { executeTool } from "./toolExecutor.js";
 
 function emitStatus(history, text) {
@@ -453,33 +453,95 @@ REJECT: { "approve": false, "reason": "Reason here" }`
 			---
 			**Kết luận chung:** ${parsed.final || "Đã khắc phục hoàn toàn sự cố lỗi."}`;
 			
-			  /* STREAM TOKEN REALTIME */
+			 if (parsed.done) {
 
-				  const finalText =
-					finalReport || "";
+			  if (
+				memory.modifiedFiles.length === 0
+			  ) {
 
-				  for (
-					let i = 0;
-					i < finalText.length;
-					i += 10
-				  ) {
+				messages.push({
+				  role: "system",
+				  content:
+					"You cannot mark DONE without proposing and validating a fix first."
+				});
+
+				continue;
+			  }
+
+			  const patchDetails =
+				memory.modifiedFiles
+				  .map((f, index) => {
+
+					return `
+			### 🛠 Vị trí sửa đổi ${index + 1}
+
+			FILE:
+			${f.file}
+
+			OLD:
+			\`\`\`
+			${f.find}
+			\`\`\`
+
+			NEW:
+			\`\`\`
+			${f.replace}
+			\`\`\`
+			`;
+
+				  })
+				  .join("\n");
+
+			  const reportPrompt = `
+
+			Tạo báo cáo fix bug chuyên nghiệp bằng tiếng Việt.
+
+			ROOT CAUSES:
+			${memory.rootCauses.join("\n")}
+
+			PATCHES:
+			${patchDetails}
+
+			REASONING:
+			${memory.reasoning.join("\n")}
+
+			VALIDATION:
+			PASS
+
+			`;
+
+			  let finalText = "";
+
+			  finalText =
+				await askOpenAIStream({
+
+				  messages: [
+					{
+					  role: "user",
+					  content: reportPrompt
+					}
+				  ],
+
+				  mode: "chat",
+
+				  onToken(token) {
 
 					onEvent({
 					  type: "token",
-					  content:
-						finalText.slice(0, i + 10)
+					  content: token
 					});
 
-					await new Promise(r =>
-					  setTimeout(r, 5)
-					);
 				  }
 
-				  return {
-					success: true,
-					final: finalReport, // Gửi chuỗi báo cáo hoàn chỉnh này về cho routes.js nhận
-					history
-				  };
+				});
+
+			  return {
+				success: true,
+				final: finalText,
+				history
+			  };
+
+			}
 				}
 
     if (parsed.final && !parsed.tool) {
