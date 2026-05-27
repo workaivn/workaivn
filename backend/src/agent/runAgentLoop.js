@@ -50,8 +50,9 @@ export async function runAgentLoop({
   };
 
   memory.objective = messages?.slice(-1)?.[0]?.content || "";
-  let emptySearchCount = 0;
-
+		let emptySearchCount = 0;
+	let repeatedToolCount = 0;
+	let lastTool = "";
   for (let step = 0; step < maxSteps; step++) {
     const system = `
 DO NOT TEACH THE USER.
@@ -187,7 +188,31 @@ Return ONLY valid JSON.
     // 2. Kiểm tra và Đánh chặn để đưa vào quy trình CRITIC -> PATCH
     const detectedPatch = parsed.PATCH || parsed.patch || (parsed.tool === "APPLY_PATCH" ? [parsed.args] : []);
     const hasPatchAction = Array.isArray(detectedPatch) && detectedPatch.length > 0;
+	if (hasPatchAction) {
 
+	  if (lastTool === "APPLY_PATCH") {
+
+		repeatedToolCount++;
+
+	  } else {
+
+		repeatedToolCount = 0;
+
+	  }
+
+	  lastTool = "APPLY_PATCH";
+
+	  if (repeatedToolCount >= 3) {
+
+		return {
+		  success: false,
+		  final: "Agent bị loop APPLY_PATCH",
+		  history
+		};
+
+	  }
+
+	}
     if (hasPatchAction) {
       if (memory.discoveredFiles.length < 2) {
         history.push({
@@ -296,6 +321,27 @@ REJECT: { "approve": false, "reason": "Reason here" }`
 
     // 3. Xử lý các TOOL khác ngoại trừ APPLY_PATCH (Read / Search / Validate thủ công)
     if (parsed.tool && parsed.tool !== "APPLY_PATCH") {
+		if (parsed.tool === lastTool) {
+
+		  repeatedToolCount++;
+
+		} else {
+
+		  repeatedToolCount = 0;
+
+		}
+
+		lastTool = parsed.tool;
+
+		if (repeatedToolCount >= 3) {
+
+		  return {
+			success: false,
+			final: `Agent bị loop tool: ${parsed.tool}`,
+			history
+		  };
+
+		}
       if (parsed.tool === "SEARCH_CODE") {
         const q = parsed.args?.query;
         if (q && memory.searchedQueries.slice(-3).includes(q)) {

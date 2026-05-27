@@ -1306,6 +1306,7 @@ const isPatchSuggestRequest =
 	);
 
 	res.end();
+	return;
 
   /* =========================
      VALIDATE ANSWER
