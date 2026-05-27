@@ -41,9 +41,17 @@ export default function Chat({ tab, setTab }) {
     chatIdRef.current = chatId;
   }, [chatId]);
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+	useEffect(() => {
+
+	  requestAnimationFrame(() => {
+
+		endRef.current?.scrollIntoView({
+		  behavior: "smooth"
+		});
+
+	  });
+
+	}, [messages]);
 
   useEffect(() => {
     if (!usage || paywallDismissed) return;
@@ -284,6 +292,7 @@ const decoder =
 
 let finalText = "";
 let streamedText = "";
+let buffer = "";
 
 while (true) {
 
@@ -299,65 +308,182 @@ while (true) {
 	  stream: true
 	});
 
-  const lines =
-    chunk
-      .split("\n")
-      .filter(x =>
-        x.startsWith("data:")
-      );
+  buffer += chunk;
 
-  for (const line of lines) {
+	const parts =
+	  buffer.split("\n\n");
 
-    try {
+	buffer =
+	  parts.pop() || "";
 
-      const json =
-        JSON.parse(
-          line.replace(
-            "data:",
-            ""
-          )
-        );
+	for (const part of parts) {
 
-      if (
-        json.type ===
-        "token"
-      ) {
+	  const line =
+		part
+		  .split("\n")
+		  .find(x =>
+			x.startsWith("data:")
+		  );
 
-        streamedText =
-          json.content || "";
+	  if (!line) {
+		continue;
+	  }
 
-        setMessages(prev => {
+	  try {
 
-          const copy = [...prev];
+		const json =
+		  JSON.parse(
+			line.replace(
+			  "data:",
+			  ""
+			)
+		  );
 
-          copy[
+		switch (json.type) {
+
+  case "thinking":
+
+    setMessages(prev => {
+
+      const copy = [...prev];
+
+      copy[
+        copy.length - 1
+      ] = {
+        role: "assistant",
+        content:
+          (copy[
             copy.length - 1
-          ] = {
-            role: "assistant",
-            content:
-              streamedText
-          };
+          ]?.content || "") +
+          "\n🤔 AI đang phân tích..."
+      };
 
-          return copy;
-        });
+      return copy;
+    });
 
-      }
+    break;
 
-      if (
-        json.type ===
-        "done"
-      ) {
+  case "tool":
 
-        finalText =
-          json.final || "";
+    setMessages(prev => {
 
-      }
+      const copy = [...prev];
 
-    } catch {}
+      copy[
+        copy.length - 1
+      ] = {
+        role: "assistant",
+        content:
+          (copy[
+            copy.length - 1
+          ]?.content || "") +
+          `\n🔧 ${json.tool}`
+      };
 
-  }
+      return copy;
+    });
+
+    break;
+
+  case "patch":
+
+    setMessages(prev => {
+
+      const copy = [...prev];
+
+      copy[
+        copy.length - 1
+      ] = {
+        role: "assistant",
+        content:
+          (copy[
+            copy.length - 1
+          ]?.content || "") +
+          `\n🛠 ${json.file}`
+      };
+
+      return copy;
+    });
+
+    break;
+
+  case "validate":
+
+    setMessages(prev => {
+
+      const copy = [...prev];
+
+      copy[
+        copy.length - 1
+      ] = {
+        role: "assistant",
+        content:
+          (copy[
+            copy.length - 1
+          ]?.content || "") +
+          `\n✅ ${json.file}`
+      };
+
+      return copy;
+    });
+
+    break;
+
+  case "token":
+
+    streamedText =
+      json.content || "";
+
+    setMessages(prev => {
+
+      const copy = [...prev];
+
+      copy[
+        copy.length - 1
+      ] = {
+        role: "assistant",
+        content:
+			streamedText
+      };
+
+      return copy;
+    });
+
+    break;
+
+  case "done":
+
+    finalText =
+      json.final || "";
+
+    break;
+
+  case "error":
+
+    setMessages(prev => {
+
+      const copy = [...prev];
+
+      copy[
+        copy.length - 1
+      ] = {
+        role: "assistant",
+        content:
+          `❌ ${json.error}`
+      };
+
+      return copy;
+    });
+
+    break;
 
 }
+
+	  } catch {}
+
+	}
+
+  }
 
 if (finalText) {
 
@@ -650,6 +776,7 @@ const decoder =
 
 let finalText = "";
 let streamedText = "";
+let buffer = "";
 
 while (true) {
 
@@ -666,62 +793,180 @@ while (true) {
 	});
 ;
 
-  const lines =
-    chunk
-      .split("\n")
-      .filter(x =>
-        x.startsWith("data:")
-      );
+ buffer += chunk;
 
-  for (const line of lines) {
+	const parts =
+	  buffer.split("\n\n");
 
-    try {
+	buffer =
+	  parts.pop() || "";
 
-      const json =
-        JSON.parse(
-          line.replace(
-            "data:",
-            ""
-          )
-        );
+	for (const part of parts) {
 
-      if (
-        json.type ===
-        "token"
-      ) {
+	  const line =
+		part
+		  .split("\n")
+		  .find(x =>
+			x.startsWith("data:")
+		  );
 
-        streamedText =
-          json.content || "";
+	  if (!line) {
+		continue;
+	  }
 
-        setMessages(prev => {
+	  try {
 
-          const copy = [...prev];
+		const json =
+		  JSON.parse(
+			line.replace(
+			  "data:",
+			  ""
+			)
+		  );
 
-          copy[
+		switch (json.type) {
+
+  case "thinking":
+
+    setMessages(prev => {
+
+      const copy = [...prev];
+
+      copy[
+        copy.length - 1
+      ] = {
+        role: "assistant",
+        content:
+          (copy[
             copy.length - 1
-          ] = {
-            role: "assistant",
-            content: streamedText
-          };
+          ]?.content || "") +
+          "\n🤔 AI đang phân tích..."
+      };
 
-          return copy;
-        });
+      return copy;
+    });
 
-      }
+    break;
 
-      if (
-        json.type ===
-        "done"
-      ) {
+  case "tool":
 
-        finalText =
-          json.final || "";
+    setMessages(prev => {
 
-      }
+      const copy = [...prev];
 
-    } catch {}
+      copy[
+        copy.length - 1
+      ] = {
+        role: "assistant",
+        content:
+          (copy[
+            copy.length - 1
+          ]?.content || "") +
+          `\n🔧 ${json.tool}`
+      };
 
-  }
+      return copy;
+    });
+
+    break;
+
+  case "patch":
+
+    setMessages(prev => {
+
+      const copy = [...prev];
+
+      copy[
+        copy.length - 1
+      ] = {
+        role: "assistant",
+        content:
+          (copy[
+            copy.length - 1
+          ]?.content || "") +
+          `\n🛠 ${json.file}`
+      };
+
+      return copy;
+    });
+
+    break;
+
+  case "validate":
+
+    setMessages(prev => {
+
+      const copy = [...prev];
+
+      copy[
+        copy.length - 1
+      ] = {
+        role: "assistant",
+        content:
+          (copy[
+            copy.length - 1
+          ]?.content || "") +
+          `\n✅ ${json.file}`
+      };
+
+      return copy;
+    });
+
+    break;
+
+  case "token":
+
+    streamedText =
+      json.content || "";
+
+    setMessages(prev => {
+
+      const copy = [...prev];
+
+      copy[
+        copy.length - 1
+      ] = {
+        role: "assistant",
+        content:
+			streamedText
+      };
+
+      return copy;
+    });
+
+    break;
+
+  case "done":
+
+    finalText =
+      json.final || "";
+
+    break;
+
+  case "error":
+
+    setMessages(prev => {
+
+      const copy = [...prev];
+
+      copy[
+        copy.length - 1
+      ] = {
+        role: "assistant",
+        content:
+          `❌ ${json.error}`
+      };
+
+      return copy;
+    });
+
+    break;
+
+}
+
+	  } catch {}
+
+	}
 
 }
 

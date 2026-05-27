@@ -1267,45 +1267,76 @@ const isPatchSuggestRequest =
 	  Connection: "keep-alive"
 	});
 
-	const agentResult =
-	  await runAgentLoop({
+	const sendEvent = (data) => {
 
-		messages: [
-		  {
-			role: "user",
-			content: ask
+	  if (res.writableEnded) {
+		return;
+	  }
+
+	  res.write(
+		`data: ${JSON.stringify(data)}\n\n`
+	  );
+
+	};
+
+	try {
+
+	  const agentResult =
+		await runAgentLoop({
+
+		  messages: [
+			{
+			  role: "user",
+			  content: ask
+			}
+		  ],
+
+		  plan:
+			user?.plan ||
+			"free",
+
+		  activeFiles,
+
+		  onEvent(data) {
+
+			sendEvent(data);
+
 		  }
-		],
 
-		plan:
-		  user?.plan ||
-		  "free",
+		});
 
-		activeFiles,
+	  answer =
+		typeof agentResult.final === "string"
+		  ? agentResult.final
+		  : "Không có kết quả.";
 
-		onEvent(data) {
-
-		  res.write(
-			`data: ${JSON.stringify(data)}\n\n`
-		  );
-
-		}
-
-	  });
-
-	answer =
-	  typeof agentResult.final === "string"
-		? agentResult.final
-		: "Không có kết quả.";
-
-	res.write(
-	  `data: ${JSON.stringify({
+	  sendEvent({
 		type: "done",
 		final: answer
-	  })}\n\n`
-	);
+	  });
 
-	res.end();
+	} catch (err) {
+
+	  console.log(
+		"STREAM ERROR:",
+		err
+	  );
+
+	  sendEvent({
+		type: "error",
+		error:
+		  err.message ||
+		  "Stream fail"
+	  });
+
+	} finally {
+
+	  if (!res.writableEnded) {
+		res.end();
+	  }
+
+	}
+
 	return;
 
   /* =========================
