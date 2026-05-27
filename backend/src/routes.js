@@ -1281,7 +1281,7 @@ const isPatchSuggestRequest =
 
 	try {
 
-	  const agentResult =
+	 /* const agentResult =
 		await runAgentLoop({
 
 		  messages: [
@@ -1303,6 +1303,31 @@ const isPatchSuggestRequest =
 
 		  }
 
+		});
+		
+		*/
+		
+		answer =
+		  await askAI({
+			messages: [
+			  {
+				role: "user",
+				content: ask
+			  }
+			],
+			mode: "file",
+			plan:
+			  user?.plan || "free"
+		  });
+
+		sendEvent({
+		  type: "token",
+		  content: answer
+		});
+
+		sendEvent({
+		  type: "done",
+		  final: answer
 		});
 
 	  answer =
