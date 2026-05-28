@@ -682,22 +682,7 @@ async function sendRealFiles(
         .VITE_API_URL ||
       "https://api.workaivn.com/api";
 
-	setMessages(prev => [
-	  ...prev,
-
-	  {
-		role: "user",
-		content: prompt
-	  },
-
-	  {
-		id: assistantId,
-		role: "assistant",
-		content: ""
-	  }
-	]);
-
-    const r =
+	const r =
       await fetch(
         `${API}/upload-file`,
         {
