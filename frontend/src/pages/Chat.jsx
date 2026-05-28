@@ -1252,13 +1252,16 @@ async function runTool(item) {
   ) : (
 
     <>
-      <MessageList
-  messages={messages}
-  loading={
-    loading &&
-    loadingType === "chat"
-  }
-/>
+     <MessageList
+	  messages={messages}
+	  loading={
+		loading &&
+		(
+		  loadingType === "chat" ||
+		  loadingType === "file"
+		)
+	  }
+	/>
 {loading &&
  loadingType === "image" && (
   <div className="chatArea">
