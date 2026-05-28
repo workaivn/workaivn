@@ -1262,107 +1262,61 @@ const isPatchSuggestRequest =
   );
   
   res.writeHead(200, {
-	  "Content-Type": "text/event-stream",
-	  "Cache-Control": "no-cache",
-	  Connection: "keep-alive"
-	});
+  "Content-Type": "text/event-stream",
+  "Cache-Control": "no-cache",
+  Connection: "keep-alive"
+});
 
-	const sendEvent = (data) => {
+const sendEvent = (data) => {
+  if (res.writableEnded) return;
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+};
 
-	  if (res.writableEnded) {
-		return;
-	  }
+try {
+  let completeAnswer = "";
 
-	  res.write(
-		`data: ${JSON.stringify(data)}\n\n`
-	  );
+  // Gọi askAI với tham số truyền vào là callback onToken
+  answer = await askAI({
+    messages: [
+      {
+        role: "user",
+        content: ask
+      }
+    ],
+    mode: "file",
+    plan: user?.plan || "free",
+    onToken: (token) => {
+      completeAnswer += token;
+      // Phát sự kiện token đơn lẻ về frontend ngay khi nhận được
+      sendEvent({
+        type: "token",
+        content: token
+      });
+    }
+  });
 
-	};
+  // Gán lại câu trả lời cuối cùng để lưu DB phía dưới
+  answer = completeAnswer;
 
-	try {
+  // Gửi duy nhất một event báo done
+  sendEvent({
+    type: "done",
+    final: answer
+  });
 
-	 /* const agentResult =
-		await runAgentLoop({
+} catch (err) {
+  console.log("STREAM ERROR:", err);
+  sendEvent({
+    type: "error",
+    error: err.message || "Stream fail"
+  });
+} finally {
+  if (!res.writableEnded) {
+    res.end();
+  }
+}
 
-		  messages: [
-			{
-			  role: "user",
-			  content: ask
-			}
-		  ],
-
-		  plan:
-			user?.plan ||
-			"free",
-
-		  activeFiles,
-
-		  onEvent(data) {
-
-			sendEvent(data);
-
-		  }
-
-		});
-		
-		*/
-		
-		answer =
-		  await askAI({
-			messages: [
-			  {
-				role: "user",
-				content: ask
-			  }
-			],
-			mode: "file",
-			plan:
-			  user?.plan || "free"
-		  });
-
-		sendEvent({
-		  type: "token",
-		  content: answer
-		});
-
-		sendEvent({
-		  type: "done",
-		  final: answer
-		});
-
-	  answer =
-		typeof agentResult.final === "string"
-		  ? agentResult.final
-		  : "Không có kết quả.";
-
-	  sendEvent({
-		type: "done",
-		final: answer
-	  });
-
-	} catch (err) {
-
-	  console.log(
-		"STREAM ERROR:",
-		err
-	  );
-
-	  sendEvent({
-		type: "error",
-		error:
-		  err.message ||
-		  "Stream fail"
-	  });
-
-	} finally {
-
-	  if (!res.writableEnded) {
-		res.end();
-	  }
-
-	}
-
-	return;
+return;
 
   /* =========================
      VALIDATE ANSWER

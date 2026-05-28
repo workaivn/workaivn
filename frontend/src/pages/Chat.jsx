@@ -311,18 +311,15 @@ while (true) {
   const chunk = decoder.decode(value, { stream: true });
   buffer += chunk;
 
-  // Tách theo từng dòng đơn (\n) để không bỏ sót hoặc parse sai JSON chứa \n
+  // Tách gói SSE chuẩn xác dựa trên ký tự xuống dòng đơn (\n)
   let lines = buffer.split("\n");
-  
-  // Dòng cuối cùng có thể chưa hoàn chỉnh, giữ lại cho chu kỳ sau
-  buffer = lines.pop() || ""; 
+  buffer = lines.pop() || ""; // Giữ lại dòng chưa hoàn chỉnh cho chu kỳ kế tiếp
 
   for (let line of lines) {
     line = line.trim();
     if (!line || !line.startsWith("data:")) continue;
 
-    // Loại bỏ chữ "data:" để lấy chuỗi JSON thô
-    const raw = line.slice(5).trim(); 
+    const raw = line.slice(5).trim();
     if (raw === "[DONE]") continue;
 
     try {
@@ -330,21 +327,18 @@ while (true) {
 
       switch (json.type) {
         case "token":
-          setMessages(prev =>
-            prev.map(msg => {
+          setMessages(prev => {
+            return prev.map(msg => {
               if (msg.id === assistantId) {
                 return {
                   ...msg,
-                  // NẾU BACKEND CỦA BẠN TRẢ VỀ CHUỖI LŨY TIẾN (như trong ảnh):
-                  content: json.content 
-                  
-                  // NẾU BACKEND CHỈ TRẢ VỀ 1 TỪ/KÝ TỰ ĐƠN LẺ (Token chuẩn):
-                  // content: msg.content + json.content
+                  // CHUẨN HOÁ: Cộng dồn ký tự mới vào chuỗi cũ
+                  content: (msg.content || "") + json.content
                 };
               }
               return msg;
-            })
-          );
+            });
+          });
           break;
 
         case "thinking":
@@ -356,7 +350,7 @@ while (true) {
           break;
 
         case "done":
-          console.log("DONE");
+          console.log("DONE Stream.");
           break;
 
         case "error":
@@ -364,7 +358,6 @@ while (true) {
           break;
       }
     } catch (err) {
-      // Bỏ qua lỗi parse nếu dòng đó chưa nhận đủ JSON
       console.log("SSE PARSE FAIL", err);
     }
   }
@@ -656,18 +649,15 @@ while (true) {
   const chunk = decoder.decode(value, { stream: true });
   buffer += chunk;
 
-  // Tách theo từng dòng đơn (\n) để không bỏ sót hoặc parse sai JSON chứa \n
+  // Tách gói SSE chuẩn xác dựa trên ký tự xuống dòng đơn (\n)
   let lines = buffer.split("\n");
-  
-  // Dòng cuối cùng có thể chưa hoàn chỉnh, giữ lại cho chu kỳ sau
-  buffer = lines.pop() || ""; 
+  buffer = lines.pop() || ""; // Giữ lại dòng chưa hoàn chỉnh cho chu kỳ kế tiếp
 
   for (let line of lines) {
     line = line.trim();
     if (!line || !line.startsWith("data:")) continue;
 
-    // Loại bỏ chữ "data:" để lấy chuỗi JSON thô
-    const raw = line.slice(5).trim(); 
+    const raw = line.slice(5).trim();
     if (raw === "[DONE]") continue;
 
     try {
@@ -675,21 +665,18 @@ while (true) {
 
       switch (json.type) {
         case "token":
-          setMessages(prev =>
-            prev.map(msg => {
+          setMessages(prev => {
+            return prev.map(msg => {
               if (msg.id === assistantId) {
                 return {
                   ...msg,
-                  // NẾU BACKEND CỦA BẠN TRẢ VỀ CHUỖI LŨY TIẾN (như trong ảnh):
-                  content: json.content 
-                  
-                  // NẾU BACKEND CHỈ TRẢ VỀ 1 TỪ/KÝ TỰ ĐƠN LẺ (Token chuẩn):
-                  // content: msg.content + json.content
+                  // CHUẨN HOÁ: Cộng dồn ký tự mới vào chuỗi cũ
+                  content: (msg.content || "") + json.content
                 };
               }
               return msg;
-            })
-          );
+            });
+          });
           break;
 
         case "thinking":
@@ -701,7 +688,7 @@ while (true) {
           break;
 
         case "done":
-          console.log("DONE");
+          console.log("DONE Stream.");
           break;
 
         case "error":
@@ -709,12 +696,10 @@ while (true) {
           break;
       }
     } catch (err) {
-      // Bỏ qua lỗi parse nếu dòng đó chưa nhận đủ JSON
       console.log("SSE PARSE FAIL", err);
     }
   }
 }
-
     await loadChats();
 
   } catch {
