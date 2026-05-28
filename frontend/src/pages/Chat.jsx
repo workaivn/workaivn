@@ -300,83 +300,137 @@ const reader =
 const decoder =
   new TextDecoder();
 
-let finalText = "";
-let streamedText = "";
 let buffer = "";
 
 while (true) {
-  const { done, value } = await reader.read();
+
+  const {
+    done,
+    value
+  } = await reader.read();
+
   if (done) break;
 
-  const chunk = decoder.decode(value, { stream: true });
+  const chunk =
+    decoder.decode(
+      value,
+      { stream: true }
+    );
+
   buffer += chunk;
 
-  // Tách gói SSE chuẩn xác dựa trên ký tự xuống dòng đơn (\n)
-  let events =
-	buffer.split("\n\n");
+  const events =
+    buffer.split("\n\n");
 
-	buffer =
-	  events.pop() || "";
+  buffer =
+    events.pop() || "";
 
-	for (let event of events)
-  const line =
-		event
-		  .split("\n")
-		  .find(x =>
-			x.startsWith("data:")
-		  );
+  for (const event of events) {
 
-	if (!line)
-	  continue;
+    const line =
+      event
+        .split("\n")
+        .find(x =>
+          x.startsWith("data:")
+        );
 
-	const raw = line.slice(5).trim();
+    if (!line)
+      continue;
 
-	if (raw === "[DONE]")
-	  continue;
+    const raw =
+      line
+        .replace("data:", "")
+        .trim();
 
-    const raw = line.slice(5).trim();
-    if (raw === "[DONE]") continue;
+    if (
+      !raw ||
+      raw === "[DONE]"
+    ) {
+      continue;
+    }
 
     try {
-      const json = JSON.parse(raw);
+
+      const json =
+        JSON.parse(raw);
 
       switch (json.type) {
+
         case "token":
+
           setMessages(prev => {
+
             return prev.map(msg => {
-              if (msg.id === assistantId) {
+
+              if (
+                msg.id === assistantId
+              ) {
+
                 return {
                   ...msg,
-                  // CHUẨN HOÁ: Cộng dồn ký tự mới vào chuỗi cũ
-                  content: json.content
+                  content:
+                    json.content
                 };
+
               }
+
               return msg;
+
             });
+
           });
-          break;
 
-        case "thinking":
-          console.log("Thinking...");
-          break;
-
-        case "tool":
-          console.log("Tool:", json.tool);
           break;
 
         case "done":
-          console.log("DONE Stream.");
+
+          setMessages(prev => {
+
+            return prev.map(msg => {
+
+              if (
+                msg.id === assistantId
+              ) {
+
+                return {
+                  ...msg,
+                  content:
+                    json.final ||
+                    msg.content
+                };
+
+              }
+
+              return msg;
+
+            });
+
+          });
+
           break;
 
         case "error":
-          console.log("ERROR:", json.error);
+
+          console.log(
+            "ERROR:",
+            json.error
+          );
+
           break;
+
       }
+
     } catch (err) {
-      console.log("SSE PARSE FAIL", err);
+
+      console.log(
+        "SSE PARSE FAIL",
+        err
+      );
+
     }
-}
+
   }
+
 }
 
 		await loadChats();
@@ -654,83 +708,137 @@ async function sendRealFiles(
 const decoder =
   new TextDecoder();
 
-let finalText = "";
-let streamedText = "";
 let buffer = "";
 
 while (true) {
-  const { done, value } = await reader.read();
+
+  const {
+    done,
+    value
+  } = await reader.read();
+
   if (done) break;
 
-  const chunk = decoder.decode(value, { stream: true });
+  const chunk =
+    decoder.decode(
+      value,
+      { stream: true }
+    );
+
   buffer += chunk;
 
-  // Tách gói SSE chuẩn xác dựa trên ký tự xuống dòng đơn (\n)
-  let events =
-	buffer.split("\n\n");
+  const events =
+    buffer.split("\n\n");
 
-	buffer =
-	  events.pop() || "";
+  buffer =
+    events.pop() || "";
 
-	for (let event of events)
-	  const line =
-		event
-		  .split("\n")
-		  .find(x =>
-			x.startsWith("data:")
-		  );
+  for (const event of events) {
 
-	if (!line)
-	  continue;
+    const line =
+      event
+        .split("\n")
+        .find(x =>
+          x.startsWith("data:")
+        );
 
-	const raw = line.slice(5).trim();
+    if (!line)
+      continue;
 
-	if (raw === "[DONE]")
-	  continue;
-  
-    const raw = line.slice(5).trim();
-    if (raw === "[DONE]") continue;
+    const raw =
+      line
+        .replace("data:", "")
+        .trim();
+
+    if (
+      !raw ||
+      raw === "[DONE]"
+    ) {
+      continue;
+    }
 
     try {
-      const json = JSON.parse(raw);
+
+      const json =
+        JSON.parse(raw);
 
       switch (json.type) {
+
         case "token":
+
           setMessages(prev => {
+
             return prev.map(msg => {
-              if (msg.id === assistantId) {
+
+              if (
+                msg.id === assistantId
+              ) {
+
                 return {
                   ...msg,
-                  // CHUẨN HOÁ: Cộng dồn ký tự mới vào chuỗi cũ
-                  content: json.content
+                  content:
+                    json.content
                 };
+
               }
+
               return msg;
+
             });
+
           });
-          break;
 
-        case "thinking":
-          console.log("Thinking...");
-          break;
-
-        case "tool":
-          console.log("Tool:", json.tool);
           break;
 
         case "done":
-          console.log("DONE Stream.");
+
+          setMessages(prev => {
+
+            return prev.map(msg => {
+
+              if (
+                msg.id === assistantId
+              ) {
+
+                return {
+                  ...msg,
+                  content:
+                    json.final ||
+                    msg.content
+                };
+
+              }
+
+              return msg;
+
+            });
+
+          });
+
           break;
 
         case "error":
-          console.log("ERROR:", json.error);
+
+          console.log(
+            "ERROR:",
+            json.error
+          );
+
           break;
+
       }
+
     } catch (err) {
-      console.log("SSE PARSE FAIL", err);
+
+      console.log(
+        "SSE PARSE FAIL",
+        err
+      );
+
     }
-}
+
   }
+
 }
     await loadChats();
 
