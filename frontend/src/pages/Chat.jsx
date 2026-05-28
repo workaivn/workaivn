@@ -534,6 +534,11 @@ async function sendRealFiles(
   fileMode = "file_summary",
   fileList = []
 ) {
+	 const useFiles =
+    fileList.length
+		? fileList
+		: smartFiles;
+		
 	const assistantId =
     Date.now() + "-assistant-file";
 	const userMessage = {
@@ -560,10 +565,6 @@ async function sendRealFiles(
 				.join(", ")
 			}`
 	};
-    const useFiles =
-    fileList.length
-		? fileList
-		: smartFiles;
 
   if (!useFiles.length) return;
 
@@ -863,32 +864,7 @@ while (true) {
 
 		  break;
 
-          setMessages(prev => {
-
-            return prev.map(msg => {
-
-              if (
-                msg.id === assistantId
-              ) {
-
-                return {
-                  ...msg,
-                  content:
-                    json.final ||
-                    msg.content
-                };
-
-              }
-
-              return msg;
-
-            });
-
-          });
-
-          break;
-
-        case "error":
+         case "error":
 
           console.log(
             "ERROR:",
