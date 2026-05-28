@@ -1,4 +1,4 @@
-import {  askAI,  askOpenAIStream} from "../services/aiRouter.js";
+import { askAI } from "../services/aiRouter.js";
 import { executeTool } from "./toolExecutor.js";
 
 function emitStatus(history, text) {
@@ -50,11 +50,13 @@ export async function runAgentLoop({
   };
 
   memory.objective = messages?.slice(-1)?.[0]?.content || "";
-		let emptySearchCount = 0;
-	let repeatedToolCount = 0;
-	let lastTool = "";
+  let emptySearchCount = 0;
+  let repeatedToolCount = 0;
+  let lastTool = "";
+
   for (let step = 0; step < maxSteps; step++) {
     const system = `
+Luôn trả lời bằng Tiếng Việt.
 DO NOT TEACH THE USER.
 DO NOT EXPLAIN.
 DO NOT SHOW CODE EXAMPLES.
@@ -117,6 +119,7 @@ Return ONLY valid JSON.
 
     if (emptySearchCount >= 3) {
       return {
+        success: false,
         final: `Không tìm thấy đoạn code liên quan trong project.`,
         history
       };
@@ -145,14 +148,20 @@ Return ONLY valid JSON.
     console.log("\n=== AGENT STEP ===", step);
     console.log("RAW AI RESPONSE:\n", aiResponse);
 	
-	onEvent({
-	  type: "thinking",
-	  step
-	});
+    onEvent({
+      type: "thinking",
+      step
+    });
 
     let parsed = null;
     try {
-      parsed = JSON.parse(aiResponse);
+      // Dùng RegExp với flag 'g' để dọn sạch toàn bộ markdown tag bọc ngoài JSON nếu có
+      const cleaned = String(aiResponse || "")
+        .replace(/```json/gi, "")
+        .replace(/```/g, "")
+        .trim();
+
+      parsed = JSON.parse(cleaned);
     } catch {
       return {
         success: false,
@@ -188,31 +197,24 @@ Return ONLY valid JSON.
     // 2. Kiểm tra và Đánh chặn để đưa vào quy trình CRITIC -> PATCH
     const detectedPatch = parsed.PATCH || parsed.patch || (parsed.tool === "APPLY_PATCH" ? [parsed.args] : []);
     const hasPatchAction = Array.isArray(detectedPatch) && detectedPatch.length > 0;
-	if (hasPatchAction) {
+    
+    if (hasPatchAction) {
+      if (lastTool === "APPLY_PATCH") {
+        repeatedToolCount++;
+      } else {
+        repeatedToolCount = 0;
+      }
+      lastTool = "APPLY_PATCH";
 
-	  if (lastTool === "APPLY_PATCH") {
+      if (repeatedToolCount >= 3) {
+        return {
+          success: false,
+          final: "Agent bị lặp vòng lặp vô hạn (loop) APPLY_PATCH mà không hiệu quả.",
+          history
+        };
+      }
+    }
 
-		repeatedToolCount++;
-
-	  } else {
-
-		repeatedToolCount = 0;
-
-	  }
-
-	  lastTool = "APPLY_PATCH";
-
-	  if (repeatedToolCount >= 3) {
-
-		return {
-		  success: false,
-		  final: "Agent bị loop APPLY_PATCH",
-		  history
-		};
-
-	  }
-
-	}
     if (hasPatchAction) {
       if (memory.discoveredFiles.length < 2) {
         history.push({
@@ -243,7 +245,9 @@ REJECT: { "approve": false, "reason": "Reason here" }`
 
       let critic = null;
       try {
-        critic = JSON.parse(criticResponse);
+        const cleanedCritic = String(criticResponse || "").replace(/
+```json/gi, "").replace(/```/g, "").trim();
+        critic = JSON.parse(cleanedCritic);
       } catch {
         critic = { approve: false, reason: "Critic invalid JSON" };
       }
@@ -263,10 +267,11 @@ REJECT: { "approve": false, "reason": "Reason here" }`
         time: Date.now()
       });
 
-	onEvent({
-	  type: "patch",
-	  file: detectedPatch[0]?.file
-	});
+      onEvent({
+        type: "patch",
+        file: detectedPatch[0]?.file
+      });
+
       // --- BƯỚC 4: PATCH (APPLY_PATCH) ---
       const patchResult = await executeTool("APPLY_PATCH", detectedPatch[0], activeFiles || []);
       
@@ -290,11 +295,12 @@ REJECT: { "approve": false, "reason": "Reason here" }`
         memory.thinkingDepth++;
         memory.reasoning.push(`Generated patch for ${detectedPatch[0]?.file}`);
 
-		onEvent({
-		  type: "validate",
-		  file: detectedPatch[0]?.file
-		});
-        // --- BƯỚC 5: VALIDATE (Tự động kích hoạt VALIDATE_PATCH ngay lập tức sau khi patch) ---
+        onEvent({
+          type: "validate",
+          file: detectedPatch[0]?.file
+        });
+
+        // --- BƯỚC 5: VALIDATE ---
         emitStatus(history, `Running validation for patch on ${detectedPatch[0]?.file}`);
         const valResult = await executeTool("VALIDATE_PATCH", { file: detectedPatch[0]?.file }, activeFiles || []);
         
@@ -316,32 +322,27 @@ REJECT: { "approve": false, "reason": "Reason here" }`
           error: patchResult?.error || "Unknown patch error"
         });
       }
-      continue; // Chuyển sang bước tiếp theo sau khi đã Patch & Validate xong
+      continue; 
     }
 
-    // 3. Xử lý các TOOL khác ngoại trừ APPLY_PATCH (Read / Search / Validate thủ công)
+    // 3. Xử lý các TOOL khác ngoại trừ APPLY_PATCH
     if (parsed.tool && parsed.tool !== "APPLY_PATCH") {
-		if (parsed.tool === lastTool) {
+      if (parsed.tool === lastTool) {
+        repeatedToolCount++;
+      } else {
+        repeatedToolCount = 0;
+      }
 
-		  repeatedToolCount++;
+      lastTool = parsed.tool;
 
-		} else {
+      if (repeatedToolCount >= 3) {
+        return {
+          success: false,
+          final: `Agent bị loop tool liên tục: ${parsed.tool}`,
+          history
+        };
+      }
 
-		  repeatedToolCount = 0;
-
-		}
-
-		lastTool = parsed.tool;
-
-		if (repeatedToolCount >= 3) {
-
-		  return {
-			success: false,
-			final: `Agent bị loop tool: ${parsed.tool}`,
-			history
-		  };
-
-		}
       if (parsed.tool === "SEARCH_CODE") {
         const q = parsed.args?.query;
         if (q && memory.searchedQueries.slice(-3).includes(q)) {
@@ -351,11 +352,11 @@ REJECT: { "approve": false, "reason": "Reason here" }`
       }
 
       const result = await executeTool(parsed.tool, parsed.args || {}, activeFiles || []);
-	  onEvent({
-		  type: "tool",
-		  tool: parsed.tool,
-		  args: parsed.args
-		});
+      onEvent({
+        type: "tool",
+        tool: parsed.tool,
+        args: parsed.args
+      });
 
       if (result?.success === false) {
         memory.failedFixes.push({
@@ -372,7 +373,6 @@ REJECT: { "approve": false, "reason": "Reason here" }`
         result
       });
 
-      // Cập nhật bộ nhớ sau khi chạy Tool dữ liệu (Read/Search)
       memory.thinkingDepth++;
       memory.reasoning.push(`After ${parsed.tool}, learned: ${JSON.stringify(result).slice(0, 120)}`);
       memory.evidence.push({ tool: parsed.tool, evidence: JSON.stringify(result).slice(0, 300) });
@@ -410,144 +410,50 @@ REJECT: { "approve": false, "reason": "Reason here" }`
     }
 
     // --- BƯỚC 6: DONE ---
-    // --- BƯỚC 6: DONE ---
-    if (parsed.done) {
-      // Bảo vệ: Nếu chưa có file nào được sửa đổi, không cho phép DONE bừa bãi
+    if (parsed.done || (parsed.final && !parsed.tool)) {
+      // Khóa an toàn: Nếu chưa thực hiện bản vá nào, ép Agent tiếp tục tìm lỗi
       if (memory.modifiedFiles.length === 0) {
         messages.push({
           role: "system",
-          content: "You cannot mark DONE without proposing and validating a fix first."
+          content: "You cannot finish or set done/final without proposing and validating an actual patch fix first."
         });
         continue;
       }
 
-      // Tự động gom dữ liệu từ bộ nhớ để tự tạo một Báo cáo Markdown chi tiết
       const patchDetails = memory.modifiedFiles.map((f, index) => {
         return `### 🛠 Vị trí sửa đổi ${index + 1}:
-			- **File bị sửa:** \`${f.file}\`
-			- **Đoạn code gốc (Cũ):**
-			\`\`\`
-			${f.find}
-			\`\`\`
-			- **Đoạn code thay thế (Mới):**
-			\`\`\`
-			${f.replace}
-			\`\`\``;
-				  }).join("\n\n");
+- **File bị sửa:** \`${f.file}\`
+- **Đoạn code gốc (Cũ):**
+\`\`\`
+${f.find}
+\`\`\`
+- **Đoạn code thay thế (Mới):**
+\`\`\`
+${f.replace}
+\`\`\``;
+      }).join("\n\n");
 
-				  const finalReport = `## 📋 BÁO CÁO KẾT QUẢ SỬA LỖI TỰ ĐỘNG
+      const finalReport = `## 📋 BÁO CÁO KẾT QUẢ SỬA LỖI TỰ ĐỘNG
 
-			### ❌ 1. Nguyên nhân & Lỗi phát hiện (Root Cause)
-			${memory.rootCauses.length > 0 ? memory.rootCauses.map(rc => `- ${rc}`).join("\n") : "- Phát hiện lỗi logic/sai lệch tham số trong luồng mã nguồn của hệ thống."}
+### ❌ 1. Nguyên nhân & Lỗi phát hiện (Root Cause)
+${memory.rootCauses.length > 0 ? memory.rootCauses.map(rc => `- ${rc}`).join("\n") : "- Phát hiện lỗi logic/sai lệch tham số trong luồng mã nguồn của hệ thống."}
 
-			### 🔧 2. Chi tiết các File và Nội dung đã sửa
-			${patchDetails}
+### 🔧 2. Chi tiết các File và Nội dung đã sửa
+${patchDetails}
 
-			### 💡 3. Lý do thực hiện thay đổi (Reasoning)
-			${memory.reasoning.length > 0 ? memory.reasoning.slice(-3).map(r => `- ${r}`).join("\n") : "- Sửa lỗi để đáp ứng đúng cú pháp và logic kiểm tra (Validation)."}
+### 💡 3. Lý do thực hiện thay đổi (Reasoning)
+${memory.reasoning.length > 0 ? memory.reasoning.slice(-3).map(r => `- ${r}`).join("\n") : "- Sửa lỗi để đáp ứng đúng cú pháp và logic kiểm tra (Validation)."}
 
-			### 🚀 4. Kết quả Kiểm tra (Validation)
-			- Hệ thống đã tự động chạy công cụ kiểm tra rủi ro \`VALIDATE_PATCH\`.
-			- **Trạng thái:** Hoàn tất thành công và không phát hiện lỗi phát sinh.
+### 🚀 4. Kết quả Kiểm tra (Validation)
+- Hệ thống đã tự động chạy công cụ kiểm tra rủi ro \`VALIDATE_PATCH\`.
+- **Trạng thái:** Hoàn tất thành công và không phát hiện lỗi phát sinh.
 
-			---
-			**Kết luận chung:** ${parsed.final || "Đã khắc phục hoàn toàn sự cố lỗi."}`;
-			
-			 if (parsed.done) {
+---
+**Kết luận chung:** ${parsed.final || "Đã khắc phục hoàn toàn sự cố lỗi hệ thống."}`;
 
-			  if (
-				memory.modifiedFiles.length === 0
-			  ) {
-
-				messages.push({
-				  role: "system",
-				  content:
-					"You cannot mark DONE without proposing and validating a fix first."
-				});
-
-				continue;
-			  }
-
-			  const patchDetails =
-				memory.modifiedFiles
-				  .map((f, index) => {
-
-					return `
-			### 🛠 Vị trí sửa đổi ${index + 1}
-
-			FILE:
-			${f.file}
-
-			OLD:
-			\`\`\`
-			${f.find}
-			\`\`\`
-
-			NEW:
-			\`\`\`
-			${f.replace}
-			\`\`\`
-			`;
-
-				  })
-				  .join("\n");
-
-			  const reportPrompt = `
-
-			Tạo báo cáo fix bug chuyên nghiệp bằng tiếng Việt.
-
-			ROOT CAUSES:
-			${memory.rootCauses.join("\n")}
-
-			PATCHES:
-			${patchDetails}
-
-			REASONING:
-			${memory.reasoning.join("\n")}
-
-			VALIDATION:
-			PASS
-
-			`;
-
-			  let finalText = "";
-
-			  finalText =
-				await askOpenAIStream({
-
-				  messages: [
-					{
-					  role: "user",
-					  content: reportPrompt
-					}
-				  ],
-
-				  mode: "chat",
-
-				  onToken(token) {
-
-					onEvent({
-					  type: "token",
-					  content: token
-					});
-
-				  }
-
-				});
-
-			  return {
-				success: true,
-				final: finalText,
-				history
-			  };
-
-			}
-				}
-
-    if (parsed.final && !parsed.tool) {
       return {
-        success: false,
-        final: parsed.final,
+        success: true, // Đổi thành true để đảm bảo Controller nhận diện chính xác trạng thái Hoàn thành
+        final: finalReport,
         history
       };
     }
@@ -555,7 +461,7 @@ REJECT: { "approve": false, "reason": "Reason here" }`
 
   return {
     success: false,
-    final: "Không tìm thấy vị trí lỗi phù hợp trong source code đã upload.",
+    final: "Không tìm thấy vị trí lỗi phù hợp trong source code hoặc đạt giới hạn số bước (maxSteps).",
     history
   };
 }

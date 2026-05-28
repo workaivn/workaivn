@@ -14,19 +14,19 @@ const gemini = new GoogleGenerativeAI(
 );
 
 /* =========================
-   MAIN ROUTER (Hỗ trợ cả Stream và Normal)
+   MAIN ROUTER
 ========================= */
 
 export async function askAI({
   messages = [],
   mode = "chat",
   plan = "free",
-  onToken = null // 👈 Thêm callback nhận diện stream
+  onToken = null
 }) {
   console.log("=== AI ROUTER ===", mode, plan, onToken ? "STREAM MODE" : "NORMAL MODE");
 
-  // 🔥 PRO USER → OpenAI trước
-  if (plan !== "free") {
+  // 🔥 PRO USER hoặc khi có yêu cầu STREAM -> Chạy qua OpenAI Stream để đồng bộ
+  if (plan !== "free" || onToken) {
     try {
       if (onToken) {
         return await askOpenAIStream({ messages, mode, onToken });
@@ -35,37 +35,24 @@ export async function askAI({
         if (r) return r;
       }
     } catch (e) {
-      console.log("OPENAI FAIL:", e.message);
+      console.log("OPENAI STREAM/NORMAL FAIL:", e.message);
     }
   }
 
-  // 🔥 FREE → Gemini (Hiện tại dùng askGeminiStream nếu có onToken, hoặc fallback sang OpenAI Stream cho ổn định)
+  // 🔥 FREE & NORMAL MODE -> Gemini
   try {
-    if (onToken) {
-      // Vì gpt-4o-mini của OpenAI rất rẻ và có thư viện stream chuẩn, ưu tiên dùng stream OpenAI cho cả free/pro khi client yêu cầu stream
-      return await askOpenAIStream({ messages, mode, onToken });
-    } else {
-      const r = await askGemini(messages, mode);
-      if (r) return r;
-    }
+    const r = await askGemini(messages, mode);
+    if (r) return r;
   } catch (e) {
     console.log("GEMINI FAIL:", e.message);
   }
 
-  // 🔥 fallback → Groq
+  // 🔥 Fallback -> Groq
   try {
     const r = await askGroq(messages, mode);
     if (r) return r;
   } catch (e) {
     console.log("GROQ FAIL:", e.message);
-  }
-
-  // 🔥 cuối cùng thử lại OpenAI
-  try {
-    const r = await askOpenAI(messages, mode);
-    if (r) return r;
-  } catch (e) {
-    console.log("OPENAI FINAL FAIL:", e.message);
   }
 
   return "Hệ thống AI đang bận, thử lại sau.";
@@ -92,7 +79,7 @@ function getSystemPrompt(mode) {
 }
 
 /* =========================
-   OPENAI (BEST)
+   OPENAI
 ========================= */
 
 async function askOpenAI(messages, mode) {
@@ -125,13 +112,12 @@ export async function askOpenAIStream({
   });
 
   let full = "";
-
   for await (const chunk of stream) {
     const token = chunk?.choices?.[0]?.delta?.content || "";
     if (!token) continue;
 
     full += token;
-    // SỬA LỖI LẶP TỪ: Thay vì gửi lũy tiến `onToken(full)`, chúng ta chỉ bắn từng `token` đơn lẻ ra ngoài!
+    // FIX TẬN GỐC: Chỉ bắn token đơn lẻ ra ngoài
     onToken(token); 
   }
 
@@ -156,7 +142,7 @@ async function askGemini(messages, mode) {
   });
 
   const lastMessage = messages[messages.length - 1];
-  const r = await chat.sendMessage(lastMessage?.content || "" );
+  const r = await chat.sendMessage(lastMessage?.content || "");
 
   return r?.response?.text() || "";
 }
