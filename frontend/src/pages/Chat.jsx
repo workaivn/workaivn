@@ -28,7 +28,8 @@ export default function Chat({ tab, setTab }) {
   const endRef = useRef(null);
   const chatIdRef = useRef(null);
   const fileInputRef = useRef(null);
-
+	const messagesRef =
+	  useRef([]);
   const [showPaywall, setShowPaywall] = useState(false);
   const [loadingType, setLoadingType] = useState("chat");
 
@@ -40,6 +41,11 @@ export default function Chat({ tab, setTab }) {
   useEffect(() => {
     chatIdRef.current = chatId;
   }, [chatId]);
+  
+  useEffect(() => {
+	  messagesRef.current =
+		messages;
+	}, [messages]);
 
 	useEffect(() => {
 
@@ -223,10 +229,13 @@ export default function Chat({ tab, setTab }) {
 
 	  setText("");
 
-	  const userMessage = {
-		role: "user",
-		content: cleanPrompt
-	  };
+	  const assistantId =
+		  Date.now() + "-assistant";
+
+		const userMessage = {
+		  role: "user",
+		  content: cleanPrompt
+		};
 
 	  /* render ngay bubble user */
 
@@ -248,7 +257,7 @@ export default function Chat({ tab, setTab }) {
 		*/
 
 		const nextMessages = [
-		  ...messages,
+		  ...messagesRef.current,
 		  userMessage
 		];
 
@@ -259,6 +268,7 @@ export default function Chat({ tab, setTab }) {
 			setMessages(prev => [
 			  ...prev,
 			  {
+				id: assistantId,
 				role: "assistant",
 				content: ""
 			  }
@@ -331,32 +341,47 @@ while (true) {
 
     try {
 
-      const json =
-        JSON.parse(
-          line.replace(
-            "data:",
-            ""
-          )
-        );
+      const raw =
+		  line
+			.replace("data:", "")
+			.trim();
+
+		if (
+		  !raw ||
+		  raw === "[DONE]" ||
+		  raw.startsWith(":")
+		) {
+		  continue;
+		}
+
+		const json =
+		  JSON.parse(raw);
 
       switch (json.type) {
 
         case "token":
 
-          setMessages(prev => {
+           setMessages(prev => {
 
-            const copy = [...prev];
+			  return prev.map(msg => {
 
-            copy[
-              copy.length - 1
-            ] = {
-              role: "assistant",
-              content:
-                json.content
-            };
+				if (
+				  msg.id === assistantId
+				) {
 
-            return copy;
-          });
+				  return {
+					...msg,
+					content:
+					  json.content
+				  };
+
+				}
+
+				return msg;
+
+			  });
+
+			});
 
           break;
 
@@ -409,23 +434,6 @@ while (true) {
 
 }
 
-if (finalText) {
-
-  setMessages(prev => {
-
-    const copy = [...prev];
-
-    copy[
-      copy.length - 1
-    ] = {
-      role: "assistant",
-      content: finalText
-    };
-
-    return copy;
-  });
-
-}
 		await loadChats();
 
 	  } catch {
@@ -520,10 +528,12 @@ async function sendRealFiles(
   fileMode = "file_summary",
   fileList = []
 ) {
-  const useFiles =
-  fileList.length
-    ? fileList
-    : smartFiles;
+	const assistantId =
+    Date.now() + "-assistant-file";
+    const useFiles =
+    fileList.length
+		? fileList
+		: smartFiles;
 
   if (!useFiles.length) return;
 
@@ -669,6 +679,7 @@ async function sendRealFiles(
 	setMessages(prev => [
 	  ...prev,
 	  {
+		id: assistantId,
 		role: "assistant",
 		content: ""
 	  }
@@ -739,13 +750,21 @@ while (true) {
 
     try {
 
-      const json =
-        JSON.parse(
-          line.replace(
-            "data:",
-            ""
-          )
-        );
+      const raw =
+		  line
+			.replace("data:", "")
+			.trim();
+
+		if (
+		  !raw ||
+		  raw === "[DONE]" ||
+		  raw.startsWith(":")
+		) {
+		  continue;
+		}
+
+		const json =
+		  JSON.parse(raw);
 
       switch (json.type) {
 
@@ -753,18 +772,25 @@ while (true) {
 
           setMessages(prev => {
 
-            const copy = [...prev];
+			  return prev.map(msg => {
 
-            copy[
-              copy.length - 1
-            ] = {
-              role: "assistant",
-              content:
-                json.content
-            };
+				if (
+				  msg.id === assistantId
+				) {
 
-            return copy;
-          });
+				  return {
+					...msg,
+					content:
+					  json.content
+				  };
+
+				}
+
+				return msg;
+
+			  });
+
+			});
 
           break;
 
@@ -816,24 +842,6 @@ while (true) {
   }
 
 }
-
-    if (finalText) {
-
-		  setMessages(prev => {
-
-			const copy = [...prev];
-
-			copy[
-			  copy.length - 1
-			] = {
-			  role: "assistant",
-			  content: finalText
-			};
-
-			return copy;
-		  });
-
-		}
 
     await loadChats();
 
@@ -1254,7 +1262,8 @@ async function runTool(item) {
 				);
 
 			if (onlyImages) {
-
+				const assistantId =
+					Date.now() + "-vision";
 			  const token =
 				localStorage.getItem("token") || "";
 
@@ -1320,6 +1329,7 @@ async function runTool(item) {
 				setMessages(prev => [
 				  ...prev,
 				  {
+					id: assistantId,
 					role: "assistant",
 					content: ""
 				  }
