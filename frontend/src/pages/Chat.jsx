@@ -536,6 +536,10 @@ async function sendRealFiles(
 ) {
 	const assistantId =
     Date.now() + "-assistant-file";
+	const userMessage = {
+	  role: "user",
+	  content: prompt
+	};
     const useFiles =
     fileList.length
 		? fileList
@@ -544,6 +548,10 @@ async function sendRealFiles(
   if (!useFiles.length) return;
 
   setTab("chat");
+  const nextMessages = [
+	  ...messagesRef.current,
+	  userMessage
+	];
 
   const name =
   useFiles
@@ -682,7 +690,19 @@ async function sendRealFiles(
         .VITE_API_URL ||
       "https://api.workaivn.com/api";
 
-	const r =
+	setMessages(prev => [
+	  ...prev,
+
+	  userMessage,
+
+	  {
+		id: assistantId,
+		role: "assistant",
+		content: ""
+	  }
+	]);
+
+    const r =
       await fetch(
         `${API}/upload-file`,
         {
@@ -921,7 +941,10 @@ if (fileInputRef.current) {
         "chatId",
         chatIdRef.current || ""
       );
-
+	fd.append(
+	  "messages",
+	  JSON.stringify(nextMessages)
+	);
       if (useFile) {
         fd.append("file", useFile);
       }
@@ -1353,14 +1376,6 @@ async function runTool(item) {
 				  "file",
 				  files[0]
 				);
-				setMessages(prev => [
-				  ...prev,
-				  {
-					id: assistantId,
-					role: "assistant",
-					content: ""
-				  }
-				]);
 				const r =
 				  await fetch(
 					`${API_URL}/generate-image`,
@@ -1449,33 +1464,6 @@ async function runTool(item) {
 			}
 
 			/* FILE THƯỜNG */
-
-			setMessages(prev => [
-			  ...prev,
-			  {
-				role: "user",
-				content:
-				  currentText
-					? `${currentText}\n\n📎 ${
-						files
-						  .map(
-							(f, i) =>
-							  f?.name ||
-							  `file-${i + 1}`
-						  )
-						  .join(", ")
-					  }`
-					: `📎 ${
-						files
-						  .map(
-							(f, i) =>
-							  f?.name ||
-							  `file-${i + 1}`
-						  )
-						  .join(", ")
-					  }`
-			  }
-			]);
 
 			setText("");
 
