@@ -301,189 +301,113 @@ while (true) {
     value
   } = await reader.read();
 
-  if (done) break;
+  if (done) {
+    break;
+  }
 
   const chunk =
-    decoder.decode(value, {
-	  stream: true
-	});
+    decoder.decode(value);
 
   buffer += chunk;
 
-	const parts =
-	  buffer.split("\n\n");
+  const events =
+    buffer.split("\n\n");
 
-	buffer =
-	  parts.pop() || "";
+  buffer =
+    events.pop() || "";
 
-	for (const part of parts) {
+  for (const event of events) {
 
-	  const line =
-		part
-		  .split("\n")
-		  .find(x =>
-			x.startsWith("data:")
-		  );
+    const line =
+      event
+        .split("\n")
+        .find(l =>
+          l.startsWith("data:")
+        );
 
-	  if (!line) {
-		continue;
-	  }
+    if (!line) {
+      continue;
+    }
 
-	  try {
+    try {
 
-		const json =
-		  JSON.parse(
-			line.replace(
-			  "data:",
-			  ""
-			)
-		  );
+      const json =
+        JSON.parse(
+          line.replace(
+            "data:",
+            ""
+          )
+        );
 
-		switch (json.type) {
+      switch (json.type) {
 
-  case "thinking":
+        case "token":
 
-    setMessages(prev => {
+          setMessages(prev => {
 
-      const copy = [...prev];
+            const copy = [...prev];
 
-      copy[
-        copy.length - 1
-      ] = {
-        role: "assistant",
-        content:
-          (copy[
-            copy.length - 1
-          ]?.content || "") +
-          "\n🤔 AI đang phân tích..."
-      };
+            copy[
+              copy.length - 1
+            ] = {
+              role: "assistant",
+              content:
+                json.content
+            };
 
-      return copy;
-    });
+            return copy;
+          });
 
-    break;
+          break;
 
-  case "tool":
+        case "thinking":
 
-    setMessages(prev => {
+          console.log(
+            "Thinking..."
+          );
 
-      const copy = [...prev];
+          break;
 
-      copy[
-        copy.length - 1
-      ] = {
-        role: "assistant",
-        content:
-          (copy[
-            copy.length - 1
-          ]?.content || "") +
-          `\n🔧 ${json.tool}`
-      };
+        case "tool":
 
-      return copy;
-    });
+          console.log(
+            "Tool:",
+            json.tool
+          );
 
-    break;
+          break;
 
-  case "patch":
+        case "done":
 
-    setMessages(prev => {
+          console.log(
+            "DONE"
+          );
 
-      const copy = [...prev];
+          break;
 
-      copy[
-        copy.length - 1
-      ] = {
-        role: "assistant",
-        content:
-          (copy[
-            copy.length - 1
-          ]?.content || "") +
-          `\n🛠 ${json.file}`
-      };
+        case "error":
 
-      return copy;
-    });
+          console.log(
+            "ERROR:",
+            json.error
+          );
 
-    break;
+          break;
 
-  case "validate":
+      }
 
-    setMessages(prev => {
+    } catch (err) {
 
-      const copy = [...prev];
+      console.log(
+        "SSE PARSE FAIL",
+        err
+      );
 
-      copy[
-        copy.length - 1
-      ] = {
-        role: "assistant",
-        content:
-          (copy[
-            copy.length - 1
-          ]?.content || "") +
-          `\n✅ ${json.file}`
-      };
-
-      return copy;
-    });
-
-    break;
-
-  case "token":
-
-    streamedText =
-      json.content || "";
-
-    setMessages(prev => {
-
-      const copy = [...prev];
-
-      copy[
-        copy.length - 1
-      ] = {
-        role: "assistant",
-        content:
-			streamedText
-      };
-
-      return copy;
-    });
-
-    break;
-
-  case "done":
-
-    finalText =
-      json.final || "";
-
-    break;
-
-  case "error":
-
-    setMessages(prev => {
-
-      const copy = [...prev];
-
-      copy[
-        copy.length - 1
-      ] = {
-        role: "assistant",
-        content:
-          `❌ ${json.error}`
-      };
-
-      return copy;
-    });
-
-    break;
-
-}
-
-	  } catch {}
-
-	}
+    }
 
   }
+
+}
 
 if (finalText) {
 
@@ -785,188 +709,111 @@ while (true) {
     value
   } = await reader.read();
 
-  if (done) break;
+  if (done) {
+    break;
+  }
 
   const chunk =
-    decoder.decode(value, {
-	  stream: true
-	});
-;
+    decoder.decode(value);
 
- buffer += chunk;
+  buffer += chunk;
 
-	const parts =
-	  buffer.split("\n\n");
+  const events =
+    buffer.split("\n\n");
 
-	buffer =
-	  parts.pop() || "";
+  buffer =
+    events.pop() || "";
 
-	for (const part of parts) {
+  for (const event of events) {
 
-	  const line =
-		part
-		  .split("\n")
-		  .find(x =>
-			x.startsWith("data:")
-		  );
+    const line =
+      event
+        .split("\n")
+        .find(l =>
+          l.startsWith("data:")
+        );
 
-	  if (!line) {
-		continue;
-	  }
+    if (!line) {
+      continue;
+    }
 
-	  try {
+    try {
 
-		const json =
-		  JSON.parse(
-			line.replace(
-			  "data:",
-			  ""
-			)
-		  );
+      const json =
+        JSON.parse(
+          line.replace(
+            "data:",
+            ""
+          )
+        );
 
-		switch (json.type) {
+      switch (json.type) {
 
-  case "thinking":
+        case "token":
 
-    setMessages(prev => {
+          setMessages(prev => {
 
-      const copy = [...prev];
+            const copy = [...prev];
 
-      copy[
-        copy.length - 1
-      ] = {
-        role: "assistant",
-        content:
-          (copy[
-            copy.length - 1
-          ]?.content || "") +
-          "\n🤔 AI đang phân tích..."
-      };
+            copy[
+              copy.length - 1
+            ] = {
+              role: "assistant",
+              content:
+                json.content
+            };
 
-      return copy;
-    });
+            return copy;
+          });
 
-    break;
+          break;
 
-  case "tool":
+        case "thinking":
 
-    setMessages(prev => {
+          console.log(
+            "Thinking..."
+          );
 
-      const copy = [...prev];
+          break;
 
-      copy[
-        copy.length - 1
-      ] = {
-        role: "assistant",
-        content:
-          (copy[
-            copy.length - 1
-          ]?.content || "") +
-          `\n🔧 ${json.tool}`
-      };
+        case "tool":
 
-      return copy;
-    });
+          console.log(
+            "Tool:",
+            json.tool
+          );
 
-    break;
+          break;
 
-  case "patch":
+        case "done":
 
-    setMessages(prev => {
+          console.log(
+            "DONE"
+          );
 
-      const copy = [...prev];
+          break;
 
-      copy[
-        copy.length - 1
-      ] = {
-        role: "assistant",
-        content:
-          (copy[
-            copy.length - 1
-          ]?.content || "") +
-          `\n🛠 ${json.file}`
-      };
+        case "error":
 
-      return copy;
-    });
+          console.log(
+            "ERROR:",
+            json.error
+          );
 
-    break;
+          break;
 
-  case "validate":
+      }
 
-    setMessages(prev => {
+    } catch (err) {
 
-      const copy = [...prev];
+      console.log(
+        "SSE PARSE FAIL",
+        err
+      );
 
-      copy[
-        copy.length - 1
-      ] = {
-        role: "assistant",
-        content:
-          (copy[
-            copy.length - 1
-          ]?.content || "") +
-          `\n✅ ${json.file}`
-      };
+    }
 
-      return copy;
-    });
-
-    break;
-
-  case "token":
-
-    streamedText =
-      json.content || "";
-
-    setMessages(prev => {
-
-      const copy = [...prev];
-
-      copy[
-        copy.length - 1
-      ] = {
-        role: "assistant",
-        content:
-			streamedText
-      };
-
-      return copy;
-    });
-
-    break;
-
-  case "done":
-
-    finalText =
-      json.final || "";
-
-    break;
-
-  case "error":
-
-    setMessages(prev => {
-
-      const copy = [...prev];
-
-      copy[
-        copy.length - 1
-      ] = {
-        role: "assistant",
-        content:
-          `❌ ${json.error}`
-      };
-
-      return copy;
-    });
-
-    break;
-
-}
-
-	  } catch {}
-
-	}
+  }
 
 }
 
