@@ -318,6 +318,8 @@ while (true) {
     );
 
   buffer += chunk;
+  buffer =
+  buffer.replace(/\r\n/g, "\n");
 
   const events =
 	buffer.split(/\r?\n\r?\n/);
@@ -726,6 +728,8 @@ while (true) {
     );
 
   buffer += chunk;
+  buffer =
+  buffer.replace(/\r\n/g, "\n");
 
   const events =
 	buffer.split(/\r?\n\r?\n/);
