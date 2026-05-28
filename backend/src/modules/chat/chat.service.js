@@ -775,6 +775,7 @@ export async function streamChat({
 		}
 
 		let answer = "";
+		let streamed = "";
 
 		const latestUserMessage =
 		  messages[
@@ -869,16 +870,29 @@ export async function streamChat({
 		} else {
 
 		  answer =
-			await askAI({
+			  await askAI({
 
-			  messages:
-				cleanedMessages,
+				messages:
+				  cleanedMessages,
 
-			  mode,
+				mode,
 
-			  plan
+				plan,
 
-			});
+				onToken(token) {
+
+				  streamed += token;
+
+				  res.write(
+					`data: ${JSON.stringify({
+					  type: "token",
+					  content: streamed
+					})}\n\n`
+				  );
+
+				}
+
+			  });
 
 		}
 
@@ -906,13 +920,6 @@ export async function streamChat({
 	);
 
 	/* DONE */
-
-	res.write(
-	  `data: ${JSON.stringify({
-		type: "done",
-		final
-	  })}\n\n`
-	);
 
     await saveChat(
 
