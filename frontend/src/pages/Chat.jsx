@@ -698,7 +698,7 @@ async function sendRealFiles(
 	  {
 		id: assistantId,
 		role: "assistant",
-		content: ""
+		content: "..."
 	  }
 	]);
 
@@ -1256,10 +1256,7 @@ async function runTool(item) {
 	  messages={messages}
 	  loading={
 		loading &&
-		(
-		  loadingType === "chat" ||
-		  loadingType === "file"
-		)
+		loadingType === "chat"
 	  }
 	/>
 {loading &&
