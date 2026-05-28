@@ -320,7 +320,7 @@ while (true) {
   buffer += chunk;
 
   const events =
-    buffer.split("\n\n");
+	buffer.split(/\r?\n\r?\n/);
 
   buffer =
     events.pop() || "";
@@ -728,7 +728,7 @@ while (true) {
   buffer += chunk;
 
   const events =
-    buffer.split("\n\n");
+	buffer.split(/\r?\n\r?\n/);
 
   buffer =
     events.pop() || "";
