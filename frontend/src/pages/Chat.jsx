@@ -333,7 +333,7 @@ while (true) {
                 return {
                   ...msg,
                   // CHUẨN HOÁ: Cộng dồn ký tự mới vào chuỗi cũ
-                  content: (msg.content || "") + json.content
+                  content: json.content
                 };
               }
               return msg;
@@ -671,7 +671,7 @@ while (true) {
                 return {
                   ...msg,
                   // CHUẨN HOÁ: Cộng dồn ký tự mới vào chuỗi cũ
-                  content: (msg.content || "") + json.content
+                  content: json.content
                 };
               }
               return msg;
