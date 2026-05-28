@@ -305,133 +305,69 @@ let streamedText = "";
 let buffer = "";
 
 while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
 
-  const {
-    done,
-    value
-  } = await reader.read();
-
-  if (done) {
-    break;
-  }
-
-  const chunk =
-    decoder.decode(value);
-
+  const chunk = decoder.decode(value, { stream: true });
   buffer += chunk;
 
-  const events =
-    buffer.split("\n\n");
+  // Tách theo từng dòng đơn (\n) để không bỏ sót hoặc parse sai JSON chứa \n
+  let lines = buffer.split("\n");
+  
+  // Dòng cuối cùng có thể chưa hoàn chỉnh, giữ lại cho chu kỳ sau
+  buffer = lines.pop() || ""; 
 
-  buffer =
-    events.pop() || "";
+  for (let line of lines) {
+    line = line.trim();
+    if (!line || !line.startsWith("data:")) continue;
 
-  for (const event of events) {
-
-    const line =
-      event
-        .split("\n")
-        .find(l =>
-          l.startsWith("data:")
-        );
-
-    if (!line) {
-      continue;
-    }
+    // Loại bỏ chữ "data:" để lấy chuỗi JSON thô
+    const raw = line.slice(5).trim(); 
+    if (raw === "[DONE]") continue;
 
     try {
-
-      const raw =
-		  line
-			.replace("data:", "")
-			.trim();
-
-		if (
-		  !raw ||
-		  raw === "[DONE]" ||
-		  raw.startsWith(":")
-		) {
-		  continue;
-		}
-
-		const json =
-		  JSON.parse(raw);
+      const json = JSON.parse(raw);
 
       switch (json.type) {
-
         case "token":
-
-           setMessages(prev => {
-
-			  return prev.map(msg => {
-
-				if (
-				  msg.id === assistantId
-				) {
-
-				  return {
-					...msg,
-					content:
-					  json.content
-				  };
-
-				}
-
-				return msg;
-
-			  });
-
-			});
-
+          setMessages(prev =>
+            prev.map(msg => {
+              if (msg.id === assistantId) {
+                return {
+                  ...msg,
+                  // NẾU BACKEND CỦA BẠN TRẢ VỀ CHUỖI LŨY TIẾN (như trong ảnh):
+                  content: json.content 
+                  
+                  // NẾU BACKEND CHỈ TRẢ VỀ 1 TỪ/KÝ TỰ ĐƠN LẺ (Token chuẩn):
+                  // content: msg.content + json.content
+                };
+              }
+              return msg;
+            })
+          );
           break;
 
         case "thinking":
-
-          console.log(
-            "Thinking..."
-          );
-
+          console.log("Thinking...");
           break;
 
         case "tool":
-
-          console.log(
-            "Tool:",
-            json.tool
-          );
-
+          console.log("Tool:", json.tool);
           break;
 
         case "done":
-
-          console.log(
-            "DONE"
-          );
-
+          console.log("DONE");
           break;
 
         case "error":
-
-          console.log(
-            "ERROR:",
-            json.error
-          );
-
+          console.log("ERROR:", json.error);
           break;
-
       }
-
     } catch (err) {
-
-      console.log(
-        "SSE PARSE FAIL",
-        err
-      );
-
+      // Bỏ qua lỗi parse nếu dòng đó chưa nhận đủ JSON
+      console.log("SSE PARSE FAIL", err);
     }
-
   }
-
 }
 
 		await loadChats();
@@ -714,133 +650,69 @@ let streamedText = "";
 let buffer = "";
 
 while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
 
-  const {
-    done,
-    value
-  } = await reader.read();
-
-  if (done) {
-    break;
-  }
-
-  const chunk =
-    decoder.decode(value);
-
+  const chunk = decoder.decode(value, { stream: true });
   buffer += chunk;
 
-  const events =
-    buffer.split("\n\n");
+  // Tách theo từng dòng đơn (\n) để không bỏ sót hoặc parse sai JSON chứa \n
+  let lines = buffer.split("\n");
+  
+  // Dòng cuối cùng có thể chưa hoàn chỉnh, giữ lại cho chu kỳ sau
+  buffer = lines.pop() || ""; 
 
-  buffer =
-    events.pop() || "";
+  for (let line of lines) {
+    line = line.trim();
+    if (!line || !line.startsWith("data:")) continue;
 
-  for (const event of events) {
-
-    const line =
-      event
-        .split("\n")
-        .find(l =>
-          l.startsWith("data:")
-        );
-
-    if (!line) {
-      continue;
-    }
+    // Loại bỏ chữ "data:" để lấy chuỗi JSON thô
+    const raw = line.slice(5).trim(); 
+    if (raw === "[DONE]") continue;
 
     try {
-
-      const raw =
-		  line
-			.replace("data:", "")
-			.trim();
-
-		if (
-		  !raw ||
-		  raw === "[DONE]" ||
-		  raw.startsWith(":")
-		) {
-		  continue;
-		}
-
-		const json =
-		  JSON.parse(raw);
+      const json = JSON.parse(raw);
 
       switch (json.type) {
-
         case "token":
-
-          setMessages(prev => {
-
-			  return prev.map(msg => {
-
-				if (
-				  msg.id === assistantId
-				) {
-
-				  return {
-					...msg,
-					content:
-					  json.content
-				  };
-
-				}
-
-				return msg;
-
-			  });
-
-			});
-
+          setMessages(prev =>
+            prev.map(msg => {
+              if (msg.id === assistantId) {
+                return {
+                  ...msg,
+                  // NẾU BACKEND CỦA BẠN TRẢ VỀ CHUỖI LŨY TIẾN (như trong ảnh):
+                  content: json.content 
+                  
+                  // NẾU BACKEND CHỈ TRẢ VỀ 1 TỪ/KÝ TỰ ĐƠN LẺ (Token chuẩn):
+                  // content: msg.content + json.content
+                };
+              }
+              return msg;
+            })
+          );
           break;
 
         case "thinking":
-
-          console.log(
-            "Thinking..."
-          );
-
+          console.log("Thinking...");
           break;
 
         case "tool":
-
-          console.log(
-            "Tool:",
-            json.tool
-          );
-
+          console.log("Tool:", json.tool);
           break;
 
         case "done":
-
-          console.log(
-            "DONE"
-          );
-
+          console.log("DONE");
           break;
 
         case "error":
-
-          console.log(
-            "ERROR:",
-            json.error
-          );
-
+          console.log("ERROR:", json.error);
           break;
-
       }
-
     } catch (err) {
-
-      console.log(
-        "SSE PARSE FAIL",
-        err
-      );
-
+      // Bỏ qua lỗi parse nếu dòng đó chưa nhận đủ JSON
+      console.log("SSE PARSE FAIL", err);
     }
-
   }
-
 }
 
     await loadChats();
