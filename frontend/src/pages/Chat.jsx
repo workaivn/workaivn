@@ -447,7 +447,7 @@ while (true) {
 
 				return {
 				  ...msg,
-				  content: "..."
+				  content: "Lỗi phản hồi AI"
 				};
 
 			  }
@@ -867,7 +867,7 @@ while (true) {
 
 			return {
 			  ...msg,
-			  content: "..."
+			  content: "Lỗi phản hồi AI"
 			};
 
 		  }
@@ -897,6 +897,9 @@ if (fileInputRef.current) {
     tool = "create",
     fileObj = null
   ) {
+	  
+	  const assistantId =
+  Date.now() + "-image";
     const useFile =
 	  fileObj ||
 	  smartFiles?.[0] ||
@@ -907,7 +910,7 @@ if (fileInputRef.current) {
       {
         role: "user",
         content: prompt
-      }
+      },
 	  
 	  /*
       {
@@ -957,50 +960,62 @@ if (fileInputRef.current) {
 		const d = await r.json();
 
 		setMessages((prev) => {
-		  const copy = [...prev];
+			return prev.map(msg => {
 
-		  copy[copy.length - 1] = {
-			role: "assistant",
-			content:
-			  d.imageUrl ||
-			  d.error ||
-			  "Lỗi tạo ảnh."
-		  };
+			  if (
+				msg.id === assistantId
+			  ) {
 
-		  return copy;
+				return {
+				  ...msg,
+				  content:
+					d.imageUrl ||
+					d.error ||
+					"Lỗi tạo ảnh."
+				};
+
+			  }
+
+			  return msg;
+
+			});
 		});
 
       if (d.chatId) {
         setChatId(d.chatId);
       }
 
-      await loadChats();
-			} catch {
-			  setMessages((prev) => {
+       await loadChats();
 
-				return prev.map(msg => {
+		} catch {
 
-				  if (
-					msg.id === assistantId
-				  ) {
+		  setMessages(prev => {
 
-					return {
-					  ...msg,
-					  content: "..."
-					};
+			return prev.map(msg => {
 
-				  }
+			  if (
+				msg.id === assistantId
+			  ) {
 
-				  return msg;
+				return {
+				  ...msg,
+				  content: "Lỗi phản hồi AI"
+				};
 
-				});
-			  });
+			  }
 
-			}
-    } finally {
-      setLoading(false);
-	  setLoadingType("none");
-    }
+			  return msg;
+
+			});
+
+		  });
+
+		} finally {
+
+		  setLoading(false);
+		  setLoadingType("none");
+
+		}
   }
 
   /* ==================================================
@@ -1306,15 +1321,21 @@ async function runTool(item) {
 			  /* HIỆN USER MESSAGE NGAY */
 
 			  setMessages(prev => [
-				...prev,
-				{
-				  role: "user",
-				  content:
-					userPrompt  ||
-					"📷 Ảnh",
-				  image: preview
-				}
-			  ]);
+				  ...prev,
+
+				  {
+					role: "user",
+					content:
+					  userPrompt || "📷 Ảnh",
+					image: preview
+				  },
+
+				  {
+					id: assistantId,
+					role: "assistant",
+					content: ""
+				  }
+				]);
 
 			  /* CLEAR INPUT NGAY */
 
