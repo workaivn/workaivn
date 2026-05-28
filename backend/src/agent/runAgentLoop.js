@@ -191,10 +191,9 @@ Return ONLY valid JSON.
 
     try {
       const cleaned = String(aiResponse || "")
-        .replace(/```json/gi, "")
-        .replace(/
-```/g, "")
-        .trim();
+		  .replace(/```json/gi, "")
+		  .replace(/```/g, "")
+		  .trim();
 
       const first = cleaned.indexOf("{");
       const last = cleaned.lastIndexOf("}");
@@ -294,10 +293,9 @@ REJECT: { "approve": false, "reason": "Reason here" }`
       let critic = null;
       try {
         const cleanedCritic = String(criticResponse || "")
-          .replace(/```json/gi, "")
-          .replace(/
-```/g, "")
-          .trim();
+		  .replace(/```json/gi, "")
+		  .replace(/```/g, "")
+		  .trim();
         critic = JSON.parse(cleanedCritic);
       } catch {
         critic = { approve: false, reason: "Critic invalid JSON" };
