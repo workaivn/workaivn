@@ -408,6 +408,7 @@ REJECT: { "approve": false, "reason": "Reason here" }`
 			});
 
 			continue;
+	  }
     }
 
     // 3. Xử lý các TOOL khác ngoại trừ APPLY_PATCH
