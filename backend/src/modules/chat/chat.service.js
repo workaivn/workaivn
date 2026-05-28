@@ -898,27 +898,12 @@ export async function streamChat({
 
 	/* STREAM TOKEN */
 
-	for (
-	  let i = 0;
-	  i < final.length;
-	  i += 8
-	) {
-
-	  res.write(
-		`data: ${JSON.stringify({
-		  type: "token",
-		  content:
-			final.slice(
-			  0,
-			  i + 8
-			)
-		})}\n\n`
-	  );
-
-	  await new Promise(r =>
-		setTimeout(r, 5)
-	  );
-	}
+	res.write(
+	  `data: ${JSON.stringify({
+		type: "done",
+		final
+	  })}\n\n`
+	);
 
 	/* DONE */
 
