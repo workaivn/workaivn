@@ -698,7 +698,7 @@ async function sendRealFiles(
 	  {
 		id: assistantId,
 		role: "assistant",
-		content: "..."
+		content: ""
 	  }
 	]);
 

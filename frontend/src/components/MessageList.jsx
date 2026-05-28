@@ -126,7 +126,7 @@ className={`bubble ${msg.role}`}
 
 )}
 
-{content && (
+{(content || msg.role === "assistant") && (
   <>
     {/* Trường hợp 1: Nếu là tin nhắn báo cáo DONE cuối cùng của Agent (Có chữ BÁO CÁO KẾT QUẢ) */}
     {content?.includes("BÁO CÁO KẾT QUẢ") ? (
@@ -155,10 +155,24 @@ className={`bubble ${msg.role}`}
           </div>
         )}
         
-        <div 
-          className="msgText"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
-        />
+        {content ? (
+
+		  <div
+			className="msgText"
+			dangerouslySetInnerHTML={{
+			  __html: renderMarkdown(content)
+			}}
+		  />
+
+		) : (
+
+		  <div className="typingDots">
+			<span></span>
+			<span></span>
+			<span></span>
+		  </div>
+
+		)}
       </>
     )}
   </>
