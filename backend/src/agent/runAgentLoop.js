@@ -9,7 +9,7 @@ function emitStatus(history, text) {
   });
 }
 
-function limitMemory(arr, max = 20) {
+function limitMemory(arr, max = 8) {
   return arr.slice(-max);
 }
 
@@ -17,7 +17,7 @@ export async function runAgentLoop({
   messages = [],
   plan = "free",
   activeFiles = [],
-  maxSteps = 20,
+  maxSteps = 8,
   onEvent = () => {}
 }) {
   const history = [];
@@ -97,6 +97,23 @@ CRITICAL RULES:
 - Think step-by-step.
 
 FLOW REQUIREMENTS:
+IMPORTANT:
+If you already found:
+- root cause
+- affected file
+- valid patch
+
+Then you MUST finish immediately.
+
+Do NOT continue searching.
+
+NEVER search generic words:
+- function
+- code
+- stream
+- bug
+- fix
+- error
 1. PLAN: Define your investigation path.
 2. READ/SEARCH: Inspect codebases to find root causes.
 3. CRITIC & PATCH: Submit a patch to the critic, then apply it if approved.
@@ -127,20 +144,39 @@ Return ONLY valid JSON.
 
     const aiResponse = await askAI({
       messages: [
-        { role: "system", content: system },
-        { role: "system", content: `AGENT MEMORY:\n${JSON.stringify(memory, null, 2)}` },
-        { role: "system", content: `CURRENT PLAN:\n${JSON.stringify(memory.currentPlan, null, 2)}` },
-        { role: "system", content: `CURRENT HYPOTHESES:\n${JSON.stringify(memory.hypotheses, null, 2)}` },
-        ...messages,
-        { role: "system", content: `TOOL HISTORY:\n${JSON.stringify(history.slice(-8), null, 2)}` },
-        { role: "system", content: `SELF REFLECTIONS:\n${JSON.stringify(memory.reflections, null, 2)}` },
-        { role: "system", content: `NEXT ACTIONS:\n${JSON.stringify(memory.nextActions, null, 2)}` },
-        { role: "system", content: `ROOT CAUSES:\n${JSON.stringify(memory.rootCauses, null, 2)}` },
-        { role: "system", content: `ARCHITECTURE SUMMARY:\n${memory.architectureSummary}` },
-        { role: "system", content: `THINKING DEPTH:\n${memory.thinkingDepth}` },
-        { role: "system", content: `EVIDENCE:\n${JSON.stringify(memory.evidence, null, 2)}` },
-        { role: "system", content: `FAILED ATTEMPTS:\n${JSON.stringify(memory.failedFixes, null, 2)}` }
-      ],
+		  {
+			role: "system",
+			content: system
+		  },
+
+		  {
+			role: "system",
+			content: `
+		OBJECTIVE:
+		${memory.objective}
+
+		DISCOVERED FILES:
+		${memory.discoveredFiles.join("\n")}
+
+		ROOT CAUSES:
+		${memory.rootCauses.slice(-3).join("\n")}
+
+		LAST TOOL RESULTS:
+		${JSON.stringify(
+		  history.slice(-3),
+		  null,
+		  2
+		)}
+
+		IMPORTANT:
+		- Do not repeat searches
+		- Use exact files/functions
+		- Prefer patching over more searching
+		`
+		  },
+
+		  ...messages
+		],
       mode: "agent",
       plan
     });
@@ -154,21 +190,54 @@ Return ONLY valid JSON.
     });
 
     let parsed = null;
-    try {
-      // Dùng RegExp với flag 'g' để dọn sạch toàn bộ markdown tag bọc ngoài JSON nếu có
-      const cleaned = String(aiResponse || "")
-        .replace(/```json/gi, "")
-        .replace(/```/g, "")
-        .trim();
 
-      parsed = JSON.parse(cleaned);
-    } catch {
-      return {
-        success: false,
-        error: "AI returned invalid JSON",
-        raw: aiResponse
-      };
-    }
+try {
+
+  const cleaned =
+    String(aiResponse || "")
+      .replace(/```json/gi, "")
+      .replace(/```/g, "")
+      .trim();
+
+  const first =
+    cleaned.indexOf("{");
+
+  const last =
+    cleaned.lastIndexOf("}");
+
+  if (
+    first === -1 ||
+    last === -1
+  ) {
+    throw new Error(
+      "No JSON object found"
+    );
+  }
+
+  const jsonOnly =
+    cleaned.slice(
+      first,
+      last + 1
+    );
+
+  parsed =
+    JSON.parse(jsonOnly);
+
+} catch (err) {
+
+  console.log(
+    "JSON PARSE FAIL:",
+    aiResponse
+  );
+
+  return {
+    success: false,
+    error:
+      "AI returned invalid JSON",
+    raw: aiResponse
+  };
+
+}
 
     // 1. Cập nhật Kế hoạch (PLAN)
     if (Array.isArray(parsed.plan)) {
@@ -245,8 +314,11 @@ REJECT: { "approve": false, "reason": "Reason here" }`
 
       let critic = null;
       try {
-        const cleanedCritic = String(criticResponse || "").replace(/
-```json/gi, "").replace(/```/g, "").trim();
+        const cleanedCritic =
+		  String(criticResponse || "")
+			.replace(/```json/gi, "")
+			.replace(/```/g, "")
+			.trim();
         critic = JSON.parse(cleanedCritic);
       } catch {
         critic = { approve: false, reason: "Critic invalid JSON" };
@@ -313,16 +385,29 @@ REJECT: { "approve": false, "reason": "Reason here" }`
         });
 
         if (valResult?.output) {
-          memory.terminalOutputs.push(String(valResult.output).slice(0, 2000));
-        }
-      } else {
-        memory.failedFixes.push({
-          tool: "APPLY_PATCH",
-          args: detectedPatch[0],
-          error: patchResult?.error || "Unknown patch error"
-        });
-      }
-      continue; 
+			  memory.terminalOutputs.push(
+				String(valResult.output).slice(0, 2000)
+			  );
+			}
+
+			messages.push({
+			  role: "system",
+			  content: `
+			PATCH SUCCESSFULLY APPLIED AND VALIDATED.
+
+			If the issue is fixed:
+			you MUST now return:
+
+			{
+			  "done": true,
+			  "final": "..."
+			}
+
+			DO NOT SEARCH AGAIN.
+			`
+			});
+
+			continue;
     }
 
     // 3. Xử lý các TOOL khác ngoại trừ APPLY_PATCH
@@ -344,12 +429,77 @@ REJECT: { "approve": false, "reason": "Reason here" }`
       }
 
       if (parsed.tool === "SEARCH_CODE") {
-        const q = parsed.args?.query;
-        if (q && memory.searchedQueries.slice(-3).includes(q)) {
-          emptySearchCount++;
-          continue;
-        }
-      }
+
+  const q =
+    String(
+      parsed.args?.query || ""
+    )
+    .toLowerCase()
+    .trim();
+
+  const banned = [
+    "function",
+    "code",
+    "bug",
+    "error",
+    "stream",
+    "fix"
+  ];
+
+  if (banned.includes(q)) {
+
+    history.push({
+      type: "warning",
+      text:
+        `Blocked useless search: ${q}`,
+      time: Date.now()
+    });
+
+    messages.push({
+      role: "system",
+      content: `
+GENERIC SEARCH IS FORBIDDEN.
+
+Use:
+- exact function names
+- exact file names
+- exact identifiers
+`
+    });
+
+    continue;
+  }
+
+  const normalized =
+    q.replace(/[^\w\s]/g, "");
+
+  const recent =
+    memory.searchedQueries
+      .slice(-5);
+
+  const repeated =
+    recent.some(oldQ => {
+
+      const oldNorm =
+        String(oldQ)
+          .toLowerCase()
+          .replace(/[^\w\s]/g, "");
+
+      return (
+        oldNorm.includes(normalized) ||
+        normalized.includes(oldNorm)
+      );
+
+    });
+
+  if (repeated) {
+
+    emptySearchCount++;
+
+    continue;
+  }
+
+}
 
       const result = await executeTool(parsed.tool, parsed.args || {}, activeFiles || []);
       onEvent({
