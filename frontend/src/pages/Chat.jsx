@@ -319,14 +319,19 @@ while (true) {
 	  events.pop() || "";
 
 	for (let event of events)
-    const line =
-	  event
-		.split("\n")
-		.find(x =>
-		  x.startsWith("data:")
-		);
+  const line =
+		event
+		  .split("\n")
+		  .find(x =>
+			x.startsWith("data:")
+		  );
 
 	if (!line)
+	  continue;
+
+	const raw = line.slice(5).trim();
+
+	if (raw === "[DONE]")
 	  continue;
 
     const raw = line.slice(5).trim();
@@ -370,6 +375,7 @@ while (true) {
     } catch (err) {
       console.log("SSE PARSE FAIL", err);
     }
+}
   }
 }
 
@@ -667,16 +673,21 @@ while (true) {
 	  events.pop() || "";
 
 	for (let event of events)
-    const line =
-	  event
-		.split("\n")
-		.find(x =>
-		  x.startsWith("data:")
-		);
+	  const line =
+		event
+		  .split("\n")
+		  .find(x =>
+			x.startsWith("data:")
+		  );
 
 	if (!line)
 	  continue;
 
+	const raw = line.slice(5).trim();
+
+	if (raw === "[DONE]")
+	  continue;
+  
     const raw = line.slice(5).trim();
     if (raw === "[DONE]") continue;
 
@@ -718,6 +729,7 @@ while (true) {
     } catch (err) {
       console.log("SSE PARSE FAIL", err);
     }
+}
   }
 }
     await loadChats();
