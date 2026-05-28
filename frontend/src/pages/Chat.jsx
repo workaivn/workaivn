@@ -358,29 +358,31 @@ while (true) {
 
         case "token":
 
-          setMessages(prev => {
+		  setMessages(prev => {
 
-            return prev.map(msg => {
+			return prev.map(msg => {
 
-              if (
-                msg.id === assistantId
-              ) {
+			  if (
+				msg.id === assistantId
+			  ) {
 
-                return {
-                  ...msg,
-                  content:
-                    json.content
-                };
+				return {
+				  ...msg,
 
-              }
+				  content:
+					(msg.content || "") +
+					(json.delta || "")
+				};
 
-              return msg;
+			  }
 
-            });
+			  return msg;
 
-          });
+			});
 
-          break;
+		  });
+
+		  break;
 
         case "done":
 
@@ -779,29 +781,31 @@ while (true) {
 
         case "token":
 
-          setMessages(prev => {
+		  setMessages(prev => {
 
-            return prev.map(msg => {
+			return prev.map(msg => {
 
-              if (
-                msg.id === assistantId
-              ) {
+			  if (
+				msg.id === assistantId
+			  ) {
 
-                return {
-                  ...msg,
-                  content:
-                    json.content
-                };
+				return {
+				  ...msg,
 
-              }
+				  content:
+					(msg.content || "") +
+					(json.delta || "")
+				};
 
-              return msg;
+			  }
 
-            });
+			  return msg;
 
-          });
+			});
 
-          break;
+		  });
+
+		  break;
 
         case "done":
 

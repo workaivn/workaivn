@@ -881,12 +881,10 @@ export async function streamChat({
 
 				onToken(token) {
 
-				  streamed += token;
-
 				  res.write(
 					`data: ${JSON.stringify({
 					  type: "token",
-					  content: streamed
+					   delta: token
 					})}\n\n`
 				  );
 
