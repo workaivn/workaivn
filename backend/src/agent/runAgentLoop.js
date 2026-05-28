@@ -137,21 +137,20 @@ Return ONLY valid JSON.
     if (emptySearchCount >= 3) {
       return {
         success: false,
-        final: `Không tìm thấy đoạn code liên quan trong project.`,
+        final: `Không tìm thấy đoạn code liên quan trong project sau nhiều lần tìm kiếm trống.`,
         history
       };
     }
 
     const aiResponse = await askAI({
       messages: [
-		  {
-			role: "system",
-			content: system
-		  },
-
-		  {
-			role: "system",
-			content: `
+        {
+          role: "system",
+          content: system
+        },
+        {
+          role: "system",
+          content: `
 		OBJECTIVE:
 		${memory.objective}
 
@@ -173,10 +172,9 @@ Return ONLY valid JSON.
 		- Use exact files/functions
 		- Prefer patching over more searching
 		`
-		  },
-
-		  ...messages
-		],
+        },
+        ...messages
+      ],
       mode: "agent",
       plan
     });
@@ -191,53 +189,30 @@ Return ONLY valid JSON.
 
     let parsed = null;
 
-try {
+    try {
+      const cleaned = String(aiResponse || "")
+        .replace(/```json/gi, "")
+        .replace(/
+```/g, "")
+        .trim();
 
-  const cleaned =
-    String(aiResponse || "")
-      .replace(/```json/gi, "")
-      .replace(/```/g, "")
-      .trim();
+      const first = cleaned.indexOf("{");
+      const last = cleaned.lastIndexOf("}");
 
-  const first =
-    cleaned.indexOf("{");
+      if (first === -1 || last === -1) {
+        throw new Error("No JSON object found");
+      }
 
-  const last =
-    cleaned.lastIndexOf("}");
-
-  if (
-    first === -1 ||
-    last === -1
-  ) {
-    throw new Error(
-      "No JSON object found"
-    );
-  }
-
-  const jsonOnly =
-    cleaned.slice(
-      first,
-      last + 1
-    );
-
-  parsed =
-    JSON.parse(jsonOnly);
-
-} catch (err) {
-
-  console.log(
-    "JSON PARSE FAIL:",
-    aiResponse
-  );
-
-  return {
-    success: false,
-    error:
-      "AI returned invalid JSON",
-    raw: aiResponse
-  };
-
-}
+      const jsonOnly = cleaned.slice(first, last + 1);
+      parsed = JSON.parse(jsonOnly);
+    } catch (err) {
+      console.log("JSON PARSE FAIL:", aiResponse);
+      return {
+        success: false,
+        error: "AI returned invalid JSON",
+        raw: aiResponse
+      };
+    }
 
     // 1. Cập nhật Kế hoạch (PLAN)
     if (Array.isArray(parsed.plan)) {
@@ -291,6 +266,10 @@ try {
           text: "Patch rejected: insufficient code context (Read at least 2 files before patching)",
           time: Date.now()
         });
+        messages.push({
+          role: "system",
+          content: "CRITICAL: Patch rejected because you haven't read enough files. You must use READ_FILE or SEARCH_CODE on at least 2 distinct files first."
+        });
         continue;
       }
 
@@ -314,11 +293,11 @@ REJECT: { "approve": false, "reason": "Reason here" }`
 
       let critic = null;
       try {
-        const cleanedCritic =
-		  String(criticResponse || "")
-			.replace(/```json/gi, "")
-			.replace(/```/g, "")
-			.trim();
+        const cleanedCritic = String(criticResponse || "")
+          .replace(/```json/gi, "")
+          .replace(/
+```/g, "")
+          .trim();
         critic = JSON.parse(cleanedCritic);
       } catch {
         critic = { approve: false, reason: "Critic invalid JSON" };
@@ -329,6 +308,11 @@ REJECT: { "approve": false, "reason": "Reason here" }`
           type: "warning",
           text: `Patch rejected by Critic: ${critic.reason}`,
           time: Date.now()
+        });
+        // Sửa lỗi: Cần báo cho Agent biết bản vá bị từ chối để tránh lặp lại logic cũ
+        messages.push({
+          role: "system",
+          content: `CRITICAL: Your proposed patch was REJECTED by the code reviewer. Reason: ${critic.reason}. Please rethink your root cause analysis and try another solution.`
         });
         continue;
       }
@@ -385,14 +369,14 @@ REJECT: { "approve": false, "reason": "Reason here" }`
         });
 
         if (valResult?.output) {
-			  memory.terminalOutputs.push(
-				String(valResult.output).slice(0, 2000)
-			  );
-			}
+          memory.terminalOutputs.push(
+            String(valResult.output).slice(0, 2000)
+          );
+        }
 
-			messages.push({
-			  role: "system",
-			  content: `
+        messages.push({
+          role: "system",
+          content: `
 			PATCH SUCCESSFULLY APPLIED AND VALIDATED.
 
 			If the issue is fixed:
@@ -405,10 +389,17 @@ REJECT: { "approve": false, "reason": "Reason here" }`
 
 			DO NOT SEARCH AGAIN.
 			`
-			});
+        });
 
-			continue;
-	  }
+        // Chỉ thoát luồng nếu thực sự đạt trạng thái done thông qua AI đánh giá tiếp theo hoặc logic kết thúc trực tiếp
+        // Nếu muốn ép Agent dừng ngay khi validate xong, giữ nguyên lệnh break dưới đây:
+        break;
+      } else {
+        messages.push({
+          role: "system",
+          content: `APPLY_PATCH failed to execute. Error: ${patchResult?.error || "Unknown interface discrepancy"}`
+        });
+      }
     }
 
     // 3. Xử lý các TOOL khác ngoại trừ APPLY_PATCH
@@ -430,77 +421,45 @@ REJECT: { "approve": false, "reason": "Reason here" }`
       }
 
       if (parsed.tool === "SEARCH_CODE") {
+        const q = String(parsed.args?.query || "").toLowerCase().trim();
+        const banned = ["function", "code", "bug", "error", "stream", "fix"];
 
-  const q =
-    String(
-      parsed.args?.query || ""
-    )
-    .toLowerCase()
-    .trim();
+        if (banned.includes(q)) {
+          history.push({
+            type: "warning",
+            text: `Blocked useless search: ${q}`,
+            time: Date.now()
+          });
 
-  const banned = [
-    "function",
-    "code",
-    "bug",
-    "error",
-    "stream",
-    "fix"
-  ];
+          messages.push({
+            role: "system",
+            content: `GENERIC SEARCH IS FORBIDDEN. Use exact function names, exact file names, or specific identifiers.`
+          });
+          continue;
+        }
 
-  if (banned.includes(q)) {
+        const normalized = q.replace(/[^\w\s]/g, "");
+        const recent = memory.searchedQueries.slice(-5);
+        const repeated = recent.some(oldQ => {
+          const oldNorm = String(oldQ).toLowerCase().replace(/[^\w\s]/g, "");
+          return oldNorm.includes(normalized) || normalized.includes(oldNorm);
+        });
 
-    history.push({
-      type: "warning",
-      text:
-        `Blocked useless search: ${q}`,
-      time: Date.now()
-    });
-
-    messages.push({
-      role: "system",
-      content: `
-GENERIC SEARCH IS FORBIDDEN.
-
-Use:
-- exact function names
-- exact file names
-- exact identifiers
-`
-    });
-
-    continue;
-  }
-
-  const normalized =
-    q.replace(/[^\w\s]/g, "");
-
-  const recent =
-    memory.searchedQueries
-      .slice(-5);
-
-  const repeated =
-    recent.some(oldQ => {
-
-      const oldNorm =
-        String(oldQ)
-          .toLowerCase()
-          .replace(/[^\w\s]/g, "");
-
-      return (
-        oldNorm.includes(normalized) ||
-        normalized.includes(oldNorm)
-      );
-
-    });
-
-  if (repeated) {
-
-    emptySearchCount++;
-
-    continue;
-  }
-
-}
+        if (repeated) {
+          emptySearchCount++;
+          history.push({
+            type: "warning",
+            text: `Repeated code search ignored: ${q}`,
+            time: Date.now()
+          });
+          // Sửa lỗi nuốt hành trình: Đẩy phản hồi cho Agent thay đổi từ khóa
+          messages.push({
+            role: "system",
+            content: `You repeated a very similar query to previous steps (${q}). Please try searching with a completely different context or keyword.`
+          });
+          continue;
+        }
+      }
 
       const result = await executeTool(parsed.tool, parsed.args || {}, activeFiles || []);
       onEvent({
@@ -562,7 +521,6 @@ Use:
 
     // --- BƯỚC 6: DONE ---
     if (parsed.done || (parsed.final && !parsed.tool)) {
-      // Khóa an toàn: Nếu chưa thực hiện bản vá nào, ép Agent tiếp tục tìm lỗi
       if (memory.modifiedFiles.length === 0) {
         messages.push({
           role: "system",
@@ -603,7 +561,7 @@ ${memory.reasoning.length > 0 ? memory.reasoning.slice(-3).map(r => `- ${r}`).jo
 **Kết luận chung:** ${parsed.final || "Đã khắc phục hoàn toàn sự cố lỗi hệ thống."}`;
 
       return {
-        success: true, // Đổi thành true để đảm bảo Controller nhận diện chính xác trạng thái Hoàn thành
+        success: true,
         final: finalReport,
         history
       };
