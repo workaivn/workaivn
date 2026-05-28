@@ -312,12 +312,22 @@ while (true) {
   buffer += chunk;
 
   // Tách gói SSE chuẩn xác dựa trên ký tự xuống dòng đơn (\n)
-  let lines = buffer.split("\n");
-  buffer = lines.pop() || ""; // Giữ lại dòng chưa hoàn chỉnh cho chu kỳ kế tiếp
+  let events =
+	buffer.split("\n\n");
 
-  for (let line of lines) {
-    line = line.trim();
-    if (!line || !line.startsWith("data:")) continue;
+	buffer =
+	  events.pop() || "";
+
+	for (let event of events)
+    const line =
+	  event
+		.split("\n")
+		.find(x =>
+		  x.startsWith("data:")
+		);
+
+	if (!line)
+	  continue;
 
     const raw = line.slice(5).trim();
     if (raw === "[DONE]") continue;
@@ -650,12 +660,22 @@ while (true) {
   buffer += chunk;
 
   // Tách gói SSE chuẩn xác dựa trên ký tự xuống dòng đơn (\n)
-  let lines = buffer.split("\n");
-  buffer = lines.pop() || ""; // Giữ lại dòng chưa hoàn chỉnh cho chu kỳ kế tiếp
+  let events =
+	buffer.split("\n\n");
 
-  for (let line of lines) {
-    line = line.trim();
-    if (!line || !line.startsWith("data:")) continue;
+	buffer =
+	  events.pop() || "";
+
+	for (let event of events)
+    const line =
+	  event
+		.split("\n")
+		.find(x =>
+		  x.startsWith("data:")
+		);
+
+	if (!line)
+	  continue;
 
     const raw = line.slice(5).trim();
     if (raw === "[DONE]") continue;
@@ -1221,36 +1241,51 @@ async function runTool(item) {
 
 				setMessages(prev => {
 
-				  const copy = [...prev];
+				  return prev.map(msg => {
 
-				  copy[
-					copy.length - 1
-				  ] = {
-					role: "assistant",
-					content:
-					  typeof d.answer ===
-					  "string"
-						? d.answer
-						: "Không đọc được ảnh."
-				  };
+					if (
+					  msg.id === assistantId
+					) {
 
-				  return copy;
+					  return {
+						...msg,
+						content:
+						  typeof d.answer ===
+						  "string"
+							? d.answer
+							: "Không đọc được ảnh."
+					  };
+
+					}
+
+					return msg;
+
+				  });
+
 				});
 
 			  } catch {
 
 				setMessages(prev => {
 
-				  const copy = [...prev];
+				  return prev.map(msg => {
 
-				  copy[
-					copy.length - 1
-				  ] = {
-					role: "assistant",
-					content: "Lỗi đọc ảnh."
-				  };
+					if (
+					  msg.id === assistantId
+					) {
 
-				  return copy;
+					  return {
+						...msg,
+						content:
+						  "Lỗi đọc ảnh."
+					  };
+
+					}
+
+					return msg;
+
+				  });
+
 				});
 
 			  } finally {
