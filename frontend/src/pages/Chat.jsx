@@ -239,11 +239,6 @@ export default function Chat({ tab, setTab }) {
 
 	  /* render ngay bubble user */
 
-	  setMessages(prev => [
-		...prev,
-		userMessage
-	  ]);
-
 	  setLoading(true);
 	  setLoadingType("chat");
 
@@ -267,6 +262,9 @@ export default function Chat({ tab, setTab }) {
 		  chatIdRef.current;
 			setMessages(prev => [
 			  ...prev,
+
+			  userMessage,
+
 			  {
 				id: assistantId,
 				role: "assistant",
@@ -441,17 +439,22 @@ while (true) {
 
 		setMessages(prev => {
 
-		  const copy = [...prev];
+		  return prev.map(msg => {
 
-		  copy[
-			copy.length - 1
-		  ] = {
-			role: "assistant",
-			content:
-			  "Lỗi phản hồi AI."
-		  };
+			  if (
+				msg.id === assistantId
+			  ) {
 
-		  return copy;
+				return {
+				  ...msg,
+				  content: "..."
+				};
+
+			  }
+
+			  return msg;
+
+			});
 		});
 
 	  } finally {
@@ -679,6 +682,12 @@ async function sendRealFiles(
 
 	setMessages(prev => [
 	  ...prev,
+
+	  {
+		role: "user",
+		content: prompt
+	  },
+
 	  {
 		id: assistantId,
 		role: "assistant",
@@ -850,22 +859,23 @@ while (true) {
 
     setMessages(
       (prev) => {
-        const copy = [
-          ...prev
-        ];
+        return prev.map(msg => {
 
-        copy[
-          copy.length - 1
-        ] = {
-          role:
-            "assistant",
-          content:
-            "Lỗi đọc file."
-        };
+		  if (
+			msg.id === assistantId
+		  ) {
 
-        return copy;
-      }
-    );
+			return {
+			  ...msg,
+			  content: "..."
+			};
+
+		  }
+
+		  return msg;
+
+		});
+      });
 
   } finally {
     setLoading(false);
@@ -968,16 +978,22 @@ if (fileInputRef.current) {
 			} catch {
 			  setMessages((prev) => {
 
-				const copy = [...prev];
+				return prev.map(msg => {
 
-				copy[
-				  copy.length - 1
-				] = {
-				  role: "assistant",
-				  content: "Lỗi tạo ảnh."
-				};
+				  if (
+					msg.id === assistantId
+				  ) {
 
-				return copy;
+					return {
+					  ...msg,
+					  content: "..."
+					};
+
+				  }
+
+				  return msg;
+
+				});
 			  });
 
 			}
