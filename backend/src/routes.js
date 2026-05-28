@@ -1299,10 +1299,54 @@ try {
   answer = completeAnswer;
 
   // Gửi duy nhất một event báo done
-  sendEvent({
-    type: "done",
-    final: answer
-  });
+  const uploadedFilesText =
+  files
+    .map(f => f.originalname)
+    .join(", ");
+
+const userMessageText =
+  prompt?.trim()
+
+    ? `${prompt.trim()}
+
+📎 ${uploadedFilesText}`
+
+    : `📎 ${uploadedFilesText}`;
+
+const mergedMap =
+  new Map();
+
+(existingChat?.activeFiles || [])
+.forEach((f) => {
+  mergedMap.set(f.name, f);
+});
+
+activeFiles.forEach((f) => {
+  mergedMap.set(f.name, f);
+});
+
+const newId =
+  await saveChat(
+
+    req,
+
+    userMessageText,
+
+    answer,
+
+    chatId,
+
+    Array.from(
+      mergedMap.values()
+    ).slice(-30)
+
+  );
+
+sendEvent({
+  type: "done",
+  final: answer,
+  chatId: newId
+});
 
 } catch (err) {
   console.log("STREAM ERROR:", err);

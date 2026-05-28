@@ -538,7 +538,27 @@ async function sendRealFiles(
     Date.now() + "-assistant-file";
 	const userMessage = {
 	  role: "user",
-	  content: prompt
+
+	  content:
+		prompt
+		  ? `${prompt}\n\n📎 ${
+			  useFiles
+				.map(
+				  (f, i) =>
+					f?.name ||
+					`file-${i + 1}`
+				)
+				.join(", ")
+			}`
+		  : `📎 ${
+			  useFiles
+				.map(
+				  (f, i) =>
+					f?.name ||
+					`file-${i + 1}`
+				)
+				.join(", ")
+			}`
 	};
     const useFiles =
     fileList.length
@@ -813,6 +833,35 @@ while (true) {
 		  break;
 
         case "done":
+
+		  if (json.chatId) {
+			setChatId(json.chatId);
+		  }
+
+		  setMessages(prev => {
+
+			return prev.map(msg => {
+
+			  if (
+				msg.id === assistantId
+			  ) {
+
+				return {
+				  ...msg,
+				  content:
+					json.final ||
+					msg.content
+				};
+
+			  }
+
+			  return msg;
+
+			});
+
+		  });
+
+		  break;
 
           setMessages(prev => {
 

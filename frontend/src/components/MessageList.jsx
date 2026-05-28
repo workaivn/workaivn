@@ -126,7 +126,7 @@ className={`bubble ${msg.role}`}
 
 )}
 
-{(content || msg.role === "assistant") && (
+{(content || (msg.role === "assistant" && loading)) && (
   <>
     {/* Trường hợp 1: Nếu là tin nhắn báo cáo DONE cuối cùng của Agent (Có chữ BÁO CÁO KẾT QUẢ) */}
     {content?.includes("BÁO CÁO KẾT QUẢ") ? (
@@ -157,22 +157,54 @@ className={`bubble ${msg.role}`}
         
         {content ? (
 
-		  <div
-			className="msgText"
-			dangerouslySetInnerHTML={{
-			  __html: renderMarkdown(content)
-			}}
-		  />
+  <>
+    {hasPatch && (
+      <div className="patchView">
+        {patches.map((p, i) => (
+          <div key={i} className="patchItem">
 
-		) : (
+            <div className="patchFile">
+              📄 File: {p.file || p.path}
+            </div>
 
-		  <div className="typingDots">
-			<span></span>
-			<span></span>
-			<span></span>
-		  </div>
+            <div className="patchTitle">
+              TÌM ĐOẠN NÀY:
+            </div>
 
-		)}
+            <pre className="patchCode">
+              <code>{p.find}</code>
+            </pre>
+
+            <div className="patchTitle">
+              THAY BẰNG ĐOẠN NÀY:
+            </div>
+
+            <pre className="patchCode patchReplace">
+              <code>{p.replace}</code>
+            </pre>
+
+          </div>
+        ))}
+      </div>
+    )}
+
+    <div
+      className="msgText"
+      dangerouslySetInnerHTML={{
+        __html: renderMarkdown(content)
+      }}
+    />
+  </>
+
+) : (
+
+  <div className="typingDots">
+    <span></span>
+    <span></span>
+    <span></span>
+  </div>
+
+)}
       </>
     )}
   </>
