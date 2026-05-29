@@ -35,8 +35,15 @@ export function buildCallGraph(
             called !== fn
           ) {
 
-            graph[fn]
-              .push(called);
+            if (
+			  !graph[fn]
+				.includes(called)
+			) {
+
+			  graph[fn]
+				.push(called);
+
+			}
 
           }
 

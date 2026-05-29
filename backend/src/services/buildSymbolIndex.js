@@ -18,20 +18,23 @@ export function buildSymbolIndex(
 
         symbols.push({
 
-          symbol:
-            chunk.name,
+		  symbol:
+			chunk.name,
 
-          type:
-            chunk.type,
+		  type:
+			chunk.type,
 
-          file:
-            chunk.file,
+		  file:
+			chunk.file,
 
-          content:
-            chunk.content
-              ?.slice(0, 500)
+		  content:
+			chunk.content
+			  ?.slice(0,500),
 
-        });
+		  length:
+			chunk.content?.length || 0
+
+		});
 
       });
 

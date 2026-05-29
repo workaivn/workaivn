@@ -15,6 +15,9 @@ import { runTerminalTool }
 
 import { applyPatchTool }
   from "./tools/applyPatch.js";
+  
+import { searchSymbolTool }
+  from "./tools/searchSymbol.js";
 
 const tools = {
 
@@ -29,6 +32,9 @@ const tools = {
   RUN_TERMINAL: runTerminalTool,
   
   APPLY_PATCH: applyPatchTool,
+
+	SEARCH_SYMBOL:
+	  searchSymbolTool,
 
 };
 

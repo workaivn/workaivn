@@ -66,6 +66,9 @@ import {
   buildFlowMap
 } from "./services/buildFlowMap.js";
 import {
+  retrieveCodeContext
+} from "./services/retrieveCodeContext.js";
+import {
   runAgentLoop
 } from "./agent/runAgentLoop.js";
 
@@ -849,6 +852,15 @@ flowMap =
   buildFlowMap(
     activeFiles
   );
+const codeContext =
+  retrieveCodeContext({
+    query:
+      prompt || "",
+    symbolIndex,
+    callGraph,
+    activeFiles
+  });  
+
  console.log(
   "CALL GRAPH:",
   JSON.stringify(
@@ -879,48 +891,81 @@ const finalPrompt =
 	
 let responseFormat = `
 
-KHI USER HỎI SỬA CODE:
+KHI PHÂN TÍCH CODE:
 
-BẮT BUỘC FORMAT:
+Ưu tiên source code thật.
 
-# FILE CẦN SỬA
+Không trả lời generic.
 
-file/path.js
+Không trả lời lý thuyết.
 
-# TÌM ĐOẠN
+Nếu xác định được vị trí:
+
+Trả lời theo format:
+
+# ROOT CAUSE
+
+...
+
+# FILE LIÊN QUAN
+
+- file A
+- file B
+
+# FUNCTION LIÊN QUAN
+
+- fnA()
+- fnB()
+
+# CẦN SỬA
+
+File:
+...
+
+Tìm:
 
 \`\`\`
-old code
+...
 \`\`\`
 
-# XÓA
+Thay bằng:
 
 \`\`\`
-old code
+...
 \`\`\`
 
-# THAY BẰNG
+Nếu cần tạo file mới:
+
+# FILE MỚI
+
+path/file.js
+
+Nội dung:
 
 \`\`\`
-new code
+...
 \`\`\`
 
-# THÊM NGAY SAU
+Nếu cần import:
 
-function xxx()
+# IMPORT
+
+File:
+
+...
+
+Thêm:
 
 \`\`\`
-new code
+import ...
 \`\`\`
 
 KHÔNG ĐƯỢC:
 
-- mô tả chung chung
-- nói lý thuyết
-- nói "bạn nên"
+- nói chung chung
 - nói "có thể"
-
-PHẢI CHỈ RA ĐÚNG FILE VÀ ĐÚNG ĐOẠN.
+- nói "hãy thử"
+- nói giáo trình
 
 `;
 
@@ -1012,10 +1057,31 @@ ${JSON.stringify(
   2
 )}
 
-RELATED FLOWS:
+MATCHED SYMBOLS:
 
 ${JSON.stringify(
-  flowMap.slice(0, 3),
+  codeContext
+    .matchedSymbols
+    .slice(0,20),
+  null,
+  2
+)}
+
+MATCHED FUNCTIONS:
+
+${JSON.stringify(
+  codeContext
+    .matchedFunctions
+    .slice(0,20),
+  null,
+  2
+)}
+
+RELATED FUNCTIONS:
+
+${JSON.stringify(
+  codeContext
+    .relatedFunctions,
   null,
   2
 )}

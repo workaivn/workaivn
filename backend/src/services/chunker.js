@@ -85,24 +85,43 @@ function chunkJavaScript(
 
         /* variable */
 
-        else if (
-          node.type ===
-            "VariableDeclaration"
-        ) {
+      else if (
+		  node.type ===
+		  "VariableDeclaration"
+		) {
 
-          const d =
-            node.declarations?.[0];
+		  for (const d of (
+			node.declarations || []
+		  )) {
 
-          if (
-            d?.id?.name
-          ) {
+			if (
+			  !d?.id?.name
+			) continue;
 
-            name =
-              d.id.name;
+			chunks.push({
 
-          }
+			  file:
+				fileName,
 
-        }
+			  type:
+				d?.init?.type ||
+				"VariableDeclaration",
+
+			  name:
+				d.id.name,
+
+			  content:
+				text.slice(
+				  d.start,
+				  d.end
+				)
+
+			});
+
+		  }
+
+		  return;
+		}
 
         /* class */
 

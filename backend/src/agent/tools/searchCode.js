@@ -136,7 +136,7 @@ export async function searchCodeTool({
 		  lowerText.includes(k)
 		) {
 
-		  score += 10;
+		  score += 3;
 
 		}
 
@@ -144,7 +144,7 @@ export async function searchCodeTool({
 		  fileName.includes(k)
 		) {
 
-		  score += 20;
+		  score += 10;
 
 		}
 
