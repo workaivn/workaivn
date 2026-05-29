@@ -35,6 +35,39 @@ export async function searchCodeTool({
 	  q.split(/\s+/);
 
 	let score = 0;
+	
+	/* ===== SYMBOL BOOST ===== */
+
+	const functionMatches = [
+
+	  ...text.matchAll(
+		/function\s+([a-zA-Z0-9_]+)/g
+	  ),
+
+	  ...text.matchAll(
+		/export\s+function\s+([a-zA-Z0-9_]+)/g
+	  )
+
+	];
+
+	for (const m of functionMatches) {
+
+	  const fn =
+		String(m[1] || "")
+		  .toLowerCase();
+
+	  if (!fn) continue;
+
+	  if (
+		q.includes(fn)
+	  ) {
+
+		score += 300;
+
+	  }
+
+	}
+	
 	const ext =
 	  fileName
 		.split(".")

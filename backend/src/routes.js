@@ -879,15 +879,48 @@ const finalPrompt =
 	
 let responseFormat = `
 
-Hãy trả lời theo cách phù hợp nhất với câu hỏi.
+KHI USER HỎI SỬA CODE:
 
-Ưu tiên:
-- Trả lời trực tiếp
-- Tự nhiên như senior engineer
-- Nếu hỏi vị trí: nêu file và function
-- Nếu hỏi fix bug: đưa patch
-- Nếu hỏi giải thích: giải thích dễ hiểu
-- Không bắt buộc format cố định
+BẮT BUỘC FORMAT:
+
+# FILE CẦN SỬA
+
+file/path.js
+
+# TÌM ĐOẠN
+
+\`\`\`
+old code
+\`\`\`
+
+# XÓA
+
+\`\`\`
+old code
+\`\`\`
+
+# THAY BẰNG
+
+\`\`\`
+new code
+\`\`\`
+
+# THÊM NGAY SAU
+
+function xxx()
+
+\`\`\`
+new code
+\`\`\`
+
+KHÔNG ĐƯỢC:
+
+- mô tả chung chung
+- nói lý thuyết
+- nói "bạn nên"
+- nói "có thể"
+
+PHẢI CHỈ RA ĐÚNG FILE VÀ ĐÚNG ĐOẠN.
 
 `;
 
@@ -906,11 +939,32 @@ FILES:
 ${fileNames}
 
 Bạn là senior software engineer.
-TOP SYMBOLS:
+
+MATCHED FUNCTIONS:
 
 ${JSON.stringify(
   symbolIndex
-    .slice(0, 200),
+    .filter(s => {
+
+      const q =
+        finalPrompt.toLowerCase();
+
+      return (
+
+        q.includes(
+          s.symbol?.toLowerCase?.() || ""
+        )
+
+        ||
+
+        s.symbol
+          ?.toLowerCase?.()
+          ?.includes(q)
+
+      );
+
+    })
+    .slice(0, 100),
   null,
   2
 )}
@@ -938,10 +992,30 @@ YÊU CẦU USER:
 
 ${finalPrompt}
 
+TOP MATCHED SYMBOLS:
+
+${JSON.stringify(
+  symbolIndex
+    .filter(s => {
+      const q =
+        finalPrompt.toLowerCase();
+
+      return (
+        s.symbol?.toLowerCase()?.includes(q) ||
+        q.includes(
+          s.symbol?.toLowerCase?.() || ""
+        )
+      );
+    })
+    .slice(0, 50),
+  null,
+  2
+)}
+
 RELATED FLOWS:
 
 ${JSON.stringify(
-  flowMap.slice(0, 10),
+  flowMap.slice(0, 3),
   null,
   2
 )}

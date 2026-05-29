@@ -69,7 +69,16 @@ export function buildFlowMap(
 			  "JSON",
 			  "Math",
 			  "Set",
-			  "Map"
+			  "Map",
+			  "setTimeout",
+			  "useEffect",
+			  "useState",
+			  "require",
+			  "import",
+			  "write",
+			  "read",
+			  "send",
+			  "end"
 			].includes(fn)
           ) {
 
@@ -78,6 +87,12 @@ export function buildFlowMap(
 			) {
 
 			  unique.add(fn);
+
+				if (
+				  fn.length < 3
+				) {
+				  continue;
+				}
 
 			  calls.push(fn);
 
