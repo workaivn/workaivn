@@ -69,6 +69,17 @@ import {
   retrieveCodeContext
 } from "./services/retrieveCodeContext.js";
 import {
+  retrieveLocateContext
+} from "./services/retrieveLocateContext.js";
+
+import {
+  retrieveBugContext
+} from "./services/retrieveBugContext.js";
+
+import {
+  retrieveExplainContext
+} from "./services/retrieveExplainContext.js";
+import {
   runAgentLoop
 } from "./agent/runAgentLoop.js";
 
