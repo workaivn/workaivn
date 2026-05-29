@@ -823,7 +823,7 @@ for (const file of files) {
 
 	FULL SOURCE:
 
-	${file.content?.slice(0, 12000)}
+	${text.slice(0, 12000)}
 
 	`;
 }
@@ -918,6 +918,20 @@ switch (intent) {
       });
 
 }
+
+console.log(
+  "INTENT:",
+  intent
+);
+
+console.log(
+  "CODE CONTEXT:",
+  JSON.stringify(
+    codeContext,
+    null,
+    2
+  )
+);
 
  console.log(
   "CALL GRAPH:",
@@ -1115,40 +1129,14 @@ ${JSON.stringify(
   2
 )}
 
-MATCHED SYMBOLS:
+INTENT:
+
+${intent}
+
+RETRIEVAL RESULT:
 
 ${JSON.stringify(
-  codeContext
-    .matchedSymbols
-    .slice(0,20),
-  null,
-  2
-)}
-
-MATCHED FUNCTIONS:
-
-${JSON.stringify(
-  codeContext
-    .matchedFunctions
-    .slice(0,20),
-  null,
-  2
-)}
-
-LIKELY FUNCTIONS:
-
-${JSON.stringify(
-  codeContext
-    .likelyFunctions,
-  null,
-  2
-)}
-
-RELATED FUNCTIONS:
-
-${JSON.stringify(
-  codeContext
-    .relatedFunctions,
+  codeContext,
   null,
   2
 )}
