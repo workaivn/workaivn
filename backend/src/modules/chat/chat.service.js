@@ -666,35 +666,11 @@ export async function streamChat({
 
 		content: `
 
-	IMPORTANT:
+		ACTIVE FILES:
 
-	- Nếu thấy exact function/class:
-	  PHẢI quote đúng nội dung thật.
-	- Không được đoán code không tồn tại.
-	- Nếu function tồn tại:
-	  phải nói rõ FILE + FUNCTION NAME.
-	- Không được invent patch nếu chưa thấy code thật.
+		${activeFilesText}
 
-	QUAN TRỌNG:
-
-	- Nếu user hỏi:
-	  "ở đâu"
-	  "nằm ở đâu"
-	  "file nào"
-
-	THÌ PHẢI trả lời:
-
-	1. FILE NAME
-	2. FUNCTION NAME
-	3. Code snippet thật
-
-	Không được trả lời chung chung.
-
-	ACTIVE FILES:
-
-	${activeFilesText}
-
-	`
+		Ưu tiên dùng code thật từ file upload.
 
 	  });
 
@@ -730,50 +706,6 @@ export async function streamChat({
 	const cleanedMessages =
   finalMessages;
 
-		if (
-		  activeFilesText
-		) {
-
-		  cleanedMessages.push({
-
-			role: "system",
-
-			content: `
-
-		IMPORTANT:
-
-		- Nếu thấy exact function/class:
-		  PHẢI quote đúng nội dung thật.
-		- Không được đoán code không tồn tại.
-		- Nếu function tồn tại:
-		  phải nói rõ FILE + FUNCTION NAME.
-		- Không được invent patch nếu chưa thấy code thật.
-
-		QUAN TRỌNG:
-
-		- Nếu user hỏi:
-		  "ở đâu"
-		  "nằm ở đâu"
-		  "file nào"
-
-		THÌ PHẢI trả lời:
-
-		1. FILE NAME
-		2. FUNCTION NAME
-		3. Code snippet thật
-
-		Không được trả lời chung chung.
-
-		ACTIVE FILES:
-
-		${activeFilesText}
-
-		`
-
-		  });
-
-		}
-
 		let answer = "";
 		let streamed = "";
 
@@ -786,25 +718,19 @@ export async function streamChat({
 
 		  latestUserMessage
 			.toLowerCase()
-			.includes("fix")
+			.includes("apply patch now")
 
 		  ||
 
 		  latestUserMessage
 			.toLowerCase()
-			.includes("sửa")
+			.includes("auto fix now")
 
 		  ||
 
 		  latestUserMessage
 			.toLowerCase()
-			.includes("bug")
-
-		  ||
-
-		  latestUserMessage
-			.toLowerCase()
-			.includes("refactor");
+			.includes("edit file now");
 
 		if (isAgentTask) {
 

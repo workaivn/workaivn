@@ -865,7 +865,7 @@ const totalFiles =
 
 const fileNames =
   activeFiles
-    .map(f => f.originalname)
+    .map(f => f.name)
     .join(", ");
 
 const finalPrompt =
@@ -877,91 +877,20 @@ const finalPrompt =
     "Đề xuất cải thiện"
   ].join("\n");
 	
-const intent =
-  detectIntent(
-    finalPrompt
-  );
-
 let responseFormat = `
 
-FORMAT:
+Hãy trả lời theo cách phù hợp nhất với câu hỏi.
 
-FILE:
-PHÂN TÍCH:
-GIẢI THÍCH:
-
-`;
-if (
-  intent === "locate"
-) {
-
-  responseFormat = `
-
-FORMAT:
-
-FILE:
-- tên file chính xác
-
-FUNCTION:
-- tên function chính xác
-
-LOCATION:
-- function nằm trong file nào
-- module nào
-
-EXPLAIN:
-- function dùng để làm gì
-
-CODE:
-- trích đúng snippet thật
+Ưu tiên:
+- Trả lời trực tiếp
+- Tự nhiên như senior engineer
+- Nếu hỏi vị trí: nêu file và function
+- Nếu hỏi fix bug: đưa patch
+- Nếu hỏi giải thích: giải thích dễ hiểu
+- Không bắt buộc format cố định
 
 `;
 
-}
-
-else if (
-  intent === "bugfix"
-) {
-
-  responseFormat = `
-
-FORMAT:
-
-FILE:
-VẤN ĐỀ:
-ẢNH HƯỞNG:
-FIX:
-PATCH:
-
-`;
-
-}
-
-else if (
-  intent === "explain"
-) {
-
-  responseFormat = `
-
-FORMAT:
-
-ENTRY:
-- function bắt đầu
-
-FLOW:
-- function A
-→ function B
-→ function C
-
-FILES:
-- file nào tham gia flow
-
-GIẢI THÍCH:
-- mô tả flow thật sự
-
-`;
-
-}
 let ask = `
 
 Bạn là senior software engineer và technical architect.
@@ -976,192 +905,46 @@ USER UPLOADED ${totalFiles} FILES.
 FILES:
 ${fileNames}
 
-MỤC TIÊU:
+Bạn là senior software engineer.
+TOP SYMBOLS:
 
-- Trace execution flow chính xác
-- Nếu user hỏi flow:
-  phải trả exact call chain
-- Không được chỉ mô tả kiến trúc chung chung
-- Ưu tiên function thật từ FLOW MAP
+${JSON.stringify(
+  symbolIndex
+    .slice(0, 200),
+  null,
+  2
+)}
 
-- Hiểu project structure
-- Hiểu dependency giữa files
-- Tìm root cause thật sự
-- Sửa bug chính xác
-- Tối ưu code nếu cần
-- Giải thích ngắn gọn nhưng hữu ích
+Bạn đang đọc source code thật do user upload.
 
-NGUYÊN TẮC:
-- Không đoán bừa
-- Không trả lời chung chung
-- Không dump full source code
-- Chỉ show phần code cần sửa
-- Nếu bug nằm ở file khác, phải nói rõ
-- Nếu có nhiều files, phải phân tích nhiều files
-- Không được bỏ qua file upload
-- Ưu tiên fix thực tế production
-- Không thêm emoji trong code
-- Không thêm comment kiểu AI
-- Không lặp OLD và NEW giống nhau
+Nguyên tắc:
 
-QUAN TRỌNG:
-- Nếu user upload nhiều files:
-  PHẢI phân tích đủ context để tìm ra câu trả lời chính xác
-- Chỉ phân tích file thật sự liên quan tới câu hỏi
-- Không bắt buộc phải trả lời tất cả files nếu chỉ có 1 file liên quan
-- Nếu câu hỏi liên quan nhiều files:
-  phải chỉ rõ file nào liên quan gì
-- Nếu user hỏi 1 function hoặc vấn đề cụ thể:
-  chỉ tập trung vào function/vấn đề đó
-- Nếu đã tìm thấy exact function:
-  phải ưu tiên trả lời vị trí chính xác trước
-- Không được thêm file không liên quan
-- Không được invent bug, patch hoặc refactor nếu user không yêu cầu
-- Ưu tiên trả lời trực tiếp, rõ ràng và ngắn gọn trước
+- Chỉ dùng thông tin có trong source code
+- Không đoán nếu chưa thấy code
+- Ưu tiên root cause
+- Ưu tiên câu trả lời trực tiếp
+- Nếu tìm thấy function:
+  nói rõ file và function
+- Nếu user yêu cầu sửa:
+  đề xuất cách sửa phù hợp
+- Nếu chưa đủ dữ liệu:
+  nói rõ file cần thêm
 
-KHI PHÂN TÍCH:
-
-- Chỉ tạo PATCH nếu user thật sự yêu cầu fix bug/sửa code
-- Nếu user chỉ hỏi vị trí hoặc giải thích:
-  KHÔNG được invent bug
-  KHÔNG được invent patch
-
-- Ưu tiên trả lời trực tiếp câu hỏi user
+Trả lời tự nhiên như một senior engineer.
 
 ${responseFormat}
-
-QUY TẮC PATCH:
-PATCH FORMAT JSON:
-
-Khi user yêu cầu fix/sửa/refactor:
-
-- Ưu tiên trả PATCH FORMAT JSON
-- Không trả lời dài dòng
-- Không dump full source
-- Chỉ patch đúng phần cần sửa
-
-[
-  {
-    "file": "src/example.js",
-    "find": "old code",
-    "replace": "new code"
-  }
-]
-
-- "file": file cần sửa
-- "find": đoạn code cũ
-- "replace": đoạn code mới
-
-OLD và NEW phải khác nhau thật sự
-Chỉ show phần thay đổi
-Không show full file trừ khi user yêu cầu
-Nếu chỉ đổi 1 dòng thì chỉ show 1 dòng
-Ưu tiên patch clean và production-ready
-
-QUY TẮC MARKDOWN:
-
-MỌI code bắt buộc phải nằm trong markdown code block
-Tuyệt đối không trả raw code
-Không được viết code ngoài markdown block
-Tất cả snippet đều phải fenced
-
-Ví dụ JavaScript:
-
-const app = express();
-
-Ví dụ HTML:
-
-<!DOCTYPE html>
-<html>
-<body>
-</body>
-</html>
-
-Ví dụ CSS:
-
-.container {
-  display: flex;
-}
 
 YÊU CẦU USER:
 
 ${finalPrompt}
 
-FILES:
-
-FLOW MAP là phần QUAN TRỌNG NHẤT của context.
-
-Nếu FLOW MAP tồn tại:
-- PHẢI ưu tiên FLOW MAP hơn text summary
-- PHẢI dùng exact function names
-- PHẢI trace exact call chain
-- Không được mô tả kiến thức chung
-
-================ FLOW MAP ================
-
-Đây là execution chain thật từ source code.
-
-Khi user hỏi:
-- flow
-- execution
-- xử lý như thế nào
-- gọi function nào
-
-THÌ:
-- PHẢI dùng FLOW MAP
-- Không được invent
-- Không được trả lời kiến thức chung
-
-TOP EXECUTION FLOWS:
+RELATED FLOWS:
 
 ${JSON.stringify(
-
-  flowMap
-
-    .filter(f => {
-
-      const q =
-        finalPrompt
-          .toLowerCase();
-
-      return (
-
-        q.includes(
-          String(
-            f.function || ""
-          )
-          .toLowerCase()
-        )
-
-      );
-
-    })
-
-    .slice(0, 5),
-
+  flowMap.slice(0, 10),
   null,
   2
-
 )}
-==========================================
-
-================ IMPORTANT ================
-
-PHẢI ưu tiên:
-- FLOW MAP
-- FUNCTION META
-- FILE META
-- SOURCE CODE thật
-
-Không được trả lời theo kiến thức chung chung.
-
-Nếu FLOW MAP có dữ liệu:
-- PHẢI dùng exact function names
-- PHẢI trace exact execution flow
-
-Không được mô tả upload flow chung chung.
-
-===========================================
 
 FILES:
 
@@ -1207,61 +990,7 @@ const lowerPrompt =
   finalPrompt
     .toLowerCase();
 
-const isAutoPatchRequest =
-
-  lowerPrompt.includes(
-    "apply patch"
-  ) ||
-
-  lowerPrompt.includes(
-    "auto fix"
-  ) ||
-
-  lowerPrompt.includes(
-    "edit file now"
-  );
-
-const isPatchSuggestRequest =
-
-  (
-    lowerPrompt.includes(
-      "fix"
-    ) ||
-
-    lowerPrompt.includes(
-      "replace"
-    ) ||
-
-    lowerPrompt.includes(
-      "refactor"
-    ) ||
-
-    lowerPrompt.includes(
-      "sửa"
-    )
-  )
-
-  &&
-
-  (
-
-    hasCodeFile ||
-
-    lowerPrompt.includes(
-      ".js"
-    ) ||
-
-    lowerPrompt.includes(
-      ".jsx"
-    ) ||
-
-    lowerPrompt.includes(
-      ".ts"
-    )
-
-  );
-  
-  res.writeHead(200, {
+res.writeHead(200, {
   "Content-Type": "text/event-stream",
   "Cache-Control": "no-cache",
   Connection: "keep-alive"
@@ -1423,97 +1152,6 @@ return;
     "AI đọc file quá tải. Hãy thử ít file hơn hoặc file nhỏ hơn.";
 
 }
-  
-  
-	const mergedMap =
-	  new Map();
-
-	(existingChat?.activeFiles || [])
-	.forEach((f) => {
-
-	  mergedMap.set(
-		f.name,
-		f
-	  );
-
-	});
-
-	activeFiles.forEach((f) => {
-
-	  mergedMap.set(
-		f.name,
-		f
-	  );
-
-	});
-
-
-		/* =========================
-		   SAVE CHAT
-		========================= */
-
-		const uploadedFilesText =
-		  files
-			.map(f => f.originalname)
-			.join(", ");
-
-		const userMessageText =
-		  prompt?.trim()
-
-			? `${prompt.trim()}
-
-		📎 ${uploadedFilesText}`
-
-			: `📎 ${uploadedFilesText}`;
-
-		const newId =
-		  await saveChat(
-
-			req,
-
-			userMessageText,
-
-			answer,
-
-			chatId,
-
-			Array.from(
-			  mergedMap.values()
-			).slice(-30)
-
-		  );
-/* =====================
-DELETE TEMP
-===================== */
-
-for (const file of files) {
-
-  if (
-    fs.existsSync(file.path)
-  ) {
-
-    fs.unlinkSync(file.path);
-
-  }
-
-}
-
-console.log(
-  "FINAL ANSWER TYPE:",
-  typeof answer
-);
-
-console.log(
-  "FINAL ANSWER:",
-  answer
-);
-
-return res.json({
-ok:true,
-answer,
-chatId:newId
-});
-
 }catch(err){
 
 console.log(
