@@ -852,14 +852,61 @@ flowMap =
   buildFlowMap(
     activeFiles
   );
-const codeContext =
-  retrieveCodeContext({
-    query:
-      prompt || "",
-    symbolIndex,
-    callGraph,
-    activeFiles
-  });  
+const intent =
+  detectIntent(
+    prompt || ""
+  );
+
+let codeContext;
+
+switch (intent) {
+
+  case "locate":
+
+    codeContext =
+      retrieveLocateContext({
+        query: prompt,
+        symbolIndex,
+        activeFiles
+      });
+
+    break;
+
+  case "bugfix":
+
+    codeContext =
+      retrieveBugContext({
+        query: prompt,
+        symbolIndex,
+        callGraph,
+        activeFiles
+      });
+
+    break;
+
+  case "explain":
+
+    codeContext =
+      retrieveExplainContext({
+        query: prompt,
+        flowMap,
+        importGraph,
+        callGraph
+      });
+
+    break;
+
+  default:
+
+    codeContext =
+      retrieveCodeContext({
+        query: prompt,
+        symbolIndex,
+        callGraph,
+        activeFiles
+      });
+
+}
 
  console.log(
   "CALL GRAPH:",
@@ -1073,6 +1120,15 @@ ${JSON.stringify(
   codeContext
     .matchedFunctions
     .slice(0,20),
+  null,
+  2
+)}
+
+LIKELY FUNCTIONS:
+
+${JSON.stringify(
+  codeContext
+    .likelyFunctions,
   null,
   2
 )}
