@@ -666,11 +666,13 @@ export async function streamChat({
 
 		content: `
 
-		ACTIVE FILES:
+	ACTIVE FILES:
 
-		${activeFilesText}
+	${activeFilesText}
 
-		Ưu tiên dùng code thật từ file upload.
+	Ưu tiên dùng code thật từ file upload.
+
+	`
 
 	  });
 
