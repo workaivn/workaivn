@@ -21,9 +21,9 @@ router.use("/", authRoutes);
 router.use("/", chatRoutes);
 router.use("/", imageRoutes);
 router.use("/", adminRoutes);
-router.use("/api/ai", aiagentRoutes);
-router.use("/api/project-memory", projectMemoryRoutes);
-router.use("/api/task-workflows", taskWorkflowRoutes);
+router.use("/ai", aiagentRoutes);
+router.use("/project-memory", projectMemoryRoutes);
+router.use("/task-workflows", taskWorkflowRoutes);
 router.use("/", legacyRoutes);
 
 export default router;
