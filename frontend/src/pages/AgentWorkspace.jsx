@@ -112,12 +112,29 @@ export default function AgentWorkspace() {
             <h3>Prompt / Editor</h3>
             <p>Three-panel workspace for editing, running, and comparing work.</p>
           </div>
-          <div className="workspace-actions">
-            <button className="btn btn-secondary" type="button" onClick={() => setPromptText(selectedTask?.task?.inputPrompt || "")}>Reset</button>
-            <button className="btn btn-primary" type="button" onClick={runSelectedAgent} disabled={loading}>
-              {loading ? "Running..." : "Run Agent"}
-            </button>
-          </div>
+        </div>
+
+        <div className="agent-selector-bar">
+          <label className="agent-selector-label">🤖 Chọn Agent:</label>
+          <select
+            className="agent-selector-select"
+            value={selectedAgent?._id || ""}
+            onChange={e => {
+              const agent = agents.find(a => a._id === e.target.value) || null;
+              setSelectedAgent(agent);
+            }}
+          >
+            <option value="">-- Chọn agent để chạy --</option>
+            {agents.map(agent => (
+              <option key={agent._id} value={agent._id}>
+                {agent.name} ({agent.providerId?.code || "?"} · {agent.modelName})
+              </option>
+            ))}
+          </select>
+          <button className="btn btn-secondary" type="button" onClick={() => setPromptText(selectedTask?.task?.inputPrompt || "")}>Reset</button>
+          <button className="btn btn-primary" type="button" onClick={runSelectedAgent} disabled={loading || !selectedAgent}>
+            {loading ? "Running..." : "▶ Run"}
+          </button>
         </div>
 
         {error && <div className="alert alert-error">{error}</div>}
