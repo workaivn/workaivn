@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import "./AgentHub.css";
-import { useNavigate } from "react-router-dom";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+const API_ORIGIN = (import.meta.env.VITE_API_URL || "https://api.workaivn.com").replace(/\/api\/?$/, "");
+const API_URL = `${API_ORIGIN}/api`;
 
 export default function AgentHub() {
   const [tab, setTab] = useState("tasks");

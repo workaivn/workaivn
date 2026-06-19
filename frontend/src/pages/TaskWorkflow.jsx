@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import "./TaskWorkflow.css";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+const API_ORIGIN = (import.meta.env.VITE_API_URL || "https://api.workaivn.com").replace(/\/api\/?$/, "");
+const API_URL = `${API_ORIGIN}/api`;
 
 const emptyStep = (order = 1) => ({
   order,

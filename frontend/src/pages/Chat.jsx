@@ -1145,6 +1145,10 @@ async function runTool(item) {
   const isEmpty =
     messages.length === 0;
 
+  const quickCardItems = quickCards.flatMap((group) =>
+    Array.isArray(group.items) ? group.items : []
+  );
+
   return (
     <div className="app">
   <input
@@ -1201,7 +1205,7 @@ async function runTool(item) {
         ) : isEmpty ? (
           <section className="emptyWrap">
             <div className="heroTitle">Bạn muốn làm gì hôm nay?</div>
-            <div>{quickCards.map(renderQuickCard)}</div>
+            <div className="quickGrid">{quickCardItems.map(renderQuickCard)}</div>
             <div
               style={{
                 textAlign: "center",

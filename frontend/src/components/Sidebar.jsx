@@ -344,6 +344,27 @@ async function deleteChat(id) {
           + New Chat
         </button>
 
+        <div className="moduleShortcuts">
+          <button
+            className="moduleBtn"
+            onClick={() => goTo("/workspace")}
+          >
+            🏢 Workspace
+          </button>
+          <button
+            className="moduleBtn"
+            onClick={() => goTo("/agent-hub")}
+          >
+            🤖 Agent
+          </button>
+          <button
+            className="moduleBtn"
+            onClick={() => goTo("/prompt-builder")}
+          >
+            ⚙️ Prompt
+          </button>
+        </div>
+
         <div className="sideTabs premiumTabs">
           <button
             className={
@@ -621,9 +642,6 @@ async function deleteChat(id) {
   </div>
 )}
 
-<button className="logoutBtn" onClick={() => { goTo("/workspace"); }} > 🏢 Workspace </button>
-<button className="logoutBtn" onClick={() => { goTo("/agent-hub"); }} > 🤖 Agent Hub </button>
-<button className="logoutBtn" onClick={() => { goTo("/prompt-builder"); }} > ⚙️ Prompt Builder </button>
 <button className="logoutBtn" onClick={() => { goTo("/profile"); }} > 👤 Tài khoản </button>
 <button className="logoutBtn" onClick={logout} > 🚪 Logout </button>
       </div>
