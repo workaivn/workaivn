@@ -7,7 +7,11 @@ import "dotenv/config";
 import mongoose from "mongoose";
 import SystemSetting from "../models/SystemSetting.js";
 
-await mongoose.connect(process.env.MONGO_URI || "mongodb+srv://workaivn:WdhI0UjYBcOMZLCS@cluster0.wohpjri.mongodb.net/?appName=Cluster0");
+if (!process.env.MONGO_URI) {
+  throw new Error("MONGO_URI is required to seed system settings");
+}
+
+await mongoose.connect(process.env.MONGO_URI);
 
 const settings = [
   // ── GENERAL ─────────────────────────────────────────────

@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
-    "seed:agents": "node src/scripts/seed-agent-hub.js"
+    "seed:agents": "node src/scripts/seed-agent-hub.js",
+    "seed:settings": "node src/scripts/seed-settings.js",
+    "seed:all": "npm run seed:settings && npm run seed:agents"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
