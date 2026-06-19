@@ -4,6 +4,7 @@ import authRoutes from "./auth.routes.js";
 import chatRoutes from "./chat.routes.js";
 import imageRoutes from "./image.routes.js";
 import adminRoutes from "./admin.routes.js";
+import aiagentRoutes from "../modules/aiagent/aiagent.routes.js";
 
 import usageRoutes from "./usage.js";
 import paymentRoutes from "./payment.routes.js";
@@ -18,6 +19,7 @@ router.use("/", authRoutes);
 router.use("/", chatRoutes);
 router.use("/", imageRoutes);
 router.use("/", adminRoutes);
+router.use("/api/ai", aiagentRoutes);
 router.use("/", legacyRoutes);
 
 export default router;

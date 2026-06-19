@@ -607,7 +607,9 @@ async function deleteChat(id) {
   </div>
 )}
 
-
+<button className="logoutBtn" onClick={() => { window.location.href = "/workspace"; }} > 🏢 Workspace </button>
+<button className="logoutBtn" onClick={() => { window.location.href = "/agent-hub"; }} > 🤖 Agent Hub </button>
+<button className="logoutBtn" onClick={() => { window.location.href = "/prompt-builder"; }} > ⚙️ Prompt Builder </button>
 <button className="logoutBtn" onClick={() => { window.location.href = "/profile"; }} > 👤 Tài khoản </button>
 <button className="logoutBtn" onClick={logout} > 🚪 Logout </button>
       </div>

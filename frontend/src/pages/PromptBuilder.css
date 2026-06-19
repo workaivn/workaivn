@@ -1,0 +1,204 @@
+/* =====================================
+   PROMPT BUILDER CONTAINER
+===================================== */
+
+.prompt-builder-container {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 20px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.prompt-builder-header {
+  text-align: center;
+  color: white;
+  margin-bottom: 30px;
+  padding: 30px 20px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 12px;
+}
+
+.prompt-builder-header h1 {
+  font-size: 2.5em;
+  margin: 0 0 10px 0;
+}
+
+.prompt-builder-header p {
+  font-size: 1.1em;
+  margin: 0;
+  opacity: 0.9;
+}
+
+/* =====================================
+   LAYOUT
+===================================== */
+
+.prompt-builder-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 30px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.builder-form-section,
+.builder-output-section {
+  background: white;
+  border-radius: 12px;
+  padding: 30px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+}
+
+.builder-form-section h2,
+.builder-output-section h2 {
+  margin-top: 0;
+  margin-bottom: 20px;
+  color: #333;
+  font-size: 1.8em;
+}
+
+/* =====================================
+   FORM GROUPS
+===================================== */
+
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 8px;
+  color: #333;
+  font-weight: 600;
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 1em;
+  font-family: inherit;
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.form-group textarea {
+  resize: vertical;
+}
+
+.btn-large {
+  width: 100%;
+  padding: 15px;
+  font-size: 1.1em;
+  margin-top: 20px;
+}
+
+/* =====================================
+   PROMPT CARDS
+===================================== */
+
+.prompt-card {
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+
+.prompt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.prompt-header h3 {
+  margin: 0;
+  font-size: 1.1em;
+}
+
+.btn-copy {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.3s ease;
+}
+
+.btn-copy:hover {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+.btn-copy.copied {
+  background: #3c3;
+  border-color: #2a2;
+}
+
+.prompt-content {
+  padding: 15px;
+  margin: 0;
+  background: white;
+  overflow-x: auto;
+  font-size: 0.85em;
+  line-height: 1.5;
+  color: #333;
+  border-top: 1px solid #e0e0e0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* =====================================
+   RESPONSIVE
+===================================== */
+
+@media (max-width: 1200px) {
+  .prompt-builder-layout {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .prompt-builder-container {
+    padding: 10px;
+  }
+
+  .builder-form-section,
+  .builder-output-section {
+    padding: 20px;
+  }
+
+  .prompt-builder-header h1 {
+    font-size: 1.8em;
+  }
+
+  .prompt-content {
+    font-size: 0.75em;
+    max-height: 200px;
+  }
+}

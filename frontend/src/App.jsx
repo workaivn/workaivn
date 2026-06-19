@@ -9,6 +9,9 @@ import Users from "./pages/Users.jsx";
 import AdminDashboard from "./pages/AdminDashboard";
 import Profile from "./pages/Profile";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
+import AgentHub from "./pages/AgentHub.jsx";
+import PromptBuilder from "./pages/PromptBuilder.jsx";
+import AgentWorkspace from "./pages/AgentWorkspace.jsx";
 
 export default function App() {
   const host = window.location.hostname;
@@ -23,6 +26,9 @@ export default function App() {
   const isAdminDashboard = path === "/admin-dashboard";
   const isProfilePage = path === "/profile";
   const isForgotPasswordPage =  path === "/forgot-password";
+  const isAgentHubPage = path === "/agent-hub";
+  const isPromptBuilderPage = path === "/prompt-builder";
+  const isWorkspacePage = path === "/workspace";
 
   if (isLanding) {
     return <Landing />;
@@ -59,6 +65,20 @@ export default function App() {
   if (isAdminDashboard) {
     return <AdminDashboard />;
   }
+
+  if (isAgentHubPage) {
+    return <AgentHub />;
+  }
+
+  if (isPromptBuilderPage) {
+    return <PromptBuilder />;
+  }
+
+  if (isWorkspacePage) {
+    return <AgentWorkspace />;
+  }
+  
+  if (isProfilePage) { return <Profile />; }
   
   if (isProfilePage) { return <Profile />; }
   if (isForgotPasswordPage) {
