@@ -2,8 +2,7 @@ import React, { useEffect, useState } from "react";
 import axios from "axios";
 import "./AgentWorkspace.css";
 
-const API_ORIGIN = (import.meta.env.VITE_API_URL || "https://api.workaivn.com").replace(/\/api\/?$/, "");
-const API_URL = `${API_ORIGIN}/api`;
+const API_URL = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api").replace(/\/api\/api/, "/api").replace(/\/$/, "").replace(/\/api$/, "");
 
 export default function AgentWorkspace() {
   const [tasks, setTasks] = useState([]);
