@@ -7,7 +7,7 @@ import "dotenv/config";
 import mongoose from "mongoose";
 import SystemSetting from "../models/SystemSetting.js";
 
-await mongoose.connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/ai_saas");
+await mongoose.connect(process.env.MONGO_URI || "mongodb+srv://workaivn:WdhI0UjYBcOMZLCS@cluster0.wohpjri.mongodb.net/?appName=Cluster0");
 
 const settings = [
   // ── GENERAL ─────────────────────────────────────────────

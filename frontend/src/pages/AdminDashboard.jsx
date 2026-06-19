@@ -210,6 +210,7 @@ function ProvidersTab() {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
   const [msg, setMsg] = useState("");
+  const [seeding, setSeeding] = useState(false);
   const API = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api").replace(/\/api$/, "");
 
   async function load() {
@@ -221,6 +222,23 @@ function ProvidersTab() {
   }
 
   useEffect(() => { load(); }, []);
+
+  async function seedAgents() {
+    setSeeding(true);
+    try {
+      const r = await fetch(`${API}/api/admin/seed-agents`, {
+        method: "POST",
+        headers: { Authorization: "Bearer " + localStorage.getItem("token") }
+      });
+      const d = await r.json();
+      setMsg(d.message || (d.success ? "✅ Seed xong" : "❌ Lỗi"));
+      load();
+    } catch (e) {
+      setMsg("❌ " + e.message);
+    }
+    setSeeding(false);
+    setTimeout(() => setMsg(""), 6000);
+  }
 
   async function save() {
     const method = form._id ? "PATCH" : "POST";
@@ -253,7 +271,12 @@ function ProvidersTab() {
     <div className="adm-content">
       <div className="adm-header-row">
         <h2 className="adm-title">AI Providers</h2>
-        <button className="adm-btn-primary" onClick={() => startEdit(null)}>+ Thêm Provider</button>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button className="adm-btn-ghost" onClick={seedAgents} disabled={seeding}>
+            {seeding ? "Đang seed..." : "🌱 Seed Providers & Agents"}
+          </button>
+          <button className="adm-btn-primary" onClick={() => startEdit(null)}>+ Thêm Provider</button>
+        </div>
       </div>
       {msg && <div className="adm-toast">{msg}</div>}
       {editing && (

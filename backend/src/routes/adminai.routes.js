@@ -9,6 +9,94 @@ import AgentPromptTemplate from "../models/AgentPromptTemplate.js";
 const router = express.Router();
 
 /* =====================================================
+   SEED AGENT HUB (admin trigger)
+===================================================== */
+router.post("/admin/seed-agents", isAdmin, async (req, res) => {
+  try {
+    const existingProviders = await AiProvider.countDocuments();
+    const existingAgents = await AiAgent.countDocuments();
+
+    const providers = [
+      { name: "OpenAI", code: "openai", type: "api", baseUrl: "https://api.openai.com/v1", apiKeyEnv: "OPENAI_API_KEY", isActive: true },
+      { name: "Google Gemini", code: "gemini", type: "api", baseUrl: "https://generativelanguage.googleapis.com", apiKeyEnv: "GEMINI_API_KEY", isActive: true },
+      { name: "Anthropic Claude", code: "anthropic", type: "api", baseUrl: "https://api.anthropic.com/v1", apiKeyEnv: "ANTHROPIC_API_KEY", isActive: true },
+      { name: "OpenRouter", code: "openrouter", type: "api", baseUrl: "https://openrouter.ai/api/v1", apiKeyEnv: "OPENROUTER_API_KEY", isActive: true },
+      { name: "Manual External Tools", code: "manual_external", type: "manual", apiKeyEnv: null, isActive: true }
+    ];
+
+    // Upsert providers
+    let providerMap = new Map();
+    for (const p of providers) {
+      const doc = await AiProvider.findOneAndUpdate(
+        { code: p.code }, p, { upsert: true, new: true }
+      );
+      providerMap.set(p.code, doc._id);
+    }
+
+    const agents = [
+      {
+        providerId: providerMap.get("openai"), name: "GPT Coding Agent", code: "gpt_coding",
+        description: "Advanced coding with GPT-4o", modelName: "gpt-4o-mini",
+        agentType: "coding", capabilityTags: ["code", "refactor", "debugging", "testing"],
+        systemPrompt: "You are an expert software engineer. Analyze problems carefully, write clean maintainable code, consider edge cases.",
+        temperature: 0.5, maxTokens: 4000, isActive: true
+      },
+      {
+        providerId: providerMap.get("gemini"), name: "Gemini Large Context Agent", code: "gemini_large",
+        description: "Large context analysis with Gemini 1.5 Flash", modelName: "gemini-1.5-flash",
+        agentType: "coding", capabilityTags: ["large_context", "analysis", "documentation"],
+        systemPrompt: "You are a senior technical architect. Analyze large codebases, design system architecture, provide comprehensive documentation.",
+        temperature: 0.4, maxTokens: 8000, isActive: true
+      },
+      {
+        providerId: providerMap.get("anthropic"), name: "Claude Refactor Agent", code: "claude_refactor",
+        description: "Specialized in UI/UX and refactoring", modelName: "claude-3-haiku-20240307",
+        agentType: "refactoring", capabilityTags: ["ui", "ux", "react", "frontend"],
+        systemPrompt: "You are a UI/UX expert. Improve user experience, refactor React components, optimize performance.",
+        temperature: 0.6, maxTokens: 3000, isActive: true
+      },
+      {
+        providerId: providerMap.get("openrouter"), name: "OpenRouter Agent", code: "openrouter_agent",
+        description: "Cost-effective analysis via OpenRouter", modelName: "mistralai/mistral-7b-instruct",
+        agentType: "coding", capabilityTags: ["cost_effective", "quick_analysis"],
+        systemPrompt: "You are a practical software developer. Provide quick, actionable solutions.",
+        temperature: 0.7, maxTokens: 2000, isActive: true
+      },
+      {
+        providerId: providerMap.get("manual_external"), name: "Cline Manual Agent", code: "cline_manual",
+        description: "Use Cline IDE extension manually", modelName: "manual",
+        agentType: "manual", capabilityTags: ["manual", "cline", "local"],
+        systemPrompt: "Copy the prompt below into your Cline IDE extension and run it manually.",
+        temperature: 0.7, maxTokens: 2000, isActive: true
+      },
+      {
+        providerId: providerMap.get("manual_external"), name: "Cursor Manual Agent", code: "cursor_manual",
+        description: "Use Cursor IDE manually", modelName: "manual",
+        agentType: "manual", capabilityTags: ["manual", "cursor", "local"],
+        systemPrompt: "Copy the prompt below into your Cursor IDE and run it manually.",
+        temperature: 0.7, maxTokens: 2000, isActive: true
+      }
+    ];
+
+    let createdAgents = 0;
+    for (const a of agents) {
+      const exists = await AiAgent.findOne({ code: a.code });
+      if (!exists) {
+        await AiAgent.create(a);
+        createdAgents++;
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: `Seed xong: ${providerMap.size} providers, ${createdAgents} agents mới (đã có ${existingProviders} providers, ${existingAgents} agents trước đó)`
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/* =====================================================
    PROVIDERS
 ===================================================== */
 router.get("/admin/providers", isAdmin, async (req, res) => {
