@@ -100,7 +100,7 @@ export default function Login({
         ) {
 
           window.location.href =
-            "/admin";
+            "/admin-dashboard";
 
           return;
         }

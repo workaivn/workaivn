@@ -59,6 +59,8 @@ const [upgradeLoading, setUpgradeLoading] =
 const [upgradeInfo, setUpgradeInfo] =
   useState(null);
 
+const [isAdminUser, setIsAdminUser] = useState(false);
+
 // Plan config from API (with fallback)
 const [planConfig, setPlanConfig] = useState({
   upgradeText: "🚀 Nâng cấp",
@@ -78,6 +80,18 @@ useEffect(() => {
       }
     })
     .catch(() => {});
+}, []);
+
+useEffect(() => {
+  try {
+    const stored = JSON.parse(localStorage.getItem("user") || "{}");
+    const role = String(stored?.role || "").trim().toLowerCase();
+    const email = String(stored?.email || "").trim().toLowerCase();
+    const adminEmail = String(import.meta.env.VITE_ADMIN_EMAIL || "").trim().toLowerCase();
+    setIsAdminUser(role === "admin" || (adminEmail && email === adminEmail));
+  } catch {
+    setIsAdminUser(false);
+  }
 }, []);
   
 	useEffect(() => {
@@ -663,6 +677,11 @@ async function deleteChat(id) {
 )}
 
 <button className="logoutBtn" onClick={() => { goTo("/profile"); }} > 👤 Tài khoản </button>
+{isAdminUser && (
+  <button className="logoutBtn" onClick={() => { goTo("/admin-dashboard"); }}>
+    🛠 Admin Dashboard
+  </button>
+)}
 <button className="logoutBtn" onClick={logout} > 🚪 Logout </button>
       </div>
 	    

@@ -4,7 +4,6 @@ import Login from "./pages/Login.jsx";
 import Register from "./pages/Register.jsx";
 import Chat from "./pages/Chat.jsx";
 import Landing from "./pages/Landing.jsx";
-import Admin from "./pages/Admin.jsx";
 import Users from "./pages/Users.jsx";
 import AdminDashboard from "./pages/AdminDashboard";
 import Profile from "./pages/Profile";
@@ -39,11 +38,12 @@ export default function App() {
     setPathname(window.location.pathname);
   };
 
-  const isAdminPage = pathname === "/admin";
-  const isUsersPage = pathname === "/users";
-  const isAdminDashboard = pathname === "/admin-dashboard";
-  const isProfilePage = pathname === "/profile";
-  const isForgotPasswordPage = pathname === "/forgot-password";
+  const normalizedPath = pathname.replace(/\/+$/, "") || "/";
+  const isUsersPage = normalizedPath === "/users";
+  const isAdminDashboard =
+    normalizedPath === "/admin-dashboard" || normalizedPath === "/admin";
+  const isProfilePage = normalizedPath === "/profile";
+  const isForgotPasswordPage = normalizedPath === "/forgot-password";
 
   if (isLanding) {
     return <Landing />;
@@ -83,10 +83,6 @@ export default function App() {
   const activeShellView = shellViewByPath[pathname] || null;
 
   // 🔥 FIX: đảm bảo render đúng theo URL
-  if (isAdminPage) {
-    return <Admin />;
-  }
-
   if (isUsersPage) {
     return <Users />;
   }
