@@ -65,6 +65,99 @@ export default function Chat({ tab, setTab, mainView = null, navigateTo }) {
 
 	}, [messages]);
 
+  async function loadChats() {
+    try {
+      const r = await apiGet("/chats");
+      const d = await r.json();
+      setChats(Array.isArray(d) ? d : []);
+    } catch {
+      setChats([]);
+    }
+  }
+
+  async function loadUsage() {
+    try {
+      const r = await apiGet("/usage");
+      const d = await r.json();
+      if (d.error) {
+        setUsage(null);
+        return;
+      }
+      setUsage(d);
+    } catch {
+      setUsage(null);
+    }
+  }
+
+  async function openChat(id) {
+    try {
+      const r = await apiGet("/chat/" + id);
+      const d = await r.json();
+
+      const cleaned = (d.messages || []).map((msg) => ({
+        role: String(msg.role || "assistant"),
+        content:
+          typeof msg.content === "string"
+            ? msg.content
+            : JSON.stringify(msg.content || "", null, 2),
+        image: typeof msg.image === "string" ? msg.image : ""
+      }));
+
+      setChatId(id);
+      setMessages(cleaned);
+      setTab("chat");
+    } catch {}
+  }
+
+  function newChat() {
+    setMessages([]);
+    setText("");
+    setChatId(null);
+    setMode("normal");
+    setSmartFiles([]);
+    setPendingFileAction(null);
+  }
+
+  function logout() {
+    localStorage.removeItem("token");
+    window.location.reload();
+  }
+
+  function detectMode(input = "") {
+    const t = String(input).toLowerCase();
+
+    if (
+      t.includes("code") ||
+      t.includes("fix") ||
+      t.includes("bug") ||
+      t.includes("debug") ||
+      t.includes("function") ||
+      t.includes("api") ||
+      t.includes("react") ||
+      t.includes("node") ||
+      t.includes("javascript") ||
+      t.includes("typescript") ||
+      t.includes("python")
+    ) {
+      return "code";
+    }
+
+    return "normal";
+  }
+
+  function detectImageIntent(prompt = "") {
+    const t = prompt.toLowerCase().trim();
+
+    if (t.includes("xóa nền")) return "removebg";
+    if (t.includes("4x6") || t.includes("ảnh thẻ")) return "passport";
+    if (t.includes("nâng nét") || t.includes("làm nét")) return "upscale";
+    if (t.includes("tạo ảnh") || t.includes("vẽ ảnh") || t.includes("ảnh ")) {
+      return "create";
+    }
+
+    return null;
+  }
+
   async function sendText(prompt) {
     const cleanPrompt = String(prompt || "").trim();
 
@@ -665,19 +758,26 @@ if (fileInputRef.current) {
 	  smartFiles?.[0] ||
 	  null;
 
+    const userMessage = {
+      role: "user",
+      content: prompt
+    };
+
+    const nextMessages = [
+      ...messagesRef.current,
+      userMessage
+    ];
+
     setMessages((prev) => [
       ...prev,
       {
-        role: "user",
-        content: prompt
+        ...userMessage
       },
-	  
-	  /*
       {
+        id: assistantId,
         role: "assistant",
-        content: "Đang tạo ảnh..."
+        content: ""
       }
-	  */
     ]);
 
     setLoadingType("image");
