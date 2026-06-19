@@ -9,26 +9,41 @@ import Users from "./pages/Users.jsx";
 import AdminDashboard from "./pages/AdminDashboard";
 import Profile from "./pages/Profile";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
-import AgentHub from "./pages/AgentHub.jsx";
-import PromptBuilder from "./pages/PromptBuilder.jsx";
-import AgentWorkspace from "./pages/AgentWorkspace.jsx";
 
 export default function App() {
   const host = window.location.hostname;
-  const path = window.location.pathname;
+  const [pathname, setPathname] = useState(() => window.location.pathname);
 
   const isLanding =
     host === "workaivn.com" ||
     host === "www.workaivn.com";
 
-  const isAdminPage = path === "/admin";
-  const isUsersPage = path === "/users";
-  const isAdminDashboard = path === "/admin-dashboard";
-  const isProfilePage = path === "/profile";
-  const isForgotPasswordPage =  path === "/forgot-password";
-  const isAgentHubPage = path === "/agent-hub";
-  const isPromptBuilderPage = path === "/prompt-builder";
-  const isWorkspacePage = path === "/workspace";
+  useEffect(() => {
+    function handlePopState() {
+      setPathname(window.location.pathname);
+    }
+
+    window.addEventListener("popstate", handlePopState);
+
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
+
+  const navigateTo = (nextPath) => {
+    if (!nextPath || nextPath === pathname) {
+      return;
+    }
+
+    window.history.pushState({}, "", nextPath);
+    setPathname(window.location.pathname);
+  };
+
+  const isAdminPage = pathname === "/admin";
+  const isUsersPage = pathname === "/users";
+  const isAdminDashboard = pathname === "/admin-dashboard";
+  const isProfilePage = pathname === "/profile";
+  const isForgotPasswordPage = pathname === "/forgot-password";
 
   if (isLanding) {
     return <Landing />;
@@ -53,6 +68,20 @@ export default function App() {
     localStorage.setItem("activeTab", tab);
   }, [tab]);
 
+  const shellViewByPath = {
+    "/workspace": "workspace",
+    "/agent-workspace": "workspace",
+    "/agent-hub": "agent-hub",
+    "/prompt-builder": "prompt-builder",
+    "/project-memory": "project-memory",
+    "/file-context": "file-context",
+    "/task-workflow": "task-workflow",
+    "/codex-cline-mode": "codex-cline-mode",
+    "/output-evaluator": "output-evaluator"
+  };
+
+  const activeShellView = shellViewByPath[pathname] || null;
+
   // 🔥 FIX: đảm bảo render đúng theo URL
   if (isAdminPage) {
     return <Admin />;
@@ -65,20 +94,6 @@ export default function App() {
   if (isAdminDashboard) {
     return <AdminDashboard />;
   }
-
-  if (isAgentHubPage) {
-    return <AgentHub />;
-  }
-
-  if (isPromptBuilderPage) {
-    return <PromptBuilder />;
-  }
-
-  if (isWorkspacePage) {
-    return <AgentWorkspace />;
-  }
-  
-  if (isProfilePage) { return <Profile />; }
   
   if (isProfilePage) { return <Profile />; }
   if (isForgotPasswordPage) {
@@ -92,5 +107,12 @@ export default function App() {
     return <Register setPage={setPage} />;
   }
 
-  return <Chat tab={tab} setTab={setTab} />;
+  return (
+    <Chat
+      tab={tab}
+      setTab={setTab}
+      mainView={activeShellView}
+      navigateTo={navigateTo}
+    />
+  );
 }

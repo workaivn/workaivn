@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import "./AgentHub.css";
+import { useNavigate } from "react-router-dom";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
@@ -29,6 +30,8 @@ export default function AgentHub() {
   useEffect(() => {
     loadInitialData();
   }, []);
+
+
 
   async function loadInitialData() {
     try {
@@ -191,6 +194,8 @@ export default function AgentHub() {
     setError("Copied to clipboard!");
     setTimeout(() => setError(""), 2000);
   }
+
+
 
   return (
     <div className="agent-hub-container">

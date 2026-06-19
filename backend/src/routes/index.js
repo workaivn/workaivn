@@ -5,6 +5,8 @@ import chatRoutes from "./chat.routes.js";
 import imageRoutes from "./image.routes.js";
 import adminRoutes from "./admin.routes.js";
 import aiagentRoutes from "../modules/aiagent/aiagent.routes.js";
+import projectMemoryRoutes from "../modules/projectmemory/projectmemory.routes.js";
+import taskWorkflowRoutes from "../modules/taskworkflow/taskworkflow.routes.js";
 
 import usageRoutes from "./usage.js";
 import paymentRoutes from "./payment.routes.js";
@@ -20,6 +22,8 @@ router.use("/", chatRoutes);
 router.use("/", imageRoutes);
 router.use("/", adminRoutes);
 router.use("/api/ai", aiagentRoutes);
+router.use("/api/project-memory", projectMemoryRoutes);
+router.use("/api/task-workflows", taskWorkflowRoutes);
 router.use("/", legacyRoutes);
 
 export default router;

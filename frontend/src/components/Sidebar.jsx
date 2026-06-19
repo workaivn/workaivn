@@ -19,6 +19,7 @@ export default function Sidebar({
   logout,
   tab,
   setTab,
+  navigateTo,
   usage = null,
   refreshUsage,
 
@@ -195,6 +196,15 @@ useEffect(() => {
   const planName =
     usage?.plan || "free";
 
+  function goTo(path) {
+    if (typeof navigateTo === "function") {
+      navigateTo(path);
+      return;
+    }
+
+    window.location.href = path;
+  }
+
   const limits =
     usage?.limits || {};
 
@@ -327,6 +337,7 @@ async function deleteChat(id) {
           className="newBtn premium"
           onClick={() => {
             setTab("chat");
+            goTo("/");
             newChat();
           }}
         >
@@ -340,9 +351,10 @@ async function deleteChat(id) {
                 ? "active"
                 : ""
             }
-            onClick={() =>
-              setTab("chat")
-            }
+            onClick={() => {
+              setTab("chat");
+              goTo("/");
+            }}
           >
             💬 Chat
           </button>
@@ -353,9 +365,10 @@ async function deleteChat(id) {
                 ? "active"
                 : ""
             }
-            onClick={() =>
-              setTab("tools")
-            }
+            onClick={() => {
+              setTab("tools");
+              goTo("/");
+            }}
           >
             🧰 Tools
           </button>
@@ -435,6 +448,7 @@ async function deleteChat(id) {
                       setTab(
                         "chat"
                       );
+                      goTo("/");
                       openChat(
                         chat._id
                       );
@@ -607,10 +621,10 @@ async function deleteChat(id) {
   </div>
 )}
 
-<button className="logoutBtn" onClick={() => { window.location.href = "/workspace"; }} > 🏢 Workspace </button>
-<button className="logoutBtn" onClick={() => { window.location.href = "/agent-hub"; }} > 🤖 Agent Hub </button>
-<button className="logoutBtn" onClick={() => { window.location.href = "/prompt-builder"; }} > ⚙️ Prompt Builder </button>
-<button className="logoutBtn" onClick={() => { window.location.href = "/profile"; }} > 👤 Tài khoản </button>
+<button className="logoutBtn" onClick={() => { goTo("/workspace"); }} > 🏢 Workspace </button>
+<button className="logoutBtn" onClick={() => { goTo("/agent-hub"); }} > 🤖 Agent Hub </button>
+<button className="logoutBtn" onClick={() => { goTo("/prompt-builder"); }} > ⚙️ Prompt Builder </button>
+<button className="logoutBtn" onClick={() => { goTo("/profile"); }} > 👤 Tài khoản </button>
 <button className="logoutBtn" onClick={logout} > 🚪 Logout </button>
       </div>
 	    

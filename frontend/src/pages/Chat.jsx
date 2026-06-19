@@ -6,9 +6,17 @@ import Tools from "./Tools.jsx";
 import Sidebar from "../components/Sidebar";
 import Composer from "../components/Composer";
 import MessageList from "../components/MessageList";
+import AgentHub from "./AgentHub.jsx";
+import PromptBuilder from "./PromptBuilder.jsx";
+import AgentWorkspace from "./AgentWorkspace.jsx";
+import ProjectMemory from "./ProjectMemory.jsx";
+import FileContextManager from "./FileContextManager.jsx";
+import TaskWorkflow from "./TaskWorkflow.jsx";
+import CodexClineMode from "./CodexClineMode.jsx";
+import OutputEvaluator from "./OutputEvaluator.jsx";
 import { apiGet, apiPost } from "../services/api";
 
-export default function Chat({ tab, setTab }) {
+export default function Chat({ tab, setTab, mainView = null, navigateTo }) {
 
   const [paywallDismissed, setPaywallDismissed] = useState(false);
   const [usage, setUsage] = useState(null);
@@ -47,428 +55,146 @@ export default function Chat({ tab, setTab }) {
 		messages;
 	}, [messages]);
 
-	useEffect(() => {
+  useEffect(() => {
 
 	  requestAnimationFrame(() => {
-
 		endRef.current?.scrollIntoView({
 		  behavior: "smooth"
 		});
-
 	  });
 
 	}, [messages]);
 
-  useEffect(() => {
-    if (!usage || paywallDismissed) return;
-
-    const used = usage?.used?.chat || 0;
-    const limit = usage?.limits?.chatPerDay || 0;
-
-    if (usage.plan === "free" && limit > 0 && used >= limit) {
-      setShowPaywall(true);
-    }
-  }, [usage, paywallDismissed]);
-
-  /* ==================================================
-     API
-  ================================================== */
-
-  async function loadChats() {
-    try {
-      const r = await apiGet("/chats");
-      const d = await r.json();
-	  console.log(
-	  "UPLOAD RESPONSE:",
-	  d
-	);
-      setChats(Array.isArray(d) ? d : []);
-    } catch {
-      setChats([]);
-    }
-  }
-
-  async function loadUsage() {
-    try {
-      const r = await apiGet("/usage");
-      const d = await r.json();
-      if (d.error) return setUsage(null);
-      setUsage(d);
-    } catch {
-      setUsage(null);
-    }
-  }
-
-  async function openChat(id) {
-
-	  try {
-
-		const r =
-		  await apiGet(
-			"/chat/" + id
-		  );
-
-		const d =
-		  await r.json();
-
-		const cleaned =
-		  (d.messages || []).map(
-			msg => ({
-
-			  role:
-				String(
-				  msg.role ||
-				  "assistant"
-				),
-
-			  content:
-				typeof msg.content ===
-				"string"
-
-				  ? msg.content
-
-				  : JSON.stringify(
-					  msg.content || "",
-					  null,
-					  2
-					),
-
-			  image:
-				typeof msg.image ===
-				"string"
-				  ? msg.image
-				  : ""
-
-			})
-		  );
-
-		setChatId(id);
-
-		setMessages(cleaned);
-
-	  } catch {}
-
-	}
-
-  function newChat() {
-    setMessages([]);
-    setText("");
-    setChatId(null);
-    setMode("normal");
-    setSmartFiles([]);
-    setPendingFileAction(null);
-  }
-
-  function logout() {
-    localStorage.removeItem("token");
-    location.reload();
-  }
-
-/* CODE MODE */
-
- function detectMode(text = "") {
-    const t = text.toLowerCase();
-
-    if (
-      t.includes("code") ||
-      t.includes("fix") ||
-      t.includes("lỗi") ||
-      t.includes("bug") ||
-      t.includes("debug") ||
-      t.includes("function") ||
-      t.includes("api") ||
-      t.includes("react") ||
-      t.includes("node") ||
-      t.includes("javascript") ||
-      t.includes("python")
-    ) {
-      return "code";
-    }
-
-    return "normal";
-  }
-
-  function detectImageIntent(prompt = "") {
-    const t = prompt.toLowerCase().trim();
-
-    if (t.includes("xóa nền")) return "removebg";
-    if (t.includes("4x6") || t.includes("ảnh thẻ")) return "passport";
-    if (t.includes("nâng nét") || t.includes("làm nét")) return "upscale";
-    if (t.includes("tạo ảnh") || t.includes("vẽ ảnh") || t.includes("ảnh "))
-      return "create";
-
-    return null;
-  }
-
-  /* ==================================================
-     CHAT TEXT
-  ================================================== */
-
   async function sendText(prompt) {
+    const cleanPrompt = String(prompt || "").trim();
 
-	  const cleanPrompt =
-		String(prompt || "").trim();
-
-	  if (!cleanPrompt) return;
-
-	  if (
-		usage?.plan === "free" &&
-		(usage?.used?.chat || 0) >=
-		(usage?.limits?.chatPerDay || 0)
-	  ) {
-		if (!paywallDismissed) {
-		  setShowPaywall(true);
-		}
-
-		return;
-	  }
-
-	  /* =====================================
-		 CLEAR INPUT NGAY
-	  ===================================== */
-
-	  setText("");
-
-	  const assistantId =
-		  Date.now() + "-assistant";
-
-		const userMessage = {
-		  role: "user",
-		  content: cleanPrompt
-		};
-
-	  /* render ngay bubble user */
-
-	  setLoading(true);
-	  setLoadingType("chat");
-
-	  try {
-
-		const autoMode =
-		  detectMode(cleanPrompt);
-
-		/* IMPORTANT:
-		   dùng latest messages
-		*/
-
-		const nextMessages = [
-		  ...messagesRef.current,
-		  userMessage
-		];
-
-		/* sync latest chatId */
-
-		const latestChatId =
-		  chatIdRef.current;
-			setMessages(prev => [
-			  ...prev,
-
-			  userMessage,
-
-			  {
-				id: assistantId,
-				role: "assistant",
-				content: ""
-			  }
-			]);
-		const r =
-		  await apiPost(
-			"/chat",
-			{
-			  messages:
-				nextMessages,
-
-			  search,
-
-			  mode: autoMode,
-
-			  chatId:
-				latestChatId
-			}
-		  );
-if (!r.body) {
-  throw new Error(
-    "Streaming not supported."
-  );
-}
-
-const reader =
-  r.body.getReader();
-
-const decoder =
-  new TextDecoder();
-
-let buffer = "";
-
-while (true) {
-
-  const {
-    done,
-    value
-  } = await reader.read();
-
-  if (done) break;
-
-  const chunk =
-    decoder.decode(
-      value,
-      { stream: true }
-    );
-
-  buffer += chunk;
-  buffer =
-  buffer.replace(/\r\n/g, "\n");
-
-  const events =
-	buffer.split(/\r?\n\r?\n/);
-
-  buffer =
-    events.pop() || "";
-
-  for (const event of events) {
-
-    const line =
-      event
-        .split("\n")
-        .find(x =>
-          x.startsWith("data:")
-        );
-
-    if (!line)
-      continue;
-
-    const raw =
-      line
-        .replace("data:", "")
-        .trim();
+    if (!cleanPrompt) return;
 
     if (
-      !raw ||
-      raw === "[DONE]"
+      usage?.plan === "free" &&
+      (usage?.used?.chat || 0) >= (usage?.limits?.chatPerDay || 0)
     ) {
-      continue;
-    }
-
-    try {
-
-      const json =
-        JSON.parse(raw);
-
-      switch (json.type) {
-
-        case "token":
-
-		  setMessages(prev => {
-
-			return prev.map(msg => {
-
-			  if (
-				msg.id === assistantId
-			  ) {
-
-				return {
-				  ...msg,
-
-				  content:
-					(msg.content || "") +
-					(json.delta || "")
-				};
-
-			  }
-
-			  return msg;
-
-			});
-
-		  });
-
-		  break;
-
-        case "done":
-
-          setMessages(prev => {
-
-            return prev.map(msg => {
-
-              if (
-                msg.id === assistantId
-              ) {
-
-                return {
-                  ...msg,
-                  content:
-                    json.final ||
-                    msg.content
-                };
-
-              }
-
-              return msg;
-
-            });
-
-          });
-
-          break;
-
-        case "error":
-
-          console.log(
-            "ERROR:",
-            json.error
-          );
-
-          break;
-
+      if (!paywallDismissed) {
+        setShowPaywall(true);
       }
 
-    } catch (err) {
-
-      console.log(
-        "SSE PARSE FAIL",
-        err
-      );
-
+      return;
     }
 
+    setText("");
+
+    const assistantId = Date.now() + "-assistant";
+    const userMessage = {
+      role: "user",
+      content: cleanPrompt
+    };
+
+    setLoading(true);
+    setLoadingType("chat");
+
+    try {
+      const autoMode = detectMode(cleanPrompt);
+      const nextMessages = [...messagesRef.current, userMessage];
+      const latestChatId = chatIdRef.current;
+
+      setMessages((prev) => [
+        ...prev,
+        userMessage,
+        {
+          id: assistantId,
+          role: "assistant",
+          content: ""
+        }
+      ]);
+
+      const r = await apiPost("/chat", {
+        messages: nextMessages,
+        search,
+        mode: autoMode,
+        chatId: latestChatId
+      });
+
+      if (!r.body) {
+        throw new Error("Streaming not supported.");
+      }
+
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+        buffer = buffer.replace(/\r\n/g, "\n");
+
+        const events = buffer.split(/\r?\n\r?\n/);
+        buffer = events.pop() || "";
+
+        for (const event of events) {
+          const line = event.split("\n").find((x) => x.startsWith("data:"));
+
+          if (!line) continue;
+
+          const raw = line.replace("data:", "").trim();
+
+          if (!raw || raw === "[DONE]") continue;
+
+          try {
+            const json = JSON.parse(raw);
+
+            if (json.type === "token") {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === assistantId
+                    ? {
+                        ...msg,
+                        content: (msg.content || "") + (json.delta || "")
+                      }
+                    : msg
+                )
+              );
+            }
+
+            if (json.type === "done") {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === assistantId
+                    ? {
+                        ...msg,
+                        content: json.final || msg.content
+                      }
+                    : msg
+                )
+              );
+            }
+          } catch (err) {
+            console.log("SSE PARSE FAIL", err);
+          }
+        }
+      }
+
+      await loadChats();
+    } catch {
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantId
+            ? {
+                ...msg,
+                content: "Lỗi phản hồi AI"
+              }
+            : msg
+        )
+      );
+    } finally {
+      setLoading(false);
+      setLoadingType("none");
+      await loadUsage();
+    }
   }
-
-}
-
-		await loadChats();
-
-	  } catch {
-
-		setMessages(prev => {
-
-		  return prev.map(msg => {
-
-			  if (
-				msg.id === assistantId
-			  ) {
-
-				return {
-				  ...msg,
-				  content: "Lỗi phản hồi AI"
-				};
-
-			  }
-
-			  return msg;
-
-			});
-		});
-
-	  } finally {
-
-		setLoading(false);
-		setLoadingType("none");
-
-		await loadUsage();
-
-	  }
-
-	}
 
   /* ==================================================
      FILE
@@ -1189,6 +915,129 @@ async function runTool(item) {
     );
   }
 
+  function renderShellModule() {
+    switch (mainView) {
+      case "workspace":
+        return <AgentWorkspace />;
+      case "agent-hub":
+        return <AgentHub />;
+      case "prompt-builder":
+        return <PromptBuilder />;
+      case "project-memory":
+        return <ProjectMemory />;
+      case "file-context":
+        return <FileContextManager />;
+      case "task-workflow":
+        return <TaskWorkflow />;
+      case "codex-cline-mode":
+        return <CodexClineMode />;
+      case "output-evaluator":
+        return <OutputEvaluator />;
+      default:
+        return null;
+    }
+  }
+
+  async function handleComposerSend(files = []) {
+    const currentText = String(text || "").trim();
+
+    if (files?.length) {
+      const userPrompt = currentText;
+      const onlyImages = files.every((file) => file.type?.startsWith("image/"));
+
+      if (onlyImages) {
+        const assistantId = Date.now() + "-vision";
+        const token = localStorage.getItem("token") || "";
+        const API_URL = import.meta.env.VITE_API_URL || "https://api.workaivn.com/api";
+
+        const preview = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(files[0]);
+        });
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "user",
+            content: userPrompt || "📷 Ảnh",
+            image: preview
+          },
+          {
+            id: assistantId,
+            role: "assistant",
+            content: ""
+          }
+        ]);
+
+        setText("");
+        setLoading(true);
+        setLoadingType("chat");
+
+        try {
+          const fd = new FormData();
+          fd.append("prompt", currentText || "Phân tích ảnh giúp mình");
+          fd.append("tool", "vision");
+          fd.append("file", files[0]);
+
+          const r = await fetch(`${API_URL}/generate-image`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`
+            },
+            body: fd
+          });
+
+          const d = await r.json();
+
+          if (d.chatId) {
+            setChatId(d.chatId);
+            await loadChats();
+          }
+
+          setMessages((prev) =>
+            prev.map((msg) => {
+              if (msg.id === assistantId) {
+                return {
+                  ...msg,
+                  content: typeof d.answer === "string" ? d.answer : "Không đọc được ảnh."
+                };
+              }
+
+              return msg;
+            })
+          );
+        } catch {
+          setMessages((prev) =>
+            prev.map((msg) => {
+              if (msg.id === assistantId) {
+                return {
+                  ...msg,
+                  content: "Lỗi đọc ảnh."
+                };
+              }
+
+              return msg;
+            })
+          );
+        } finally {
+          setLoading(false);
+          setLoadingType("none");
+        }
+
+        return true;
+      }
+
+      setText("");
+      await sendRealFiles(currentText || "Xem file và hỗ trợ giúp mình", "file_summary", files);
+      await loadChats();
+      return true;
+    }
+
+    await sendText(text);
+    return true;
+  }
+
   /* ==================================================
      UI
   ================================================== */
@@ -1232,6 +1081,7 @@ async function runTool(item) {
   logout={logout}
   tab={tab}
   setTab={setTab}
+    navigateTo={navigateTo}
 
   usage={usage}
   refreshUsage={loadUsage}
@@ -1242,346 +1092,100 @@ async function runTool(item) {
 />
 
       <main className="main">
+        {mainView ? (
+          <div className="shellModuleWrap">
+            {renderShellModule()}
+          </div>
+        ) : tab === "tools" ? (
+          <Tools runTool={runTool} />
+        ) : isEmpty ? (
+          <section className="emptyWrap">
+            <div className="heroTitle">Bạn muốn làm gì hôm nay?</div>
+            <div>{quickCards.map(renderQuickCard)}</div>
+            <div
+              style={{
+                textAlign: "center",
+                marginTop: "12px",
+                color: "#64748b"
+              }}
+            >
+              Vào Tool Center để dùng
+              các công cụ AI cho doanh nghiệp.
+            </div>
+          </section>
+        ) : (
+          <>
+            <MessageList
+              messages={messages}
+              loading={loading && loadingType === "chat"}
+            />
 
-  {tab === "tools" ? (
+            {loading && loadingType === "image" && (
+              <div className="chatArea">
+                <div className="row assistant">
+                  <div className="bubble assistant typingBubble">
+                    <div className="msgRole">WorkAI</div>
+                    <div>Đang tạo ảnh...</div>
+                  </div>
+                </div>
+              </div>
+            )}
 
-    <Tools
-      runTool={runTool}
-    />
+            <div ref={endRef}></div>
+          </>
+        )}
 
-  ) : isEmpty ? (
+        {!mainView && tab !== "tools" && (
+          <Composer
+            text={text}
+            setText={setText}
+            search={search}
+            setSearch={setSearch}
+            loading={loading}
+            send={handleComposerSend}
+          />
+        )}
+      </main>
 
-    <section className="emptyWrap">
+      {showPaywall && (
+        <div className="paywallWrap">
+          <div className="paywallBox">
+            <div className="paywallBadge">FREE LIMIT REACHED</div>
+            <h2>Bạn đã dùng hết lượt chat hôm nay</h2>
+            <p>Nâng cấp Pro để tiếp tục dùng AI không gián đoạn.</p>
+            <div className="paywallPrice">Chỉ 99.000đ/tháng</div>
+            <div className="paywallList">
+              ✔ 200 chat/ngày<br />
+              ✔ Upload file nhiều hơn<br />
+              ✔ Tạo ảnh nhiều hơn<br />
+              ✔ Ưu tiên AI mạnh hơn
+            </div>
+            <div className="paywallActions">
+              <button
+                className="paywallBtn"
+                onClick={() => {
+                  setPaywallDismissed(true);
+                  setShowPaywall(false);
+                  setTab("chat");
+                  document.querySelector(".upgradeBtn")?.click();
+                }}
+              >
+                Nâng cấp ngay
+              </button>
 
-      <div className="heroTitle">
-        Bạn muốn làm gì hôm nay?
-      </div>
-
-      <div
-        style={{
-          textAlign:
-            "center",
-          marginTop:
-            "12px",
-          color:
-            "#64748b"
-        }}
-      >
-        Vào Tool Center để dùng
-        các công cụ AI cho
-        doanh nghiệp.
-      </div>
-
-    </section>
-
-  ) : (
-
-    <>
-     <MessageList
-	  messages={messages}
-	  loading={
-		loading &&
-		loadingType === "chat"
-	  }
-	/>
-{loading &&
- loadingType === "image" && (
-  <div className="chatArea">
-    <div className="row assistant">
-      <div className="bubble assistant typingBubble">
-        <div className="msgRole">
-          WorkAI
+              <button
+                className="paywallClose"
+                onClick={() => {
+                  setPaywallDismissed(true);
+                  setShowPaywall(false);
+                }}
+              >
+                Để sau
+              </button>
+            </div>
+          </div>
         </div>
-
-        <div>
-          Đang tạo ảnh...
-        </div>
-      </div>
-    </div>
-  </div>
-)}
-
-      <div
-        ref={endRef}
-      ></div>
-    </>
-
-  )}
-
-	 {
-	  tab !== "tools" && (
-		<Composer
-		  text={text}
-		  setText={setText}
-		  search={search}
-		  setSearch={setSearch}
-		  loading={loading}
-		  send={async (files = []) => {
-
-			if (files?.length) {
-
-			  const currentText =
-				String(text || "").trim();
-			  const userPrompt =
-				currentText;
-
-			  const onlyImages =
-				files.every(
-				  f => f.type?.startsWith("image/")
-				);
-
-			if (onlyImages) {
-				const assistantId =
-					Date.now() + "-vision";
-			  const token =
-				localStorage.getItem("token") || "";
-
-			  const API_URL =
-				import.meta.env.VITE_API_URL ||
-				"https://api.workaivn.com/api";
-
-			  const preview =
-				  await new Promise(resolve => {
-
-					const reader =
-					  new FileReader();
-
-					reader.onload = () =>
-					  resolve(reader.result);
-
-					reader.readAsDataURL(
-					  files[0]
-					);
-
-				  });
-
-			  /* HIỆN USER MESSAGE NGAY */
-
-			  setMessages(prev => [
-				  ...prev,
-
-				  {
-					role: "user",
-					content:
-					  userPrompt || "📷 Ảnh",
-					image: preview
-				  },
-
-				  {
-					id: assistantId,
-					role: "assistant",
-					content: ""
-				  }
-				]);
-
-			  /* CLEAR INPUT NGAY */
-
-			  setText("");
-
-			  setLoading(true);
-			  setLoadingType("chat");
-
-			  try {
-
-				const fd =
-				  new FormData();
-
-				fd.append(
-				  "prompt",
-				  currentText ||
-				  "Phân tích ảnh giúp mình"
-				);
-
-				fd.append(
-				  "tool",
-				  "vision"
-				);
-
-				fd.append(
-				  "file",
-				  files[0]
-				);
-				const r =
-				  await fetch(
-					`${API_URL}/generate-image`,
-					{
-					  method: "POST",
-
-					  headers: {
-						Authorization:
-						  `Bearer ${token}`
-					  },
-
-					  body: fd
-					}
-				  );
-
-				const d =
-				  await r.json();
-
-				if (d.chatId) {
-
-				  setChatId(
-					d.chatId
-				  );
-
-				  await loadChats();
-
-				}
-
-				setMessages(prev => {
-
-				  return prev.map(msg => {
-
-					if (
-					  msg.id === assistantId
-					) {
-
-					  return {
-						...msg,
-						content:
-						  typeof d.answer ===
-						  "string"
-							? d.answer
-							: "Không đọc được ảnh."
-					  };
-
-					}
-
-					return msg;
-
-				  });
-
-				});
-
-			  } catch {
-
-				setMessages(prev => {
-
-				  return prev.map(msg => {
-
-					if (
-					  msg.id === assistantId
-					) {
-
-					  return {
-						...msg,
-						content:
-						  "Lỗi đọc ảnh."
-					  };
-
-					}
-
-					return msg;
-
-				  });
-
-				});
-
-			  } finally {
-
-				setLoading(false);
-				setLoadingType("none");
-
-			  }
-
-			  return true;
-			}
-
-			/* FILE THƯỜNG */
-
-			setText("");
-
-			await sendRealFiles(
-			  currentText ||
-			  "Xem file và hỗ trợ giúp mình",
-			  "file_summary",
-			  files
-			);
-
-			/* IMPORTANT:
-			   sync latest chat list
-			*/
-
-			await loadChats();
-
-			return true;
-			}
-
-			/* KHÔNG CÓ FILE -> CHAT THƯỜNG */
-
-			await sendText(text);
-
-			return true;
-
-			}}
-		/>
-	  )
-	}
-</main>
-
-{showPaywall && (
-<div className="paywallWrap">
-
-  <div className="paywallBox">
-
-    <div className="paywallBadge">
-      FREE LIMIT REACHED
-    </div>
-
-    <h2>
-      Bạn đã dùng hết
-      lượt chat hôm nay
-    </h2>
-
-    <p>
-      Nâng cấp Pro để
-      tiếp tục dùng AI
-      không gián đoạn.
-    </p>
-
-    <div className="paywallPrice">
-      Chỉ 99.000đ/tháng
-    </div>
-
-    <div className="paywallList">
-      ✔ 200 chat/ngày<br/>
-      ✔ Upload file nhiều hơn<br/>
-      ✔ Tạo ảnh nhiều hơn<br/>
-      ✔ Ưu tiên AI mạnh hơn
-    </div>
-
-   <div className="paywallActions">
-  <button
-  className="paywallBtn"
-  onClick={() => {
-    setPaywallDismissed(true);   // 👈 QUAN TRỌNG
-    setShowPaywall(false);
-    setTab("chat");
-
-    document
-      .querySelector(".upgradeBtn")
-      ?.click();
-  }}
->
-  Nâng cấp ngay
-</button>
-
-<button
-  className="paywallClose"
-  onClick={() => {
-    setPaywallDismissed(true);   // 👈 thêm dòng này
-    setShowPaywall(false);
-  }}
->
-  Để sau
-</button>
-</div>
-
-  </div>
-
-</div>
-)}
+      )}
 
     </div>
   );

@@ -3,19 +3,20 @@
 ===================================== */
 
 .agent-hub-container {
-  min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  padding: 20px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 0;
+  background: transparent;
+  padding: 0;
+  font-family: inherit;
 }
 
 .agent-hub-header {
   text-align: center;
-  color: white;
-  margin-bottom: 30px;
-  padding: 30px 20px;
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 12px;
+  color: #0f172a;
+  margin-bottom: 16px;
+  padding: 18px 20px;
+  background: linear-gradient(180deg, rgba(102, 126, 234, 0.08), rgba(118, 75, 162, 0.04));
+  border: 1px solid #dbe3fb;
+  border-radius: 16px;
 }
 
 .agent-hub-header h1 {
@@ -37,10 +38,10 @@
 .agent-hub-nav {
   display: flex;
   gap: 10px;
-  margin-bottom: 30px;
-  background: white;
+  margin-bottom: 16px;
+  background: #fff;
   padding: 10px;
-  border-radius: 12px;
+  border-radius: 16px;
   flex-wrap: wrap;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
@@ -96,8 +97,8 @@
 
 .agent-hub-content {
   background: white;
-  border-radius: 12px;
-  padding: 30px;
+  border-radius: 16px;
+  padding: 20px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
 }
 
