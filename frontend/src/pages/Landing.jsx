@@ -1,568 +1,278 @@
-import React, {
-  useState
-} from "react";
-import "./../landing.css";
+import React, { useEffect, useState } from "react";
+import "./Landing.css";
+
+const APP = "https://app.workaivn.com";
+function go(path = "") { window.location.href = APP + path; }
+
+const FEATURES = [
+  { icon: "🤖", title: "AI Agent Hub", desc: "Giao nhiệm vụ cho nhiều AI Agent cùng lúc, so sánh kết quả, chọn tốt nhất." },
+  { icon: "⚙️", title: "Prompt Builder", desc: "Tự động tạo prompt chuẩn cho Cline, Cursor, Codex, Gemini, Claude." },
+  { icon: "🔀", title: "Multi Provider", desc: "Kết nối OpenAI, Gemini, Anthropic, OpenRouter trong một giao diện duy nhất." },
+  { icon: "🧩", title: "Agent Workspace", desc: "Không gian 3 panel để chỉnh sửa, chạy và so sánh task." },
+  { icon: "🧠", title: "Project Memory", desc: "Lưu bối cảnh dự án, kiến trúc hệ thống, tài liệu tái sử dụng." },
+  { icon: "🔗", title: "Task Workflow", desc: "Chuỗi task tự động, mỗi bước dùng agent riêng, đầu ra nối tiếp nhau." },
+  { icon: "📝", title: "Prompt Templates", desc: "Thư viện mẫu prompt có sẵn cho từng loại task lập trình." },
+  { icon: "📊", title: "Usage & Plan", desc: "Quản lý lượt dùng theo ngày, nâng cấp plan khi cần." },
+];
+
+const STEPS = [
+  { n: "1", title: "Nhập ý tưởng / task", desc: "Mô tả yêu cầu trong một câu hoặc nhiều câu chi tiết." },
+  { n: "2", title: "WorkAIVN chuẩn hóa prompt", desc: "Hệ thống tự chọn template phù hợp, bổ sung context." },
+  { n: "3", title: "Chọn agent / provider", desc: "Chọn OpenAI, Gemini hay Anthropic — hoặc chạy cả ba cùng lúc." },
+  { n: "4", title: "Copy hoặc chạy task", desc: "Dùng kết quả trực tiếp hoặc copy vào Cline/Cursor." },
+  { n: "5", title: "So sánh, lưu, tiếp tục", desc: "Xem lịch sử, so sánh output, lưu vào Project Memory." },
+];
+
+const USE_CASES = [
+  { icon: "💻", title: "Lập trình với Cline/Cursor", desc: "Tạo prompt chuẩn, chia task thành phase rõ ràng trước khi đưa vào IDE." },
+  { icon: "📄", title: "Viết tài liệu kỹ thuật", desc: "Tự động tạo README, ADR, API spec từ mô tả hệ thống." },
+  { icon: "🔍", title: "Review code", desc: "Chạy review qua nhiều model, tổng hợp ý kiến." },
+  { icon: "🗂️", title: "Chia phase dự án", desc: "Phân tích yêu cầu thành các sprint/phase có thể thực thi." },
+  { icon: "🛒", title: "Tạo nội dung bán hàng", desc: "Prompt tối ưu cho caption, kịch bản livestream, email marketing." },
+  { icon: "👥", title: "Workflow AI cho team", desc: "Chia sẻ agent, template, task chain trong nội bộ team nhỏ." },
+];
+
+const PLANS_FALLBACK = [
+  {
+    name: "Free", price: "0đ", period: "/mãi mãi", badge: "",
+    features: ["10 chat/ngày", "3 file/ngày", "2 ảnh/ngày", "Công cụ cơ bản"],
+    cta: "Bắt đầu miễn phí", highlight: false
+  },
+  {
+    name: "Pro", price: "99.000đ", period: "/tháng", badge: "Phổ biến nhất",
+    features: ["200 chat/ngày", "30 file/ngày", "20 ảnh/ngày", "Agent Hub", "Project Memory"],
+    cta: "Nâng cấp Pro", highlight: true
+  },
+  {
+    name: "Business", price: "499.000đ", period: "/tháng", badge: "",
+    features: ["Không giới hạn", "Tất cả tính năng", "Ưu tiên AI mạnh hơn", "Hỗ trợ ưu tiên"],
+    cta: "Liên hệ", highlight: false
+  },
+];
 
 export default function Landing() {
-  const [faqOpen, setFaqOpen] =
-    useState(1);
+  const [plans, setPlans] = useState(PLANS_FALLBACK);
+  const [heroTitle, setHeroTitle] = useState("WorkAIVN — AI Agent Hub cho công việc và lập trình");
+  const [heroSub, setHeroSub] = useState("Gửi một yêu cầu, chia task thành nhiều phase, chạy qua nhiều AI Agent, lưu lịch sử và so sánh kết quả.");
 
-  const APP =
-    "https://app.workaivn.com";
+  useEffect(() => {
+    const API = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api");
+    fetch(`${API}/app/config`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.data?.LANDING_HERO_TITLE) setHeroTitle(d.data.LANDING_HERO_TITLE);
+        if (d.data?.LANDING_HERO_SUBTITLE) setHeroSub(d.data.LANDING_HERO_SUBTITLE);
+      })
+      .catch(() => {});
 
-  function go(path = "") {
-    window.location.href =
-      APP + path;
-  }
-
-  function scrollToId(id) {
-    document
-      .getElementById(id)
-      ?.scrollIntoView({
-        behavior:
-          "smooth"
-      });
-  }
-
-  function toggleFaq(id) {
-    setFaqOpen(
-      faqOpen === id
-        ? 0
-        : id
-    );
-  }
+    fetch(`${API}/app/plans`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.data) {
+          const raw = d.data;
+          const mapped = [
+            {
+              name: raw.free?.name || "Free",
+              price: (raw.free?.price || 0) === 0 ? "0đ" : Number(raw.free.price).toLocaleString("vi-VN") + "đ",
+              period: "/mãi mãi", badge: "",
+              features: [
+                `${raw.free?.limits?.chatPerDay || 10} chat/ngày`,
+                `${raw.free?.limits?.filePerDay || 3} file/ngày`,
+                "Công cụ cơ bản"
+              ],
+              cta: "Bắt đầu miễn phí", highlight: false
+            },
+            {
+              name: raw.pro?.name || "Pro",
+              price: Number(raw.pro?.price || 99000).toLocaleString("vi-VN") + "đ",
+              period: "/tháng", badge: "Phổ biến nhất",
+              features: [
+                `${raw.pro?.limits?.chatPerDay || 200} chat/ngày`,
+                `${raw.pro?.limits?.filePerDay || 30} file/ngày`,
+                "Agent Hub đầy đủ", "Project Memory"
+              ],
+              cta: "Nâng cấp Pro", highlight: true
+            },
+            {
+              name: raw.business?.name || "Business",
+              price: Number(raw.business?.price || 499000).toLocaleString("vi-VN") + "đ",
+              period: "/tháng", badge: "",
+              features: ["Không giới hạn", "Tất cả tính năng", "Hỗ trợ ưu tiên"],
+              cta: "Liên hệ", highlight: false
+            },
+          ];
+          setPlans(mapped);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   return (
-    <div className="landing">
-
-      {/* NAVBAR */}
-      <header className="landingNav">
-
-        <div className="navLeft">
-          <img
-            src="/logo.png"
-            className="landingLogo"
-          />
-
-          <div>
-            <div className="brandTitle">
-              WorkAI VN
-            </div>
-
-            <div className="brandMini">
-              AI for everyday work
-            </div>
+    <div className="lp">
+      {/* NAV */}
+      <header className="lp-nav">
+        <div className="lp-nav-inner">
+          <div className="lp-brand">
+            <img src="/logo.png" alt="WorkAIVN" className="lp-logo" />
+            <span className="lp-brand-name">WorkAI<span className="lp-brand-vn">VN</span></span>
+          </div>
+          <nav className="lp-nav-links">
+            <a href="#features">Tính năng</a>
+            <a href="#how">Cách dùng</a>
+            <a href="#pricing">Bảng giá</a>
+          </nav>
+          <div className="lp-nav-cta">
+            <button className="lp-btn-ghost" onClick={() => go("/login")}>Đăng nhập</button>
+            <button className="lp-btn-primary" onClick={() => go("/register")}>Bắt đầu miễn phí</button>
           </div>
         </div>
-
-        <div className="navRight">
-
-          <button
-            className="navGhost"
-            onClick={() =>
-              go("/login")
-            }
-          >
-            Đăng nhập
-          </button>
-
-          <button
-            className="navPrimary"
-            onClick={() =>
-              go("/register")
-            }
-          >
-            Dùng miễn phí
-          </button>
-
-        </div>
-
       </header>
 
       {/* HERO */}
-      <section className="hero heroUltra">
-
-        <div className="heroGlow"></div>
-
-        <div className="heroLeft">
-
-          <div className="heroBadge">
-            🚀 AI Productivity Platform for Vietnam
+      <section className="lp-hero">
+        <div className="lp-hero-inner">
+          <div className="lp-hero-badge">🚀 AI Agent Hub cho Việt Nam</div>
+          <h1 className="lp-hero-title">{heroTitle}</h1>
+          <p className="lp-hero-sub">{heroSub}</p>
+          <div className="lp-hero-actions">
+            <button className="lp-btn-primary lp-btn-lg" onClick={() => go("/register")}>Bắt đầu miễn phí</button>
+            <button className="lp-btn-outline lp-btn-lg" onClick={() => go("/")}>Khám phá Agent Hub</button>
           </div>
-
-          <h1 className="heroTitleBig">
-            Làm việc nhanh hơn với
-            <span>
-              {" "}
-              WorkAI VN
-            </span>
-          </h1>
-
-          <p className="heroDescBig">
-            Chat AI, đọc PDF,
-            tạo ảnh, viết nội dung
-            và xử lý công việc
-            mỗi ngày trong vài giây.
-          </p>
-
-          <div className="heroActions">
-
-            <button
-              className="heroPrimary"
-              onClick={() =>
-                go("/register")
-              }
-            >
-              Dùng miễn phí
-            </button>
-
-            <button
-              className="heroGhost"
-              onClick={() =>
-                scrollToId(
-                  "pricing"
-                )
-              }
-            >
-              Xem bảng giá
-            </button>
-
+          {/* Hero card preview */}
+          <div className="lp-hero-cards">
+            <div className="lp-preview-card">
+              <div className="lp-preview-label">🤖 Agent Hub</div>
+              <div className="lp-preview-bar"></div>
+              <div className="lp-preview-bar short"></div>
+              <div className="lp-preview-chips">
+                <span className="lp-chip green">GPT-4o ✅</span>
+                <span className="lp-chip blue">Gemini ✅</span>
+                <span className="lp-chip purple">Claude ✅</span>
+              </div>
+            </div>
+            <div className="lp-preview-card">
+              <div className="lp-preview-label">⚙️ Prompt Builder</div>
+              <div className="lp-preview-bar"></div>
+              <div className="lp-preview-bar short"></div>
+              <div className="lp-preview-bar"></div>
+            </div>
+            <div className="lp-preview-card">
+              <div className="lp-preview-label">📊 Compare Mode</div>
+              <div className="lp-preview-compare">
+                <div className="lp-compare-col"><div className="lp-preview-bar"></div><div className="lp-preview-bar short"></div></div>
+                <div className="lp-compare-col"><div className="lp-preview-bar"></div><div className="lp-preview-bar short"></div></div>
+              </div>
+            </div>
           </div>
-
-          <div className="heroTrust">
-
-            <div>
-              <strong>
-                10K+
-              </strong>
-              <span>
-                Lượt hỏi
-              </span>
-            </div>
-
-            <div>
-              <strong>
-                24/7
-              </strong>
-              <span>
-                Online
-              </span>
-            </div>
-
-            <div>
-              <strong>
-                99%
-              </strong>
-              <span>
-                Hài lòng
-              </span>
-            </div>
-
-          </div>
-
         </div>
-
-        <div className="heroRight">
-
-          <div className="heroCardMain">
-
-            <div className="mockTop">
-              <span></span>
-              <span></span>
-              <span></span>
-            </div>
-
-            <div className="heroMessages">
-
-              <div className="heroMsg user">
-                Viết email xin báo giá chuyên nghiệp
-              </div>
-
-              <div className="heroMsg ai">
-                Đã hoàn tất trong 3 giây ✨
-              </div>
-
-              <div className="heroMsg user">
-                Tóm tắt file PDF 120 trang
-              </div>
-
-              <div className="heroMsg ai">
-                Hoàn tất. 5 ý chính đã sẵn sàng.
-              </div>
-
-            </div>
-
-          </div>
-
-          <div className="floatCard one">
-            ⚡ Nhanh hơn 10x
-          </div>
-
-          <div className="floatCard two">
-            📄 PDF AI
-          </div>
-
-          <div className="floatCard three">
-            🎨 Image AI
-          </div>
-
-        </div>
-
       </section>
 
       {/* FEATURES */}
-      <section
-        id="features"
-        className="features"
-      >
-
-        <div className="sectionTitle">
-          Tính năng nổi bật
+      <section className="lp-section" id="features">
+        <div className="lp-section-inner">
+          <div className="lp-section-label">Tính năng</div>
+          <h2 className="lp-section-title">Mọi thứ bạn cần để làm việc với AI</h2>
+          <div className="lp-features-grid">
+            {FEATURES.map(f => (
+              <div key={f.title} className="lp-feature-card">
+                <div className="lp-feature-icon">{f.icon}</div>
+                <h3 className="lp-feature-title">{f.title}</h3>
+                <p className="lp-feature-desc">{f.desc}</p>
+              </div>
+            ))}
+          </div>
         </div>
-
-        <div className="featureGrid">
-
-          <div className="featureCard">
-            <div className="icon">
-              📄
-            </div>
-            <h3>
-              Tóm tắt PDF
-            </h3>
-            <p>
-              Upload tài liệu và nhận
-              bản tóm tắt nhanh chóng.
-            </p>
-          </div>
-
-          <div className="featureCard">
-            <div className="icon">
-              📝
-            </div>
-            <h3>
-              Soạn văn bản
-            </h3>
-            <p>
-              Hợp đồng, email,
-              công văn, CV...
-            </p>
-          </div>
-
-          <div className="featureCard">
-            <div className="icon">
-              💬
-            </div>
-            <h3>
-              Chat AI
-            </h3>
-            <p>
-              Hỏi đáp thông minh,
-              tìm ý tưởng tức thì.
-            </p>
-          </div>
-
-          <div className="featureCard">
-            <div className="icon">
-              🎨
-            </div>
-            <h3>
-              Tạo ảnh AI
-            </h3>
-            <p>
-              Tạo hình ảnh đẹp chỉ từ
-              mô tả văn bản.
-            </p>
-          </div>
-
-        </div>
-
       </section>
 
-      {/* SOCIAL PROOF */}
-      <section className="proofSection">
-
-        <div className="sectionTitle">
-          Được tin dùng mỗi ngày
+      {/* HOW IT WORKS */}
+      <section className="lp-section lp-section-alt" id="how">
+        <div className="lp-section-inner">
+          <div className="lp-section-label">Cách dùng</div>
+          <h2 className="lp-section-title">Từ ý tưởng đến kết quả trong 5 bước</h2>
+          <div className="lp-steps">
+            {STEPS.map(s => (
+              <div key={s.n} className="lp-step">
+                <div className="lp-step-num">{s.n}</div>
+                <div>
+                  <div className="lp-step-title">{s.title}</div>
+                  <div className="lp-step-desc">{s.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-
-        <div className="proofGrid">
-
-          <div className="proofCard">
-            ⭐⭐⭐⭐⭐
-            <p>
-              Viết email và proposal cực nhanh.
-            </p>
-            <span>
-              Anh Minh - Sales
-            </span>
-          </div>
-
-          <div className="proofCard">
-            ⭐⭐⭐⭐⭐
-            <p>
-              Tóm tắt PDF rất hữu ích cho công việc.
-            </p>
-            <span>
-              Chị Lan - Văn phòng
-            </span>
-          </div>
-
-          <div className="proofCard">
-            ⭐⭐⭐⭐⭐
-            <p>
-              Dùng mỗi ngày để brainstorm content.
-            </p>
-            <span>
-              Tuấn - Marketing
-            </span>
-          </div>
-
-        </div>
-
       </section>
 
-      {/* FAQ */}
-      <section className="faqSection">
-
-        <div className="sectionTitle">
-          Câu hỏi thường gặp
+      {/* USE CASES */}
+      <section className="lp-section" id="usecases">
+        <div className="lp-section-inner">
+          <div className="lp-section-label">Ứng dụng thực tế</div>
+          <h2 className="lp-section-title">WorkAIVN phù hợp với ai?</h2>
+          <div className="lp-usecase-grid">
+            {USE_CASES.map(u => (
+              <div key={u.title} className="lp-usecase-card">
+                <span className="lp-usecase-icon">{u.icon}</span>
+                <div>
+                  <div className="lp-usecase-title">{u.title}</div>
+                  <div className="lp-usecase-desc">{u.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-
-        <div className="faqWrap">
-
-          <div
-            className="faqItem"
-            onClick={() =>
-              toggleFaq(1)
-            }
-          >
-            <h4>
-              Có dùng miễn phí được không?
-            </h4>
-
-            {faqOpen === 1 && (
-              <p>
-                Có. Bạn được dùng gói Free mỗi ngày.
-              </p>
-            )}
-          </div>
-
-          <div
-            className="faqItem"
-            onClick={() =>
-              toggleFaq(2)
-            }
-          >
-            <h4>
-              Pro có gì hơn?
-            </h4>
-
-            {faqOpen === 2 && (
-              <p>
-                Nhiều lượt chat hơn, AI mạnh hơn,
-                upload file nhiều hơn.
-              </p>
-            )}
-          </div>
-
-          <div
-            className="faqItem"
-            onClick={() =>
-              toggleFaq(3)
-            }
-          >
-            <h4>
-              Có phù hợp người Việt?
-            </h4>
-
-            {faqOpen === 3 && (
-              <p>
-                Có. Tối ưu cho nhu cầu công việc tại Việt Nam.
-              </p>
-            )}
-          </div>
-
-        </div>
-
       </section>
 
       {/* PRICING */}
-      <section
-  id="pricing"
-  className="pricing"
->
-
-  <div className="sectionTitle">
-    Gói dịch vụ
-  </div>
-
-  <div className="priceGrid">
-
-    {/* FREE */}
-    <div className="priceCard">
-
-      <h3>
-        Free
-      </h3>
-
-      <div className="priceValue">
-        0đ
-      </div>
-
-      <div className="priceSub">
-        Dùng thử miễn phí
-      </div>
-
-      <ul className="priceList">
-        <li>
-          ✔ 10 chat / ngày
-        </li>
-        <li>
-          ✔ 3 file / ngày
-        </li>
-        <li>
-          ✔ 2 ảnh / ngày
-        </li>
-        <li>
-          ✔ Công cụ cơ bản
-        </li>
-      </ul>
-
-      <button
-        className="priceBtn"
-        onClick={() =>
-          go("/register")
-        }
-      >
-        Bắt đầu
-      </button>
-
-    </div>
-
-
-    {/* PRO */}
-    <div className="priceCard priceHot">
-
-      <div className="hotBadge">
-        PHỔ BIẾN NHẤT
-      </div>
-
-      <h3>
-        Pro
-      </h3>
-
-      <div className="priceValue">
-        99k
-      </div>
-
-      <div className="priceSub">
-        / tháng
-      </div>
-
-      <ul className="priceList">
-        <li>
-          ✔ 200 chat / ngày
-        </li>
-        <li>
-          ✔ 30 file / ngày
-        </li>
-        <li>
-          ✔ 20 ảnh / ngày
-        </li>
-        <li>
-          ✔ AI mạnh hơn
-        </li>
-        <li>
-          ✔ Ưu tiên tốc độ
-        </li>
-      </ul>
-
-      <button
-        className="priceBtn"
-        onClick={() =>
-          go("/")
-        }
-      >
-        Nâng cấp
-      </button>
-
-    </div>
-
-
-    {/* BUSINESS */}
-    <div className="priceCard">
-
-	  <h3>
-		Business
-	  </h3>
-
-	  <div className="priceValue">
-		499k
-	  </div>
-
-	  <div className="priceSub">
-		/ tháng
-	  </div>
-
-	  <ul className="priceList">
-		<li>
-		  ✔ Không giới hạn
-		</li>
-		<li>
-		  ✔ Team usage
-		</li>
-		<li>
-		  ✔ Tốc độ cao nhất
-		</li>
-		<li>
-		  ✔ Ưu tiên hỗ trợ
-		</li>
-		<li>
-		  ✔ Dùng cho doanh nghiệp
-		</li>
-	  </ul>
-
-	  <button
-		className="priceBtn"
-		onClick={() =>
-		  go("/")
-		}
-	  >
-		Nâng cấp
-	  </button>
-
-	</div>
-
-  </div>
-
-</section>
-
-      {/* CTA */}
-      <section className="cta">
-
-        <h2>
-          Bắt đầu miễn phí hôm nay
-        </h2>
-
-        <p>
-          Trải nghiệm AI cho công việc
-          người Việt.
-        </p>
-
-        <button
-          onClick={() =>
-            go("/register")
-          }
-        >
-          Vào ứng dụng
-        </button>
-
+      <section className="lp-section lp-section-alt" id="pricing">
+        <div className="lp-section-inner">
+          <div className="lp-section-label">Bảng giá</div>
+          <h2 className="lp-section-title">Minh bạch, không phí ẩn</h2>
+          <div className="lp-plans">
+            {plans.map(p => (
+              <div key={p.name} className={`lp-plan-card ${p.highlight ? "lp-plan-highlight" : ""}`}>
+                {p.badge && <div className="lp-plan-badge">{p.badge}</div>}
+                <div className="lp-plan-name">{p.name}</div>
+                <div className="lp-plan-price">{p.price}<span className="lp-plan-period">{p.period}</span></div>
+                <ul className="lp-plan-features">
+                  {p.features.map(f => <li key={f}>✔ {f}</li>)}
+                </ul>
+                <button className={`lp-plan-cta ${p.highlight ? "lp-btn-primary" : "lp-btn-outline"}`}
+                  onClick={() => go(p.highlight ? "/register" : (p.name === "Business" ? "#" : "/register"))}>
+                  {p.cta}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
       </section>
 
-      <footer className="footer">
-        © 2026 WorkAI VN
-      </footer>
+      {/* FINAL CTA */}
+      <section className="lp-cta-section">
+        <div className="lp-section-inner lp-cta-inner">
+          <h2 className="lp-cta-title">Biến WorkAIVN thành trung tâm điều phối AI Agent của bạn.</h2>
+          <p className="lp-cta-sub">Miễn phí để bắt đầu. Không cần thẻ tín dụng.</p>
+          <div className="lp-cta-actions">
+            <button className="lp-btn-primary lp-btn-lg" onClick={() => go("/register")}>Bắt đầu miễn phí</button>
+            <button className="lp-btn-white lp-btn-lg" onClick={() => go("/")}>Vào ứng dụng →</button>
+          </div>
+        </div>
+      </section>
 
+      {/* FOOTER */}
+      <footer className="lp-footer">
+        <div className="lp-section-inner lp-footer-inner">
+          <div className="lp-footer-brand">
+            <img src="/logo.png" alt="WorkAIVN" className="lp-footer-logo" />
+            <span>WorkAIVN</span>
+          </div>
+          <div className="lp-footer-copy">© 2024 WorkAIVN. Nền tảng AI Agent Hub cho người Việt.</div>
+          <div className="lp-footer-links">
+            <a href="#features">Tính năng</a>
+            <a href="#pricing">Bảng giá</a>
+            <a href={APP + "/login"}>Đăng nhập</a>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

@@ -58,6 +58,27 @@ const [upgradeLoading, setUpgradeLoading] =
 
 const [upgradeInfo, setUpgradeInfo] =
   useState(null);
+
+// Plan config from API (with fallback)
+const [planConfig, setPlanConfig] = useState({
+  upgradeText: "🚀 Nâng cấp",
+  showUpgradeBtn: true
+});
+
+useEffect(() => {
+  const base = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api").replace(/\/api$/, "");
+  fetch(`${base}/api/app/config`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.data) {
+        setPlanConfig({
+          upgradeText: d.data.UPGRADE_BUTTON_TEXT || "🚀 Nâng cấp",
+          showUpgradeBtn: d.data.ENABLE_UPGRADE_BUTTON !== "false"
+        });
+      }
+    })
+    .catch(() => {});
+}, []);
   
 	useEffect(() => {
 	  if (!showUpgrade) return;
@@ -567,13 +588,12 @@ async function deleteChat(id) {
             ></div>
           </div>
 
-          {planName ===
-            "free" && (
+          {planName === "free" && planConfig.showUpgradeBtn && (
             <button
 			  className="upgradeBtn"
 			  onClick={() => setShowUpgrade(true)}
 			>
-			  🚀 Nâng cấp
+			  {planConfig.upgradeText}
 			</button>
           )}
         </div>
