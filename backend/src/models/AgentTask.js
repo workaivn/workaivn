@@ -22,7 +22,7 @@ const AgentTaskSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["draft", "submitted", "running", "completed", "error"],
+      enum: ["draft", "submitted", "running", "completed", "needs_revision", "error"],
       default: "draft",
       index: true
     },

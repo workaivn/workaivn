@@ -107,6 +107,17 @@ function ExecutionSummary({ run }) {
         </div>
       )}
 
+      {run.qualityGate && (
+        <div className={run.qualityGate.passed ? "summary-final" : "summary-errors"}>
+          <h4>Quality gate · {run.qualityGate.score ?? 0}/100</h4>
+          {run.qualityGate.failures?.length
+            ? run.qualityGate.failures.map((failure, index) => (
+                <div key={`${failure}-${index}`}>{failure}</div>
+              ))
+            : <div>All acceptance criteria passed.</div>}
+        </div>
+      )}
+
       <div className="summary-final">
         <h4>Final summary</h4>
         <pre>{run.outputText || run.executionSummary?.final || "Không có tóm tắt."}</pre>

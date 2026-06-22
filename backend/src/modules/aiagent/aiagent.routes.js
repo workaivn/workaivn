@@ -18,6 +18,7 @@ router.post("/tasks/:taskId/run", controller.runTask);
 router.post("/tasks/:taskId/run-multiple", controller.runTaskMultiple);
 router.get("/tasks/:taskId/runs", controller.getTaskRuns);
 router.post("/tasks/:taskId/compare", controller.compareRuns);
+router.post("/runs/:runId/continue", controller.continueAgentRun);
 
 // Prompt Templates
 router.get("/prompt-templates", controller.getPromptTemplates);

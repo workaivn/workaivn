@@ -54,8 +54,17 @@ function isInsidePath(parent, child) {
 }
 
 export function getAllowedWorkspaceRoots() {
-  return String(process.env.WORKSPACE_ROOTS || "")
-    .split(";")
+  const configured = String(
+    process.env.WORKSPACE_ROOTS ||
+    process.env.AGENT_WORKSPACE_ROOT ||
+    ""
+  );
+  const developmentFallback = process.env.NODE_ENV !== "production"
+    ? path.resolve(BACKEND_ROOT, "../..")
+    : "";
+
+  return (configured || developmentFallback)
+    .split(/[;\r\n]+/)
     .map(root => root.trim())
     .filter(Boolean)
     .map(root => path.resolve(root));
@@ -262,7 +271,11 @@ export async function runGit(workspaceRoot, args) {
 }
 
 export async function getGitSnapshot(workspaceRoot) {
-  const status = await runGit(workspaceRoot, ["status", "--porcelain=v1"]);
+  const status = await runGit(workspaceRoot, [
+    "status",
+    "--porcelain=v1",
+    "--untracked-files=all"
+  ]);
   const changedFiles = status.success
     ? status.stdout.split(/\r?\n/).filter(Boolean).map(line => line.slice(3).trim())
     : [];
@@ -273,7 +286,13 @@ export async function getGitSnapshot(workspaceRoot) {
 export async function getDiffSummary(workspaceRoot, changedFiles = []) {
   const stat = await runGit(workspaceRoot, ["diff", "--stat", "--", ...changedFiles]);
   const numstat = await runGit(workspaceRoot, ["diff", "--numstat", "--", ...changedFiles]);
-  const status = await runGit(workspaceRoot, ["status", "--porcelain=v1", "--", ...changedFiles]);
+  const status = await runGit(workspaceRoot, [
+    "status",
+    "--porcelain=v1",
+    "--untracked-files=all",
+    "--",
+    ...changedFiles
+  ]);
   const untrackedFiles = status.success
     ? status.stdout.split(/\r?\n/).filter(line => line.startsWith("?? ")).map(line => line.slice(3).trim())
     : [];

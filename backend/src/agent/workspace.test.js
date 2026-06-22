@@ -42,6 +42,28 @@ test("workspace security only accepts projects inside WORKSPACE_ROOTS", async ()
   }
 });
 
+test("development workspace fallback allows projects under the current checkout parent", () => {
+  const previousRoots = process.env.WORKSPACE_ROOTS;
+  const previousLegacyRoot = process.env.AGENT_WORKSPACE_ROOT;
+  const previousNodeEnv = process.env.NODE_ENV;
+  delete process.env.WORKSPACE_ROOTS;
+  delete process.env.AGENT_WORKSPACE_ROOT;
+  process.env.NODE_ENV = "development";
+
+  try {
+    assert.doesNotThrow(() =>
+      assertWorkspaceRootAllowed(path.resolve(".."), { allowManaged: false })
+    );
+  } finally {
+    if (previousRoots === undefined) delete process.env.WORKSPACE_ROOTS;
+    else process.env.WORKSPACE_ROOTS = previousRoots;
+    if (previousLegacyRoot === undefined) delete process.env.AGENT_WORKSPACE_ROOT;
+    else process.env.AGENT_WORKSPACE_ROOT = previousLegacyRoot;
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+  }
+});
+
 test("workspace tools read, modify, and run terminal from the selected project root", async () => {
   const { allowedRoot, projectRoot } = await createAllowedProject();
   const context = { workspaceId: "test-workspace", workspaceRoot: projectRoot };

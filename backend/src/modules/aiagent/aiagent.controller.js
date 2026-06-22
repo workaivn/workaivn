@@ -7,7 +7,14 @@ import { providerRegistry } from "../../services/adapters/index.js";
 import { runAgentLoop } from "../../agent/runAgentLoop.js";
 import { getWorkspaceByPublicId } from "../workspace/workspace.service.js";
 
-async function executeAgentRun({ task, agent, run, workspace }) {
+async function executeAgentRun({
+  task,
+  agent,
+  run,
+  workspace,
+  continueRun = false,
+  continuationFeedback = ""
+}) {
   const adapter = providerRegistry.getAdapter(agent.providerId.code);
 
   if (agent.providerId.type === "manual" || agent.providerId.code === "manual_external") {
@@ -36,6 +43,7 @@ async function executeAgentRun({ task, agent, run, workspace }) {
 
   run.status = "running";
   run.startedAt = new Date();
+  run.completedAt = null;
   run.workspaceId = workspace.id;
   run.workspaceRoot = workspace.rootPath;
   await run.save();
@@ -43,11 +51,20 @@ async function executeAgentRun({ task, agent, run, workspace }) {
   const result = await runAgentLoop({
     messages: [
       { role: "system", content: agent.systemPrompt },
+      ...(continuationFeedback
+        ? [{ role: "system", content: `Previous quality gate feedback:\n${continuationFeedback}` }]
+        : []),
       { role: "user", content: run.inputPrompt }
     ],
     workspaceId: workspace.id,
     workspaceRoot: run.workspaceRoot,
-    maxSteps: 12,
+    maxSteps: 20,
+    acceptanceCriteria: run.acceptanceCriteria?.objective
+      ? run.acceptanceCriteria
+      : null,
+    initialChangedFiles: continueRun ? run.changedFiles || [] : [],
+    initialToolCalls: continueRun ? run.toolCalls || [] : [],
+    initialEvents: continueRun ? run.executionEvents || [] : [],
     generateResponse: async ({ messages }) => {
       const response = await adapter.run({
         modelName: agent.modelName,
@@ -64,35 +81,46 @@ async function executeAgentRun({ task, agent, run, workspace }) {
     }
   });
 
-  run.status = result.success && result.changedFiles.length > 0
-    ? "completed"
-    : "error";
+  run.status = result.status === "error"
+    ? "error"
+    : result.qualityGate?.passed === true
+      ? "completed"
+      : "needs_revision";
   run.outputText = result.final || "";
   run.rawResponse = {
     success: result.success,
     error: result.error || null
   };
-  run.errorMessage = run.status === "error"
-    ? result.error || "Agent finished without persisted file changes"
+  run.errorMessage = run.status !== "completed"
+    ? result.error || "Agent implementation needs revision"
     : null;
   run.changedFiles = result.changedFiles || [];
   run.toolCalls = result.toolCalls || [];
   run.executionEvents = result.events || [];
   run.diffSummary = result.diffSummary || {};
+  run.qualityGate = result.qualityGate || {};
+  run.acceptanceCriteria = result.acceptanceCriteria || {};
   run.executionSummary = {
     changedFileCount: run.changedFiles.length,
     toolCallCount: run.toolCalls.length,
     eventCount: run.executionEvents.length,
-    final: result.final || ""
+    final: result.final || "",
+    qualityScore: result.qualityGate?.score || 0
   };
   run.completedAt = new Date();
   await run.save();
 
   return {
-    success: run.status === "completed",
+    success: run.status === "completed" && run.qualityGate?.passed === true,
     error: run.errorMessage,
     run
   };
+}
+
+function taskStatusForRun(run) {
+  if (run.status === "completed") return "completed";
+  if (run.status === "error") return "error";
+  return "needs_revision";
 }
 
 /**
@@ -337,7 +365,7 @@ export async function runTask(req, res) {
     await task.save();
 
     const result = await executeAgentRun({ task, agent, run, workspace });
-    task.status = result.success ? "completed" : "error";
+    task.status = taskStatusForRun(result.run);
     await task.save();
 
     return res.status(result.success ? 200 : 422).json({
@@ -543,7 +571,11 @@ export async function runTaskMultiple(req, res) {
     // Update task status based on results
     const allCompleted = completedRuns.length > 0 &&
       completedRuns.every(run => run.status === "completed");
-    task.status = allCompleted ? "completed" : "error";
+    task.status = allCompleted
+      ? "completed"
+      : completedRuns.some(item => item.status === "error")
+        ? "error"
+        : "needs_revision";
     await task.save();
 
     return res.status(allCompleted ? 200 : 422).json({
@@ -627,7 +659,7 @@ export async function runAgentPrompt(req, res) {
     });
 
     const result = await executeAgentRun({ task, agent, run, workspace });
-    task.status = result.success ? "completed" : "error";
+    task.status = taskStatusForRun(result.run);
     await task.save();
 
     return res.status(result.success ? 200 : 422).json({
@@ -658,6 +690,69 @@ export async function runAgentPrompt(req, res) {
     return res.status(500).json({
       success: false,
       message: "Failed to run Coding Agent",
+      error: error.message
+    });
+  }
+}
+
+/**
+ * Continue an existing failed or needs_revision run with the same task/workspace.
+ */
+export async function continueAgentRun(req, res) {
+  try {
+    const run = await AgentRun.findById(req.params.runId)
+      .populate("agentId")
+      .populate("taskId");
+
+    if (!run) {
+      return res.status(404).json({ success: false, message: "Agent run not found" });
+    }
+
+    if (!["needs_revision", "error"].includes(run.status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Only failed or needs_revision runs can be continued"
+      });
+    }
+
+    const agent = await AiAgent.findById(run.agentId._id).populate("providerId");
+    const task = await AgentTask.findById(run.taskId._id);
+    const workspace = await getWorkspaceByPublicId(run.workspaceId);
+
+    if (!agent || !task) {
+      return res.status(404).json({
+        success: false,
+        message: "Run agent or task no longer exists"
+      });
+    }
+
+    task.status = "running";
+    await task.save();
+
+    const result = await executeAgentRun({
+      task,
+      agent,
+      run,
+      workspace,
+      continueRun: true,
+      continuationFeedback: run.qualityGate?.feedback || run.errorMessage || ""
+    });
+
+    task.status = taskStatusForRun(result.run);
+    await task.save();
+
+    return res.status(result.success ? 200 : 422).json({
+      success: result.success,
+      data: result.run,
+      message: result.success
+        ? "Agent run completed after continuation"
+        : "Agent run still needs revision"
+    });
+  } catch (error) {
+    console.error("continueAgentRun error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to continue agent run",
       error: error.message
     });
   }

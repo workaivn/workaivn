@@ -5,6 +5,11 @@ import {
   getGitSnapshot,
   getWorkspaceRoot
 } from "./workspace.js";
+import {
+  acceptanceCriteriaToPrompt,
+  buildAcceptanceCriteria
+} from "./acceptanceCriteria.js";
+import { evaluateQualityGate } from "./qualityGate.js";
 
 const WRITE_TOOLS = new Set(["WRITE_FILE", "APPLY_PATCH"]);
 
@@ -139,7 +144,11 @@ export async function runAgentLoop({
   activeFiles = [],
   workspaceId = "",
   workspaceRoot = "",
-  maxSteps = 12,
+  maxSteps = 20,
+  acceptanceCriteria = null,
+  initialChangedFiles = [],
+  initialToolCalls = [],
+  initialEvents = [],
   onEvent = () => {},
   generateResponse = defaultGenerateResponse
 }) {
@@ -154,19 +163,27 @@ export async function runAgentLoop({
   const objective = messages.at(-1)?.content || "";
   const conversation = [...messages];
   const history = [];
-  const events = [];
-  const toolCalls = [];
-  const changedFiles = new Set();
-  const inspectedFiles = new Set();
+  const events = [...initialEvents];
+  const toolCalls = [...initialToolCalls];
+  const changedFiles = new Set(initialChangedFiles);
+  const inspectedFiles = new Set(
+    initialToolCalls
+      .filter(call => call.tool === "READ_FILE" && call.success)
+      .map(call => call.result?.file || call.args?.path)
+      .filter(Boolean)
+  );
+  const criteria = acceptanceCriteria || buildAcceptanceCriteria(objective);
   const baseline = resolvedWorkspaceRoot
     ? await getGitSnapshot(resolvedWorkspaceRoot)
     : { changedFiles: [] };
   let finalText = "";
   let validationFailed = false;
+  let qualityGate = null;
 
   const systemPrompt = `You are the WorkAI VN Coding Agent.
 
 You must execute the coding task by using tools against the real workspace.
+You are responsible for a production-quality implementation, not a mockup or code sample.
 Return exactly one JSON object per response, with no markdown.
 
 AVAILABLE TOOLS:
@@ -187,10 +204,15 @@ When the task is complete:
 
 RULES:
 - Inspect the repository before editing.
+- Inspect package.json and existing architecture before broad feature work.
 - Use exact relative paths.
 - Make real edits with WRITE_FILE or APPLY_PATCH.
 - Prefer APPLY_PATCH for focused edits.
 - Do not claim completion without a persisted file change.
+- Never leave "to be implemented", placeholder flows, fake payment, or incomplete stubs.
+- Implement every requested cart, payment, QR, and Sepay flow end-to-end when requested.
+- Run a relevant validation command before declaring done.
+- A website/app request requires a meaningful implementation across the existing stack, not only index.html and app.js.
 - Do not repeat a failed tool call without changing its arguments.
 - Use RUN_TERMINAL for focused verification after edits when useful.
 - Keep changes scoped to the objective.`;
@@ -201,6 +223,10 @@ RULES:
     content: resolvedWorkspaceRoot
       ? `Workspace root is configured. All tool paths must be relative to it. Objective: ${objective}`
       : "This run uses uploaded in-memory files. Tool paths must match uploaded file paths."
+  });
+  conversation.push({
+    role: "system",
+    content: acceptanceCriteriaToPrompt(criteria)
   });
 
   function recordEvent(type, details = {}) {
@@ -231,13 +257,20 @@ RULES:
       });
       return {
         success: false,
+        status: "error",
         error: error.message,
         final: "Agent stopped because the model returned an invalid execution response.",
         history,
         events,
         toolCalls,
         changedFiles: [...changedFiles],
-        diffSummary: { stat: "", numstat: "" }
+        diffSummary: { stat: "", numstat: "" },
+        acceptanceCriteria: criteria,
+        qualityGate: {
+          passed: false,
+          failures: [error.message],
+          feedback: error.message
+        }
       };
     }
 
@@ -282,13 +315,20 @@ RULES:
         });
         return {
           success: false,
+          status: "error",
           error: retryError.message,
           final: "Agent stopped because the model returned an invalid execution response after one retry.",
           history,
           events,
           toolCalls,
           changedFiles: [...changedFiles],
-          diffSummary: { stat: "", numstat: "" }
+          diffSummary: { stat: "", numstat: "" },
+          acceptanceCriteria: criteria,
+          qualityGate: {
+            passed: false,
+            failures: [retryError.message],
+            feedback: retryError.message
+          }
         };
       }
     }
@@ -308,7 +348,32 @@ RULES:
         continue;
       }
 
-      finalText = parsed.final || "Coding task completed with persisted file changes.";
+      const proposedFinal = parsed.final || "Coding task completed with persisted file changes.";
+      qualityGate = await evaluateQualityGate({
+        acceptanceCriteria: criteria,
+        changedFiles: [...changedFiles],
+        toolCalls,
+        workspaceRoot: resolvedWorkspaceRoot,
+        finalText: proposedFinal
+      });
+
+      recordEvent("quality_gate", {
+        step,
+        passed: qualityGate.passed,
+        score: qualityGate.score,
+        failures: qualityGate.failures
+      });
+
+      if (!qualityGate.passed) {
+        conversation.push({ role: "assistant", content: JSON.stringify(parsed) });
+        conversation.push({
+          role: "system",
+          content: `${qualityGate.feedback}\nContinue working. Do not return done until every failed check is resolved.`
+        });
+        continue;
+      }
+
+      finalText = proposedFinal;
       break;
     }
 
@@ -417,31 +482,44 @@ RULES:
         numstat: ""
       };
 
-  const success = changedFileList.length > 0 && !validationFailed;
-  if (!finalText) {
-    finalText = success
-      ? "Agent applied persisted file changes and finished at the execution step limit."
-      : "Agent did not produce validated persisted file changes.";
+  if (!qualityGate?.passed) {
+    qualityGate = await evaluateQualityGate({
+      acceptanceCriteria: criteria,
+      changedFiles: changedFileList,
+      toolCalls,
+      workspaceRoot: resolvedWorkspaceRoot,
+      finalText
+    });
   }
 
-  recordEvent(success ? "completed" : "failed", {
+  const success = qualityGate.passed === true && !validationFailed;
+  const status = success ? "completed" : "needs_revision";
+  if (!finalText) {
+    finalText = success
+      ? "Agent implementation passed all acceptance criteria."
+      : "Agent reached the execution limit before passing the quality gate.";
+  }
+
+  recordEvent(status, {
     changedFiles: changedFileList,
-    validationFailed
+    validationFailed,
+    qualityGate
   });
 
   return {
     success,
+    status,
     final: finalText,
     error: success
       ? null
-      : validationFailed
-        ? "One or more changed files failed validation."
-        : "No persisted file changes were detected.",
+      : qualityGate.feedback,
     history,
     events,
     toolCalls,
     changedFiles: changedFileList,
     diffSummary,
+    qualityGate,
+    acceptanceCriteria: criteria,
     workspaceRoot: resolvedWorkspaceRoot || null,
     workspaceId: workspaceId || null
   };

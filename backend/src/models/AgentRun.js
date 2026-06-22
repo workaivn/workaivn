@@ -59,9 +59,17 @@ const AgentRunSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {}
     },
+    qualityGate: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {}
+    },
+    acceptanceCriteria: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {}
+    },
     status: {
       type: String,
-      enum: ["pending", "running", "completed", "error"],
+      enum: ["pending", "running", "completed", "needs_revision", "error"],
       default: "pending",
       index: true
     },
@@ -84,7 +92,7 @@ const AgentRunSchema = new mongoose.Schema(
 AgentRunSchema.pre("save", function (next) {
   if (
     this.isModified("status") &&
-    ["completed", "error"].includes(this.status) &&
+    ["completed", "needs_revision", "error"].includes(this.status) &&
     !this.completedAt
   ) {
     this.completedAt = new Date();

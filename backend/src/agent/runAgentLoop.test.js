@@ -39,6 +39,11 @@ test("runAgentLoop persists a patch and reports tools, events, files, and diff",
       },
       done: false
     },
+    {
+      tool: "RUN_TERMINAL",
+      args: { command: "node --check example.js" },
+      done: false
+    },
     { done: true, final: "Updated the implementation." }
   ];
 
@@ -75,7 +80,8 @@ test("runAgentLoop rejects completion when no files changed", async () => {
 
     assert.equal(result.success, false);
     assert.equal(result.changedFiles.length, 0);
-    assert.match(result.error, /No persisted file changes/);
+    assert.match(result.error, /No meaningful source files were changed/);
+    assert.equal(result.status, "needs_revision");
     assert.ok(result.events.some(event => event.type === "completion_rejected"));
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });

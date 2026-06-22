@@ -289,6 +289,7 @@
 }
 
 .status-completed { color: #15803d; }
+.status-needs_revision { color: #c2410c; }
 .status-error, .status-failed { color: #b91c1c; }
 .status-running { color: #b45309; }
 
