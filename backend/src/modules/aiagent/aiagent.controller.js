@@ -9,6 +9,21 @@ import { getWorkspaceRoot } from "../../agent/workspace.js";
 
 async function executeAgentRun({ task, agent, run }) {
   const adapter = providerRegistry.getAdapter(agent.providerId.code);
+
+  if (agent.providerId.type === "manual" || agent.providerId.code === "manual_external") {
+    const error = "Manual external agents cannot execute Coding Agent tools or persist workspace changes";
+    run.status = "error";
+    run.errorMessage = error;
+    run.executionEvents = [{
+      type: "failed",
+      message: error,
+      time: new Date()
+    }];
+    run.completedAt = new Date();
+    await run.save();
+    return { success: false, error, run };
+  }
+
   const isConfigured = await adapter.isConfigured();
 
   if (!isConfigured) {
@@ -263,6 +278,7 @@ export async function createTask(req, res) {
  */
 export async function runTask(req, res) {
   let run = null;
+  let task = null;
   try {
     const { taskId } = req.params;
     const { agentId } = req.body;
@@ -275,7 +291,7 @@ export async function runTask(req, res) {
     }
 
     // Get task
-    const task = await AgentTask.findById(taskId);
+    task = await AgentTask.findById(taskId);
     if (!task) {
       return res.status(404).json({
         success: false,
@@ -324,6 +340,10 @@ export async function runTask(req, res) {
       run.errorMessage = error.message;
       run.completedAt = new Date();
       await run.save().catch(() => {});
+    }
+    if (task) {
+      task.status = "error";
+      await task.save().catch(() => {});
     }
     return res.status(500).json({
       success: false,
@@ -431,6 +451,7 @@ export async function createPromptTemplate(req, res) {
  * Run task with multiple agents in parallel
  */
 export async function runTaskMultiple(req, res) {
+  let task = null;
   try {
     const { taskId } = req.params;
     const { agentIds } = req.body;
@@ -450,7 +471,7 @@ export async function runTaskMultiple(req, res) {
     }
 
     // Get task
-    const task = await AgentTask.findById(taskId);
+    task = await AgentTask.findById(taskId);
     if (!task) {
       return res.status(404).json({
         success: false,
@@ -515,6 +536,10 @@ export async function runTaskMultiple(req, res) {
     });
   } catch (error) {
     console.error("runTaskMultiple error:", error);
+    if (task) {
+      task.status = "error";
+      await task.save().catch(() => {});
+    }
     return res.status(500).json({
       success: false,
       message: "Failed to run task with multiple agents",
