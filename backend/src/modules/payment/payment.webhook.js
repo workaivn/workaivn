@@ -1,6 +1,6 @@
 import Payment from "../../models/Payment.js";
 import User from "../auth/auth.model.js";
-import { emitPaymentSuccess } from "../../../server.js";
+import { emitPaymentSuccess } from "../../services/realtime.js";
 
 export async function bankWebhook(req, res) {
   try {

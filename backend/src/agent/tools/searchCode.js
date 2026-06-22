@@ -1,6 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
-import { listWorkspaceFiles, resolveWorkspacePath } from "../workspace.js";
+import { listWorkspaceFiles, resolveWorkspacePathSafe } from "../workspace.js";
 
 const SEARCHABLE_EXTENSIONS = new Set([
   ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
@@ -30,7 +30,7 @@ export async function searchCodeTool({
         if (!SEARCHABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) continue;
 
         try {
-          const resolved = resolveWorkspacePath(workspaceRoot, filePath);
+          const resolved = await resolveWorkspacePathSafe(workspaceRoot, filePath);
           const stats = await fs.stat(resolved.absolutePath);
           if (stats.size > 1024 * 1024) continue;
           const content = await fs.readFile(resolved.absolutePath, "utf8");

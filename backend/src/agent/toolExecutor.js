@@ -70,6 +70,7 @@ export async function executeTool(
     const result = await tool({
       ...args,
       activeFiles: normalizedContext.activeFiles || [],
+      workspaceId: normalizedContext.workspaceId,
       workspaceRoot: normalizedContext.workspaceRoot
     });
 

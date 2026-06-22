@@ -18,6 +18,8 @@ export default function AgentHub() {
   const [compareMode, setCompareMode] = useState(false);
   const [selectedRunIds, setSelectedRunIds] = useState([]);
   const [comparison, setComparison] = useState(null);
+  const [workspaces, setWorkspaces] = useState([]);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState("");
 
   // Form state
   const [newTaskForm, setNewTaskForm] = useState({
@@ -37,17 +39,21 @@ export default function AgentHub() {
       setLoading(true);
       setError("");
 
-      const [providersRes, agentsRes, tasksRes, templatesRes] = await Promise.all([
+      const [providersRes, agentsRes, tasksRes, templatesRes, workspacesRes] = await Promise.all([
         axios.get(`${API_URL}/api/ai/providers`),
         axios.get(`${API_URL}/api/ai/agents`),
         axios.get(`${API_URL}/api/ai/tasks?limit=20`),
-        axios.get(`${API_URL}/api/ai/prompt-templates`)
+        axios.get(`${API_URL}/api/ai/prompt-templates`),
+        axios.get(`${API_URL}/api/workspaces`)
       ]);
 
       setProviders(providersRes.data.data || []);
       setAgents(agentsRes.data.data || []);
       setTasks(tasksRes.data.data || []);
       setTemplates(templatesRes.data.data || []);
+      const loadedWorkspaces = workspacesRes.data.data || [];
+      setWorkspaces(loadedWorkspaces);
+      if (loadedWorkspaces[0]) setSelectedWorkspaceId(loadedWorkspaces[0].id);
     } catch (err) {
       setError(err.response?.data?.message || err.message);
       console.error("Failed to load data:", err);
@@ -80,10 +86,15 @@ export default function AgentHub() {
   }
 
   async function runTask(taskId, agentId) {
+    if (!selectedWorkspaceId) {
+      setError("Please select a project workspace first.");
+      return;
+    }
     try {
       setLoading(true);
       const res = await axios.post(`${API_URL}/api/ai/tasks/${taskId}/run`, {
-        agentId
+        agentId,
+        workspaceId: selectedWorkspaceId
       });
 
       if (res.data.success) {
@@ -105,11 +116,16 @@ export default function AgentHub() {
       setError("Select at least one agent");
       return;
     }
+    if (!selectedWorkspaceId) {
+      setError("Please select a project workspace first.");
+      return;
+    }
 
     try {
       setLoading(true);
       const res = await axios.post(`${API_URL}/api/ai/tasks/${taskId}/run-multiple`, {
-        agentIds: selectedAgents
+        agentIds: selectedAgents,
+        workspaceId: selectedWorkspaceId
       });
 
       if (res.data.success) {
@@ -235,6 +251,21 @@ export default function AgentHub() {
           🔌 Providers
         </button>
       </nav>
+
+      <div className="multi-agent-selector">
+        <h4>Project Workspace</h4>
+        <select
+          value={selectedWorkspaceId}
+          onChange={event => setSelectedWorkspaceId(event.target.value)}
+        >
+          <option value="">-- Select project workspace --</option>
+          {workspaces.map(workspace => (
+            <option key={workspace.id} value={workspace.id}>
+              {workspace.name} — {workspace.rootPath}
+            </option>
+          ))}
+        </select>
+      </div>
 
       {error && <div className="alert alert-error">{error}</div>}
 

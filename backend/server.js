@@ -3,14 +3,9 @@ import app from "./src/app.js";
 import connectDB from "./src/config/db.js";
 import http from "http";
 import { Server } from "socket.io";
-import cors from "cors";
-import routes from "./src/routes/index.js";
-import express from "express";
 import healthRoute from "./src/routes/health.js";
+import { configureRealtime, emitPaymentSuccess } from "./src/services/realtime.js";
 healthRoute(app);
-app.listen(5000, () => {
-  console.log("Server running...");
-});
 
 // ✅ FIX CORS FULL
 const allowedOrigins = [
@@ -20,17 +15,6 @@ const allowedOrigins = [
   "https://app.workaivn.com"
 ];
 app.set("trust proxy", 1);
-app.use(express.json());
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    return callback(new Error("CORS not allowed: " + origin));
-  },
-  credentials: true
-}));
 
 const PORT = process.env.PORT || 5000;
 
@@ -45,29 +29,8 @@ export const io = new Server(server, {
   }
 });
 
-// map userId -> socket
-const userSockets = new Map();
-
-io.on("connection", (socket) => {
-  socket.on("auth", (userId) => {
-    userSockets.set(String(userId), socket.id);
-  });
-
-  socket.on("disconnect", () => {
-    for (const [uid, sid] of userSockets.entries()) {
-      if (sid === socket.id) {
-        userSockets.delete(uid);
-      }
-    }
-  });
-});
-
-export function emitPaymentSuccess(userId) {
-  const sid = userSockets.get(String(userId));
-  if (sid) {
-    io.to(sid).emit("payment_success");
-  }
-}
+configureRealtime(io);
+export { emitPaymentSuccess };
 
 async function start() {
   try {

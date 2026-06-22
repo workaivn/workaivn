@@ -5,9 +5,9 @@ import AgentRun from "../../models/AgentRun.js";
 import AgentPromptTemplate from "../../models/AgentPromptTemplate.js";
 import { providerRegistry } from "../../services/adapters/index.js";
 import { runAgentLoop } from "../../agent/runAgentLoop.js";
-import { getWorkspaceRoot } from "../../agent/workspace.js";
+import { getWorkspaceByPublicId } from "../workspace/workspace.service.js";
 
-async function executeAgentRun({ task, agent, run }) {
+async function executeAgentRun({ task, agent, run, workspace }) {
   const adapter = providerRegistry.getAdapter(agent.providerId.code);
 
   if (agent.providerId.type === "manual" || agent.providerId.code === "manual_external") {
@@ -36,7 +36,8 @@ async function executeAgentRun({ task, agent, run }) {
 
   run.status = "running";
   run.startedAt = new Date();
-  run.workspaceRoot = getWorkspaceRoot();
+  run.workspaceId = workspace.id;
+  run.workspaceRoot = workspace.rootPath;
   await run.save();
 
   const result = await runAgentLoop({
@@ -44,6 +45,7 @@ async function executeAgentRun({ task, agent, run }) {
       { role: "system", content: agent.systemPrompt },
       { role: "user", content: run.inputPrompt }
     ],
+    workspaceId: workspace.id,
     workspaceRoot: run.workspaceRoot,
     maxSteps: 12,
     generateResponse: async ({ messages }) => {
@@ -281,7 +283,14 @@ export async function runTask(req, res) {
   let task = null;
   try {
     const { taskId } = req.params;
-    const { agentId } = req.body;
+    const { agentId, workspaceId } = req.body;
+
+    if (!workspaceId) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select a project workspace first."
+      });
+    }
 
     if (!agentId) {
       return res.status(400).json({
@@ -307,6 +316,7 @@ export async function runTask(req, res) {
         message: "Agent not found"
       });
     }
+    const workspace = await getWorkspaceByPublicId(workspaceId);
 
     // Create run
     run = new AgentRun({
@@ -315,6 +325,8 @@ export async function runTask(req, res) {
       providerCode: agent.providerId.code,
       modelName: agent.modelName,
       inputPrompt: task.normalizedPrompt || task.inputPrompt,
+      workspaceId: workspace.id,
+      workspaceRoot: workspace.rootPath,
       status: "pending"
     });
 
@@ -324,7 +336,7 @@ export async function runTask(req, res) {
     task.selectedAgentId = agent._id;
     await task.save();
 
-    const result = await executeAgentRun({ task, agent, run });
+    const result = await executeAgentRun({ task, agent, run, workspace });
     task.status = result.success ? "completed" : "error";
     await task.save();
 
@@ -454,7 +466,14 @@ export async function runTaskMultiple(req, res) {
   let task = null;
   try {
     const { taskId } = req.params;
-    const { agentIds } = req.body;
+    const { agentIds, workspaceId } = req.body;
+
+    if (!workspaceId) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select a project workspace first."
+      });
+    }
 
     if (!agentIds || !Array.isArray(agentIds) || agentIds.length === 0) {
       return res.status(400).json({
@@ -478,6 +497,7 @@ export async function runTaskMultiple(req, res) {
         message: "Task not found"
       });
     }
+    const workspace = await getWorkspaceByPublicId(workspaceId);
 
     // Update task status
     task.status = "running";
@@ -495,6 +515,8 @@ export async function runTaskMultiple(req, res) {
         providerCode: agent.providerId.code,
         modelName: agent.modelName,
         inputPrompt: task.normalizedPrompt || task.inputPrompt,
+        workspaceId: workspace.id,
+        workspaceRoot: workspace.rootPath,
         status: "pending"
       });
 
@@ -507,7 +529,7 @@ export async function runTaskMultiple(req, res) {
     for (const run of runs) {
       try {
         const agent = await AiAgent.findById(run.agentId).populate("providerId");
-        const result = await executeAgentRun({ task, agent, run });
+        const result = await executeAgentRun({ task, agent, run, workspace });
         completedRuns.push(result.run);
       } catch (error) {
         run.status = "error";
@@ -543,6 +565,99 @@ export async function runTaskMultiple(req, res) {
     return res.status(500).json({
       success: false,
       message: "Failed to run task with multiple agents",
+      error: error.message
+    });
+  }
+}
+
+/**
+ * Run an ad-hoc Coding Agent prompt in a selected project workspace.
+ */
+export async function runAgentPrompt(req, res) {
+  let task = null;
+  let run = null;
+
+  try {
+    const { workspaceId, prompt, agentId } = req.body;
+
+    if (!workspaceId) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select a project workspace first."
+      });
+    }
+
+    const normalizedPrompt = String(prompt || "").trim();
+    if (!normalizedPrompt) {
+      return res.status(400).json({ success: false, message: "prompt is required" });
+    }
+
+    const workspace = await getWorkspaceByPublicId(workspaceId);
+    const agent = agentId
+      ? await AiAgent.findById(agentId).populate("providerId")
+      : await AiAgent.findOne({ isActive: true, agentType: "coding" })
+          .populate("providerId")
+          .sort({ createdAt: 1 });
+
+    if (!agent) {
+      return res.status(404).json({
+        success: false,
+        message: "No coding agent is available"
+      });
+    }
+
+    task = await AgentTask.create({
+      title: normalizedPrompt.slice(0, 100),
+      inputPrompt: normalizedPrompt,
+      normalizedPrompt,
+      taskType: "build_feature",
+      selectedAgentId: agent._id,
+      status: "running"
+    });
+
+    run = await AgentRun.create({
+      taskId: task._id,
+      agentId: agent._id,
+      providerCode: agent.providerId.code,
+      modelName: agent.modelName,
+      inputPrompt: normalizedPrompt,
+      workspaceId: workspace.id,
+      workspaceRoot: workspace.rootPath,
+      status: "pending"
+    });
+
+    const result = await executeAgentRun({ task, agent, run, workspace });
+    task.status = result.success ? "completed" : "error";
+    await task.save();
+
+    return res.status(result.success ? 200 : 422).json({
+      success: result.success,
+      data: {
+        task,
+        run: result.run,
+        workspace: {
+          id: workspace.id,
+          name: workspace.name,
+          rootPath: workspace.rootPath
+        }
+      },
+      message: result.success ? "Agent completed with file changes" : result.error
+    });
+  } catch (error) {
+    console.error("runAgentPrompt error:", error);
+    if (run) {
+      run.status = "error";
+      run.errorMessage = error.message;
+      run.completedAt = new Date();
+      await run.save().catch(() => {});
+    }
+    if (task) {
+      task.status = "error";
+      await task.save().catch(() => {});
+    }
+    return res.status(500).json({
+      success: false,
+      message: "Failed to run Coding Agent",
       error: error.message
     });
   }

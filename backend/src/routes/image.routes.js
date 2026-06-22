@@ -23,10 +23,9 @@ const upload = multer({
   dest: "uploads/"
 });
 
-const openai = new OpenAI({
-  apiKey:
-    process.env.OPENAI_API_KEY
-});
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
 
 const FILE_DIR = path.join(
   process.cwd(),

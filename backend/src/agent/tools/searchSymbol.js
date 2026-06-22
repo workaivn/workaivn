@@ -1,6 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
-import { listWorkspaceFiles, resolveWorkspacePath } from "../workspace.js";
+import { listWorkspaceFiles, resolveWorkspacePathSafe } from "../workspace.js";
 
 function createChunks(filePath, content) {
   const chunks = [];
@@ -104,7 +104,7 @@ export async function searchSymbolTool({
         }
 
         try {
-          const resolved = resolveWorkspacePath(workspaceRoot, filePath);
+          const resolved = await resolveWorkspacePathSafe(workspaceRoot, filePath);
           const content = await fs.readFile(resolved.absolutePath, "utf8");
           filesToSearch.push({
             name: filePath,

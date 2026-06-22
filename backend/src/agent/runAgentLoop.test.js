@@ -93,7 +93,7 @@ test("filesystem tools reject paths outside the configured workspace", async () 
     );
 
     assert.equal(result.success, false);
-    assert.match(result.error, /escapes agent workspace/);
+    assert.match(result.error, /escapes (?:agent|selected) workspace/);
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }

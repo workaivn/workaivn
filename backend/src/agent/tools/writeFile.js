@@ -1,13 +1,15 @@
 import fs from "fs/promises";
 import pathModule from "path";
-import { resolveWorkspacePath } from "../workspace.js";
+import { resolveWorkspacePath, resolveWorkspacePathSafe } from "../workspace.js";
 
 export async function writeFileTool({ path, content, activeFiles = [], workspaceRoot }) {
   const nextContent = String(content ?? "");
 
   if (workspaceRoot) {
     try {
-      const resolved = resolveWorkspacePath(workspaceRoot, path);
+      const candidate = resolveWorkspacePath(workspaceRoot, path);
+      await fs.mkdir(pathModule.dirname(candidate.absolutePath), { recursive: true });
+      const resolved = await resolveWorkspacePathSafe(workspaceRoot, path, { allowMissing: true });
       let previousContent = null;
 
       try {

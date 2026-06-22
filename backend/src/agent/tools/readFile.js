@@ -1,10 +1,10 @@
 import fs from "fs/promises";
-import { resolveWorkspacePath } from "../workspace.js";
+import { resolveWorkspacePathSafe } from "../workspace.js";
 
 export async function readFileTool({ path, activeFiles = [], workspaceRoot }) {
   if (workspaceRoot) {
     try {
-      const resolved = resolveWorkspacePath(workspaceRoot, path);
+      const resolved = await resolveWorkspacePathSafe(workspaceRoot, path);
       const content = await fs.readFile(resolved.absolutePath, "utf8");
       return {
         success: true,

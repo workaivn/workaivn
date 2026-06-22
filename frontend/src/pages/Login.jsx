@@ -4,8 +4,11 @@ import React, {
   useState
 } from "react";
 
-const API =
-  "https://api.workaivn.com/api";
+const API_BASE = (
+  import.meta.env.VITE_API_URL ||
+  "https://api.workaivn.com/api"
+).replace(/\/$/, "").replace(/\/api$/, "");
+const API = `${API_BASE}/api`;
 
 const ADMIN_EMAIL =
   import.meta.env

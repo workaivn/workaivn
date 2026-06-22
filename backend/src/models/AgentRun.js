@@ -35,6 +35,10 @@ const AgentRunSchema = new mongoose.Schema(
     workspaceRoot: {
       type: String
     },
+    workspaceId: {
+      type: String,
+      index: true
+    },
     changedFiles: {
       type: [String],
       default: []

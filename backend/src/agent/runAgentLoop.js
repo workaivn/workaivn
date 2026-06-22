@@ -137,6 +137,7 @@ export async function runAgentLoop({
   messages = [],
   plan = "free",
   activeFiles = [],
+  workspaceId = "",
   workspaceRoot = "",
   maxSteps = 12,
   onEvent = () => {},
@@ -147,6 +148,7 @@ export async function runAgentLoop({
     : "";
   const toolContext = {
     activeFiles,
+    workspaceId,
     workspaceRoot: resolvedWorkspaceRoot || undefined
   };
   const objective = messages.at(-1)?.content || "";
@@ -440,6 +442,7 @@ RULES:
     toolCalls,
     changedFiles: changedFileList,
     diffSummary,
-    workspaceRoot: resolvedWorkspaceRoot || null
+    workspaceRoot: resolvedWorkspaceRoot || null,
+    workspaceId: workspaceId || null
   };
 }

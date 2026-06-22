@@ -1,5 +1,5 @@
 import fs from "fs/promises";
-import { resolveWorkspacePath } from "../workspace.js";
+import { resolveWorkspacePathSafe } from "../workspace.js";
 
 function applyExactPatch(original, find, replace) {
   const needle = String(find ?? "");
@@ -27,7 +27,7 @@ function applyExactPatch(original, find, replace) {
 export async function applyPatchTool({ file, find, replace, activeFiles = [], workspaceRoot }) {
   if (workspaceRoot) {
     try {
-      const resolved = resolveWorkspacePath(workspaceRoot, file);
+      const resolved = await resolveWorkspacePathSafe(workspaceRoot, file);
       const original = await fs.readFile(resolved.absolutePath, "utf8");
       const patch = applyExactPatch(original, find, replace);
       if (!patch.success) return { ...patch, file: resolved.relativePath, changed: false };
