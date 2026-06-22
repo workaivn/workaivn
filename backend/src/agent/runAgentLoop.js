@@ -9,18 +9,84 @@ import {
 const WRITE_TOOLS = new Set(["WRITE_FILE", "APPLY_PATCH"]);
 
 function parseAgentResponse(response) {
-  const cleaned = String(response || "")
-    .replace(/```json/gi, "")
-    .replace(/```/g, "")
-    .trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
+  const raw = String(response ?? "").trim();
+  const candidates = [raw];
+  const fencedBlocks = raw.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi);
 
-  if (start === -1 || end === -1) {
-    throw new Error("AI returned no JSON object");
+  for (const match of fencedBlocks) {
+    if (match[1]?.trim()) candidates.unshift(match[1].trim());
   }
 
-  return JSON.parse(cleaned.slice(start, end + 1));
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      const direct = JSON.parse(candidate);
+      if (direct && typeof direct === "object" && !Array.isArray(direct)) {
+        return direct;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+
+    const objectText = extractFirstJsonObject(candidate);
+    if (!objectText) continue;
+
+    try {
+      return JSON.parse(objectText);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(
+    lastError
+      ? `AI returned invalid JSON object: ${lastError.message}`
+      : "AI returned no JSON object"
+  );
+}
+
+function extractFirstJsonObject(text) {
+  const source = String(text ?? "");
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+
+    if (start === -1) {
+      if (char === "{") {
+        start = index;
+        depth = 1;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+    } else if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(start, index + 1);
+      }
+    }
+  }
+
+  return null;
 }
 
 function createEvent(type, details = {}) {
@@ -155,12 +221,11 @@ RULES:
         step,
         objective
       });
-      parsed = parseAgentResponse(rawResponse);
     } catch (error) {
       recordEvent("error", {
         step,
         message: error.message,
-        rawResponse: String(rawResponse || "").slice(0, 2000)
+        rawResponse: ""
       });
       return {
         success: false,
@@ -172,6 +237,58 @@ RULES:
         changedFiles: [...changedFiles],
         diffSummary: { stat: "", numstat: "" }
       };
+    }
+
+    try {
+      parsed = parseAgentResponse(rawResponse);
+    } catch (firstParseError) {
+      console.error("Coding Agent invalid JSON response:", rawResponse);
+      recordEvent("json_parse_retry", {
+        step,
+        message: firstParseError.message,
+        rawResponse: String(rawResponse ?? "").slice(0, 2000)
+      });
+
+      const retryMessages = [
+        ...conversation,
+        { role: "assistant", content: String(rawResponse ?? "") },
+        { role: "system", content: "Return only valid JSON object" }
+      ];
+
+      let retryResponse;
+      try {
+        retryResponse = await generateResponse({
+          messages: retryMessages,
+          plan,
+          step,
+          objective,
+          retry: true
+        });
+        parsed = parseAgentResponse(retryResponse);
+        rawResponse = retryResponse;
+      } catch (retryError) {
+        if (retryResponse !== undefined) {
+          console.error("Coding Agent invalid JSON retry response:", retryResponse);
+        } else {
+          console.error("Coding Agent JSON retry failed:", retryError);
+        }
+
+        recordEvent("error", {
+          step,
+          message: retryError.message,
+          rawResponse: String(retryResponse ?? rawResponse ?? "").slice(0, 2000)
+        });
+        return {
+          success: false,
+          error: retryError.message,
+          final: "Agent stopped because the model returned an invalid execution response after one retry.",
+          history,
+          events,
+          toolCalls,
+          changedFiles: [...changedFiles],
+          diffSummary: { stat: "", numstat: "" }
+        };
+      }
     }
 
     if (parsed.done) {

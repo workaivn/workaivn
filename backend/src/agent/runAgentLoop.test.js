@@ -99,3 +99,77 @@ test("filesystem tools reject paths outside the configured workspace", async () 
   }
 });
 
+test("runAgentLoop accepts JSON inside markdown fences and surrounding text", async () => {
+  const workspaceRoot = await createWorkspace();
+
+  try {
+    const result = await runAgentLoop({
+      messages: [{ role: "user", content: "Inspect the repository." }],
+      workspaceRoot,
+      maxSteps: 1,
+      generateResponse: async () => [
+        "I will inspect it now.",
+        "```json",
+        '{"tool":"LIST_FILES","args":{},"done":false}',
+        "```",
+        "Additional prose with {not valid JSON}."
+      ].join("\n")
+    });
+
+    assert.equal(result.toolCalls[0]?.tool, "LIST_FILES");
+    assert.equal(result.toolCalls[0]?.success, true);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("runAgentLoop retries once with a strict JSON-only instruction", async () => {
+  const workspaceRoot = await createWorkspace();
+  const calls = [];
+
+  try {
+    const result = await runAgentLoop({
+      messages: [{ role: "user", content: "Inspect the repository." }],
+      workspaceRoot,
+      maxSteps: 1,
+      generateResponse: async request => {
+        calls.push(request);
+        return calls.length === 1
+          ? "I forgot to return JSON."
+          : '{"tool":"LIST_FILES","args":{},"done":false}';
+      }
+    });
+
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].retry, true);
+    assert.equal(calls[1].messages.at(-1).content, "Return only valid JSON object");
+    assert.equal(result.toolCalls[0]?.tool, "LIST_FILES");
+    assert.ok(result.events.some(event => event.type === "json_parse_retry"));
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("runAgentLoop returns an error instead of throwing after invalid JSON retry", async () => {
+  const workspaceRoot = await createWorkspace();
+  let callCount = 0;
+
+  try {
+    const result = await runAgentLoop({
+      messages: [{ role: "user", content: "Inspect the repository." }],
+      workspaceRoot,
+      maxSteps: 1,
+      generateResponse: async () => {
+        callCount += 1;
+        return callCount === 1 ? "not json" : "still not json";
+      }
+    });
+
+    assert.equal(callCount, 2);
+    assert.equal(result.success, false);
+    assert.match(result.final, /after one retry/);
+    assert.ok(result.events.some(event => event.type === "error"));
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
