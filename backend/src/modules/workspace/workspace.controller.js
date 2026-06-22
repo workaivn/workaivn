@@ -8,18 +8,23 @@ import {
   resolveWorkspacePathSafe
 } from "../../agent/workspace.js";
 import {
+  createGitWorkspace,
   createLocalWorkspace,
   createZipWorkspace,
+  getWorkspaceCapabilities,
   getWorkspaceByPublicId
 } from "./workspace.service.js";
+import { isRemoteWorkspaceMode } from "../../agent/workspace.js";
 
 function publicWorkspace(workspace) {
   return {
     id: workspace.id,
     _id: workspace._id,
     name: workspace.name,
-    rootPath: workspace.rootPath,
+    rootPath: isRemoteWorkspaceMode() ? null : workspace.rootPath,
     sourceType: workspace.sourceType,
+    status: workspace.status,
+    repository: workspace.repository,
     createdAt: workspace.createdAt,
     updatedAt: workspace.updatedAt
   };
@@ -34,8 +39,15 @@ function workspaceError(res, error, fallback = "Workspace operation failed") {
 }
 
 export async function listWorkspaces(_req, res) {
-  const workspaces = await Workspace.find().sort({ updatedAt: -1 });
+  const filter = isRemoteWorkspaceMode()
+    ? { sourceType: { $in: ["zip", "git"] }, status: "ready" }
+    : {};
+  const workspaces = await Workspace.find(filter).sort({ updatedAt: -1 });
   return res.json({ success: true, data: workspaces.map(publicWorkspace) });
+}
+
+export async function getWorkspaceConfig(_req, res) {
+  return res.json({ success: true, data: getWorkspaceCapabilities() });
 }
 
 export async function createWorkspace(req, res) {
@@ -53,11 +65,24 @@ export async function uploadZipWorkspace(req, res) {
   try {
     const workspace = await createZipWorkspace({
       name: req.body.name || req.file?.originalname?.replace(/\.zip$/i, ""),
-      zipBuffer: req.file?.buffer
+      zipBuffer: req.file?.buffer,
+      originalName: req.file?.originalname || ""
     });
     return res.status(201).json({ success: true, data: publicWorkspace(workspace) });
   } catch (error) {
     return workspaceError(res, error, "Failed to import ZIP workspace");
+  }
+}
+
+export async function cloneGitWorkspace(req, res) {
+  try {
+    const workspace = await createGitWorkspace({
+      repoUrl: req.body.repoUrl,
+      branch: req.body.branch || "main"
+    });
+    return res.status(201).json({ success: true, data: publicWorkspace(workspace) });
+  } catch (error) {
+    return workspaceError(res, error, "Failed to clone Git workspace");
   }
 }
 
@@ -142,10 +167,31 @@ export async function downloadWorkspaceZip(req, res) {
       else res.destroy(error);
     });
     archive.pipe(res);
-    archive.directory(workspace.rootPath, false);
+    archive.glob("**/*", {
+      cwd: workspace.rootPath,
+      dot: true,
+      follow: false,
+      ignore: [
+        ".git/**",
+        "node_modules/**",
+        "dist/**",
+        "build/**",
+        "storage/**",
+        "uploads/**",
+        ".env",
+        ".env.*",
+        "**/.env",
+        "**/.env.*",
+        "**/*.pem",
+        "**/*.key",
+        "**/*.p12",
+        "**/*.pfx",
+        "**/id_rsa",
+        "**/id_ed25519"
+      ]
+    });
     await archive.finalize();
   } catch (error) {
     return workspaceError(res, error);
   }
 }
-

@@ -316,7 +316,7 @@ export async function runTask(req, res) {
     if (!workspaceId) {
       return res.status(400).json({
         success: false,
-        message: "Please select a project workspace first."
+        message: "Please create or select a workspace first."
       });
     }
 
@@ -499,7 +499,7 @@ export async function runTaskMultiple(req, res) {
     if (!workspaceId) {
       return res.status(400).json({
         success: false,
-        message: "Please select a project workspace first."
+        message: "Please create or select a workspace first."
       });
     }
 
@@ -615,7 +615,7 @@ export async function runAgentPrompt(req, res) {
     if (!workspaceId) {
       return res.status(400).json({
         success: false,
-        message: "Please select a project workspace first."
+        message: "Please create or select a workspace first."
       });
     }
 

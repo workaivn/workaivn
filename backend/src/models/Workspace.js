@@ -21,8 +21,18 @@ const WorkspaceSchema = new mongoose.Schema(
     },
     sourceType: {
       type: String,
-      enum: ["local", "zip"],
+      enum: ["local", "zip", "git"],
       default: "local"
+    },
+    status: {
+      type: String,
+      enum: ["creating", "ready", "error"],
+      default: "ready",
+      index: true
+    },
+    repository: {
+      repoUrl: String,
+      branch: String
     }
   },
   {

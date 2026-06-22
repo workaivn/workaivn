@@ -129,6 +129,11 @@ function ExecutionSummary({ run }) {
 
 export default function AgentWorkspace() {
   const [workspaces, setWorkspaces] = useState([]);
+  const [workspaceConfig, setWorkspaceConfig] = useState({
+    mode: "local",
+    allowLocalPath: true,
+    message: ""
+  });
   const [agents, setAgents] = useState([]);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState("");
@@ -138,7 +143,9 @@ export default function AgentWorkspace() {
   const [fileContent, setFileContent] = useState("");
   const [prompt, setPrompt] = useState("");
   const [workspaceForm, setWorkspaceForm] = useState({ name: "", rootPath: "" });
+  const [gitForm, setGitForm] = useState({ repoUrl: "", branch: "main" });
   const [showProjectForm, setShowProjectForm] = useState(false);
+  const [showGitForm, setShowGitForm] = useState(false);
   const [run, setRun] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -161,14 +168,20 @@ export default function AgentWorkspace() {
   async function loadInitialData() {
     try {
       setLoading(true);
-      const [workspaceResponse, agentResponse] = await Promise.all([
+      const [workspaceResponse, configResponse, agentResponse] = await Promise.all([
         axios.get(`${API_URL}/api/workspaces`),
+        axios.get(`${API_URL}/api/workspaces/config`),
         axios.get(`${API_URL}/api/ai/agents?agentType=coding`)
       ]);
       const loadedWorkspaces = workspaceResponse.data.data || [];
       const loadedAgents = (agentResponse.data.data || [])
         .filter(agent => agent.providerId?.type !== "manual");
       setWorkspaces(loadedWorkspaces);
+      setWorkspaceConfig(configResponse.data.data || {
+        mode: "local",
+        allowLocalPath: true,
+        message: ""
+      });
       setAgents(loadedAgents);
       if (loadedWorkspaces[0]) setSelectedWorkspaceId(loadedWorkspaces[0].id);
       if (loadedAgents[0]) setSelectedAgentId(loadedAgents[0]._id);

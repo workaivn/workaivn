@@ -53,6 +53,21 @@ function isInsidePath(parent, child) {
     normalizedChild.startsWith(`${normalizedParent}${path.sep}`);
 }
 
+export function getWorkspaceMode() {
+  return String(process.env.WORKSPACE_MODE || "local").trim().toLowerCase() === "remote"
+    ? "remote"
+    : "local";
+}
+
+export function isRemoteWorkspaceMode() {
+  return getWorkspaceMode() === "remote";
+}
+
+export async function ensureManagedWorkspaceRoot() {
+  await fs.mkdir(MANAGED_WORKSPACE_ROOT, { recursive: true });
+  return fs.realpath(MANAGED_WORKSPACE_ROOT);
+}
+
 export function getAllowedWorkspaceRoots() {
   const configured = String(
     process.env.WORKSPACE_ROOTS ||
@@ -94,6 +109,10 @@ export function assertWorkspaceRootAllowed(rootPath, { allowManaged = true } = {
   const allowedRoots = getAllowedWorkspaceRoots();
   const allowed = allowedRoots.some(root => isInsidePath(root, resolved));
   const managed = allowManaged && isInsidePath(MANAGED_WORKSPACE_ROOT, resolved);
+
+  if (isRemoteWorkspaceMode() && !managed) {
+    throw new Error("Remote mode only allows managed workspaces created from ZIP or Git.");
+  }
 
   if (!allowed && !managed) {
     throw new Error(

@@ -9,8 +9,10 @@ const upload = multer({
 });
 
 router.get("/", controller.listWorkspaces);
+router.get("/config", controller.getWorkspaceConfig);
 router.post("/", controller.createWorkspace);
 router.post("/upload-zip", upload.single("file"), controller.uploadZipWorkspace);
+router.post("/clone-git", controller.cloneGitWorkspace);
 router.get("/:id/tree", controller.getWorkspaceTree);
 router.get("/:id/file", controller.getWorkspaceFile);
 router.put("/:id/file", controller.putWorkspaceFile);

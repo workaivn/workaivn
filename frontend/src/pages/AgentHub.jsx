@@ -87,7 +87,7 @@ export default function AgentHub() {
 
   async function runTask(taskId, agentId) {
     if (!selectedWorkspaceId) {
-      setError("Please select a project workspace first.");
+      setError("Please create or select a workspace first.");
       return;
     }
     try {
@@ -117,7 +117,7 @@ export default function AgentHub() {
       return;
     }
     if (!selectedWorkspaceId) {
-      setError("Please select a project workspace first.");
+      setError("Please create or select a workspace first.");
       return;
     }
 
