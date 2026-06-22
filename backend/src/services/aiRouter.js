@@ -5,9 +5,9 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
    INIT
 ========================= */
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
 
 const gemini = new GoogleGenerativeAI(
   process.env.GEMINI_API_KEY
@@ -135,6 +135,10 @@ function getSystemPrompt(mode) {
 ========================= */
 
 async function askOpenAI(messages, mode) {
+  if (!openai) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
+
   const system = getSystemPrompt(mode);
   const finalMessages = [{ role: "system", content: system }, ...messages];
 
@@ -153,6 +157,10 @@ export async function askOpenAIStream({
   mode = "chat",
   onToken = () => {}
 }) {
+  if (!openai) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
+
   const system = getSystemPrompt(mode);
   const finalMessages = [{ role: "system", content: system }, ...messages];
 

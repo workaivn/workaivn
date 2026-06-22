@@ -1,9 +1,17 @@
+import fs from "fs/promises";
+import path from "path";
+import { listWorkspaceFiles, resolveWorkspacePath } from "../workspace.js";
+
+const SEARCHABLE_EXTENSIONS = new Set([
+  ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
+  ".json", ".md", ".css", ".scss", ".html", ".yml", ".yaml",
+  ".py", ".java", ".go", ".rs", ".php", ".rb", ".sql", ".sh", ".ps1"
+]);
+
 export async function searchCodeTool({
-
   query,
-
-  activeFiles = []
-
+  activeFiles = [],
+  workspaceRoot
 }) {
 
   const q =
@@ -11,8 +19,36 @@ export async function searchCodeTool({
       .toLowerCase();
 
   const results = [];
+  let filesToSearch = activeFiles;
 
-  for (const f of activeFiles) {
+  if (workspaceRoot) {
+    try {
+      const paths = await listWorkspaceFiles(workspaceRoot, { limit: 1000 });
+      filesToSearch = [];
+
+      for (const filePath of paths) {
+        if (!SEARCHABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) continue;
+
+        try {
+          const resolved = resolveWorkspacePath(workspaceRoot, filePath);
+          const stats = await fs.stat(resolved.absolutePath);
+          if (stats.size > 1024 * 1024) continue;
+          const content = await fs.readFile(resolved.absolutePath, "utf8");
+          filesToSearch.push({
+            name: filePath,
+            path: filePath,
+            content
+          });
+        } catch {
+          // Ignore binary and unreadable files.
+        }
+      }
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  for (const f of filesToSearch) {
 
     const text =
       String(
@@ -250,7 +286,7 @@ export async function searchCodeTool({
 		results.push({
 
 		  file:
-			f.name,
+			f.path || f.name,
 
 		  score,
 

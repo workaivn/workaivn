@@ -45,14 +45,22 @@ export class GeminiProviderAdapter extends AiProviderAdapter {
         model: modelName || "gemini-1.5-pro"
       });
 
-      // Convert to Gemini format
-      const content = messages.map(msg => ({
-        role: msg.role === "user" ? "user" : "model",
-        parts: [{ text: msg.content }]
-      }));
+      const systemInstruction = messages
+        .filter(message => message.role === "system")
+        .map(message => message.content)
+        .join("\n\n");
+      const content = messages
+        .filter(message => message.role !== "system")
+        .map(msg => ({
+          role: msg.role === "assistant" ? "model" : "user",
+          parts: [{ text: msg.content }]
+        }));
 
       const response = await model.generateContent({
         contents: content,
+        systemInstruction: systemInstruction
+          ? { parts: [{ text: systemInstruction }] }
+          : undefined,
         generationConfig: {
           temperature,
           maxOutputTokens: maxTokens

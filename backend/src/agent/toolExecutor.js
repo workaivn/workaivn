@@ -19,6 +19,9 @@ import { applyPatchTool }
 import { searchSymbolTool }
   from "./tools/searchSymbol.js";
 
+import { validatePatchTool }
+  from "./tools/validatePatch.js";
+
 const tools = {
 
   READ_FILE: readFileTool,
@@ -36,12 +39,15 @@ const tools = {
 	SEARCH_SYMBOL:
 	  searchSymbolTool,
 
+  VALIDATE_PATCH:
+    validatePatchTool,
+
 };
 
 export async function executeTool(
   toolName,
   args,
-  activeFiles = []
+  context = {}
 ) {
 
   const tool = tools[toolName];
@@ -57,14 +63,15 @@ export async function executeTool(
 
   try {
 
-    const result =
-      await tool({
+    const normalizedContext = Array.isArray(context)
+      ? { activeFiles: context }
+      : context;
 
-		  ...args,
-
-		  activeFiles
-
-		});
+    const result = await tool({
+      ...args,
+      activeFiles: normalizedContext.activeFiles || [],
+      workspaceRoot: normalizedContext.workspaceRoot
+    });
 
     return result;
 

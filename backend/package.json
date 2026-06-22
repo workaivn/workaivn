@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
+    "test": "node --test src/**/*.test.js",
     "seed:agents": "node src/scripts/seed-agent-hub.js",
     "seed:settings": "node src/scripts/seed-settings.js",
     "seed:all": "npm run seed:settings && npm run seed:agents"

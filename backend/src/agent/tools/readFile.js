@@ -1,96 +1,36 @@
-export async function readFileTool({
+import fs from "fs/promises";
+import { resolveWorkspacePath } from "../workspace.js";
 
-  path,
-
-  activeFiles = []
-
-}) {
-
-  const normalized =
-	  String(path || "")
-		.replace(/\\/g,"/")
-		.toLowerCase()
-		.trim();
-	console.log(
-
-	  "ACTIVE FILES:",
-
-	  activeFiles.map(f => ({
-		name: f.name,
-		path: f.path
-	  }))
-
-	);
-	const found =
-	  activeFiles.find(f => {
-
-		const filePath =
-		  String(
-
-			f.path ||
-			f.name ||
-			""
-
-		  )
-		  .replace(/\\/g,"/")
-		  .toLowerCase();
-
-		return (
-
-		  filePath === normalized ||
-
-		  filePath.endsWith(
-			"/" + normalized
-		  ) ||
-
-		  filePath.endsWith(
-			normalized
-		  )
-
-		);
-
-	  });
-
-  if (!found) {
-
-    return {
-
-      success: false,
-
-      error:
-        `Cannot find uploaded file: ${path}`
-
-    };
-
+export async function readFileTool({ path, activeFiles = [], workspaceRoot }) {
+  if (workspaceRoot) {
+    try {
+      const resolved = resolveWorkspacePath(workspaceRoot, path);
+      const content = await fs.readFile(resolved.absolutePath, "utf8");
+      return {
+        success: true,
+        file: resolved.relativePath,
+        content
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
   }
 
-  const content =
+  const normalized = String(path || "").replace(/\\/g, "/").toLowerCase().trim();
+  const found = activeFiles.find(file => {
+    const filePath = String(file.path || file.name || "")
+      .replace(/\\/g, "/")
+      .toLowerCase();
+    return filePath === normalized || filePath.endsWith(`/${normalized}`);
+  });
 
-	  found.content
-
-	  ||
-
-	  found.chunks
-		?.map(c => c.content)
-		?.join("\n\n")
-
-	  ||
-
-	  "";
-  console.log(
-  "READ_FILE LENGTH:",
-  content.length
-);
+  if (!found) {
+    return { success: false, error: `Cannot find uploaded file: ${path}` };
+  }
 
   return {
-
     success: true,
-
-    file:
-      found.name,
-
-    content
-
+    file: found.path || found.name,
+    content: found.content || found.chunks?.map(chunk => chunk.content).join("\n\n") || ""
   };
-
 }

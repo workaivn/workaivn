@@ -4,6 +4,79 @@ import AgentTask from "../../models/AgentTask.js";
 import AgentRun from "../../models/AgentRun.js";
 import AgentPromptTemplate from "../../models/AgentPromptTemplate.js";
 import { providerRegistry } from "../../services/adapters/index.js";
+import { runAgentLoop } from "../../agent/runAgentLoop.js";
+import { getWorkspaceRoot } from "../../agent/workspace.js";
+
+async function executeAgentRun({ task, agent, run }) {
+  const adapter = providerRegistry.getAdapter(agent.providerId.code);
+  const isConfigured = await adapter.isConfigured();
+
+  if (!isConfigured) {
+    const error = adapter.getConfigError();
+    run.status = "error";
+    run.errorMessage = error;
+    await run.save();
+    return { success: false, error, run };
+  }
+
+  run.status = "running";
+  run.startedAt = new Date();
+  run.workspaceRoot = getWorkspaceRoot();
+  await run.save();
+
+  const result = await runAgentLoop({
+    messages: [
+      { role: "system", content: agent.systemPrompt },
+      { role: "user", content: run.inputPrompt }
+    ],
+    workspaceRoot: run.workspaceRoot,
+    maxSteps: 12,
+    generateResponse: async ({ messages }) => {
+      const response = await adapter.run({
+        modelName: agent.modelName,
+        messages,
+        temperature: agent.temperature,
+        maxTokens: agent.maxTokens
+      });
+
+      if (!response.success) {
+        throw new Error(response.error || "AI provider execution failed");
+      }
+
+      return response.outputText;
+    }
+  });
+
+  run.status = result.success && result.changedFiles.length > 0
+    ? "completed"
+    : "error";
+  run.outputText = result.final || "";
+  run.rawResponse = {
+    success: result.success,
+    error: result.error || null
+  };
+  run.errorMessage = run.status === "error"
+    ? result.error || "Agent finished without persisted file changes"
+    : null;
+  run.changedFiles = result.changedFiles || [];
+  run.toolCalls = result.toolCalls || [];
+  run.executionEvents = result.events || [];
+  run.diffSummary = result.diffSummary || {};
+  run.executionSummary = {
+    changedFileCount: run.changedFiles.length,
+    toolCallCount: run.toolCalls.length,
+    eventCount: run.executionEvents.length,
+    final: result.final || ""
+  };
+  run.completedAt = new Date();
+  await run.save();
+
+  return {
+    success: run.status === "completed",
+    error: run.errorMessage,
+    run
+  };
+}
 
 /**
  * Get all AI Providers with configuration status
@@ -189,6 +262,7 @@ export async function createTask(req, res) {
  * Run Agent Task with selected agent
  */
 export async function runTask(req, res) {
+  let run = null;
   try {
     const { taskId } = req.params;
     const { agentId } = req.body;
@@ -219,7 +293,7 @@ export async function runTask(req, res) {
     }
 
     // Create run
-    const run = new AgentRun({
+    run = new AgentRun({
       taskId,
       agentId,
       providerCode: agent.providerId.code,
@@ -230,59 +304,27 @@ export async function runTask(req, res) {
 
     await run.save();
 
-    // Get provider adapter
-    const adapter = providerRegistry.getAdapter(agent.providerId.code);
+    task.status = "running";
+    task.selectedAgentId = agent._id;
+    await task.save();
 
-    // Check if configured
-    const isConfigured = await adapter.isConfigured();
-    if (!isConfigured) {
-      run.status = "error";
-      run.errorMessage = adapter.getConfigError();
-      await run.save();
+    const result = await executeAgentRun({ task, agent, run });
+    task.status = result.success ? "completed" : "error";
+    await task.save();
 
-      return res.status(400).json({
-        success: false,
-        message: "Provider not configured",
-        error: adapter.getConfigError(),
-        runId: run._id
-      });
-    }
-
-    // Run adapter
-    run.status = "running";
-    run.startedAt = new Date();
-    await run.save();
-
-    const result = await adapter.run({
-      modelName: agent.modelName,
-      messages: [
-        {
-          role: "system",
-          content: agent.systemPrompt
-        },
-        {
-          role: "user",
-          content: run.inputPrompt
-        }
-      ],
-      temperature: agent.temperature,
-      maxTokens: agent.maxTokens
-    });
-
-    run.status = result.success ? "completed" : "error";
-    run.outputText = result.outputText || "";
-    run.rawResponse = result.rawResponse || null;
-    run.errorMessage = result.error || null;
-    run.completedAt = new Date();
-    await run.save();
-
-    return res.json({
+    return res.status(result.success ? 200 : 422).json({
       success: result.success,
-      data: run,
-      message: result.success ? "Task completed" : result.error
+      data: result.run,
+      message: result.success ? "Task completed with file changes" : result.error
     });
   } catch (error) {
     console.error("runTask error:", error);
+    if (run) {
+      run.status = "error";
+      run.errorMessage = error.message;
+      run.completedAt = new Date();
+      await run.save().catch(() => {});
+    }
     return res.status(500).json({
       success: false,
       message: "Failed to run task",
@@ -439,73 +481,37 @@ export async function runTaskMultiple(req, res) {
       runs.push(run);
     }
 
-    // Run all agents in parallel
-    const runPromises = runs.map(async (run) => {
+    // Execute sequentially because all coding agents write to the same checkout.
+    const completedRuns = [];
+    for (const run of runs) {
       try {
         const agent = await AiAgent.findById(run.agentId).populate("providerId");
-        const adapter = providerRegistry.getAdapter(agent.providerId.code);
-
-        const isConfigured = await adapter.isConfigured();
-        if (!isConfigured) {
-          run.status = "error";
-          run.errorMessage = adapter.getConfigError();
-          await run.save();
-          return run;
-        }
-
-        run.status = "running";
-        run.startedAt = new Date();
-        await run.save();
-
-        const result = await adapter.run({
-          modelName: agent.modelName,
-          messages: [
-            {
-              role: "system",
-              content: agent.systemPrompt
-            },
-            {
-              role: "user",
-              content: run.inputPrompt
-            }
-          ],
-          temperature: agent.temperature,
-          maxTokens: agent.maxTokens
-        });
-
-        run.status = result.success ? "completed" : "error";
-        run.outputText = result.outputText || "";
-        run.rawResponse = result.rawResponse || null;
-        run.errorMessage = result.error || null;
-        run.completedAt = new Date();
-        await run.save();
-
-        return run;
+        const result = await executeAgentRun({ task, agent, run });
+        completedRuns.push(result.run);
       } catch (error) {
         run.status = "error";
         run.errorMessage = error.message;
+        run.completedAt = new Date();
         await run.save();
-        return run;
+        completedRuns.push(run);
       }
-    });
-
-    const completedRuns = await Promise.all(runPromises);
+    }
 
     // Update task status based on results
-    const allCompleted = completedRuns.every(r => r.status !== "pending" && r.status !== "running");
-    if (allCompleted) {
-      const hasError = completedRuns.some(r => r.status === "error");
-      task.status = hasError ? "completed" : "completed";
-    }
+    const allCompleted = completedRuns.length > 0 &&
+      completedRuns.every(run => run.status === "completed");
+    task.status = allCompleted ? "completed" : "error";
     await task.save();
 
-    return res.json({
-      success: true,
+    return res.status(allCompleted ? 200 : 422).json({
+      success: allCompleted,
       data: {
         task,
         runs: completedRuns
       },
-      message: `Executed ${completedRuns.length} agents`
+      message: allCompleted
+        ? `Executed ${completedRuns.length} agents with persisted file changes`
+        : "One or more agents failed or produced no file changes"
     });
   } catch (error) {
     console.error("runTaskMultiple error:", error);

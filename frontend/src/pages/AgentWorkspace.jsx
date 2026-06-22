@@ -194,6 +194,9 @@ export default function AgentWorkspace() {
                 <div key={run._id} className="run-card">
                   <div className="run-card-title">{run.agentId?.name || "Agent"}</div>
                   <div className={`run-badge status-${run.status}`}>{run.status}</div>
+                  <div className="muted">
+                    {run.changedFiles?.length || 0} files · {run.toolCalls?.length || 0} tools
+                  </div>
                 </div>
               ))
             ) : (

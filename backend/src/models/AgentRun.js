@@ -32,6 +32,29 @@ const AgentRunSchema = new mongoose.Schema(
     rawResponse: {
       type: mongoose.Schema.Types.Mixed
     },
+    workspaceRoot: {
+      type: String
+    },
+    changedFiles: {
+      type: [String],
+      default: []
+    },
+    toolCalls: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: []
+    },
+    executionEvents: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: []
+    },
+    diffSummary: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {}
+    },
+    executionSummary: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {}
+    },
     status: {
       type: String,
       enum: ["pending", "running", "completed", "error"],
@@ -53,9 +76,13 @@ const AgentRunSchema = new mongoose.Schema(
   }
 );
 
-// Auto-update completedAt when status changes to completed
+// Auto-update completedAt when a run reaches a terminal status.
 AgentRunSchema.pre("save", function (next) {
-  if (this.isModified("status") && this.status === "completed" && !this.completedAt) {
+  if (
+    this.isModified("status") &&
+    ["completed", "error"].includes(this.status) &&
+    !this.completedAt
+  ) {
     this.completedAt = new Date();
   }
   next();

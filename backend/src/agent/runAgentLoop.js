@@ -1,576 +1,328 @@
 import { askAI } from "../services/aiRouter.js";
 import { executeTool } from "./toolExecutor.js";
+import {
+  getDiffSummary,
+  getGitSnapshot,
+  getWorkspaceRoot
+} from "./workspace.js";
 
-function emitStatus(history, text) {
-  history.push({
-    type: "status",
-    text,
-    time: Date.now()
-  });
+const WRITE_TOOLS = new Set(["WRITE_FILE", "APPLY_PATCH"]);
+
+function parseAgentResponse(response) {
+  const cleaned = String(response || "")
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+
+  if (start === -1 || end === -1) {
+    throw new Error("AI returned no JSON object");
+  }
+
+  return JSON.parse(cleaned.slice(start, end + 1));
 }
 
-function limitMemory(arr, max = 8) {
-  return arr.slice(-max);
+function createEvent(type, details = {}) {
+  return {
+    type,
+    ...details,
+    time: new Date()
+  };
+}
+
+function compactResult(result) {
+  const serialized = JSON.stringify(result);
+  return serialized.length > 12000
+    ? `${serialized.slice(0, 12000)}...`
+    : serialized;
+}
+
+function summarizeToolResult(result) {
+  if (!result || typeof result !== "object") return result;
+
+  const summary = { ...result };
+  if (typeof summary.content === "string") {
+    summary.contentPreview = summary.content.slice(0, 1000);
+    summary.contentLength = summary.content.length;
+    delete summary.content;
+  }
+  if (typeof summary.updated === "string") {
+    summary.updatedLength = summary.updated.length;
+    delete summary.updated;
+  }
+  if (Array.isArray(summary.results) && summary.results.length > 20) {
+    summary.results = summary.results.slice(0, 20);
+    summary.truncated = true;
+  }
+  if (Array.isArray(summary.files) && summary.files.length > 200) {
+    summary.files = summary.files.slice(0, 200);
+    summary.truncated = true;
+  }
+
+  return summary;
+}
+
+async function defaultGenerateResponse({ messages, plan }) {
+  return askAI({ messages, mode: "agent", plan });
 }
 
 export async function runAgentLoop({
   messages = [],
   plan = "free",
   activeFiles = [],
-  maxSteps = 8,
-  onEvent = () => {}
+  workspaceRoot = "",
+  maxSteps = 12,
+  onEvent = () => {},
+  generateResponse = defaultGenerateResponse
 }) {
-  const history = [];
-  const memory = {
-    objective: "",
-    discoveredFiles: [],
-    discoveredFunctions: [],
-    architectureKnowledge: [],
-    fileRelationships: [],
-    patchConfidence: [],
-    searchedQueries: [],
-    bugsFound: [],
-    hypotheses: [],
-    fixesAttempted: [],
-    successfulFixes: [],
-    successfulPatterns: [],
-    failedFixes: [],
-    rejectedHypotheses: [],
-    currentPlan: [],
-    reasoning: [],
-    thinkingDepth: 0,
-    reflections: [],
-    nextActions: [],
-    rootCauses: [],
-    evidence: [],
-    architectureSummary: "",
-    patches: [],
-    modifiedFiles: [],
-    terminalOutputs: []
+  const resolvedWorkspaceRoot = workspaceRoot
+    ? getWorkspaceRoot(workspaceRoot)
+    : "";
+  const toolContext = {
+    activeFiles,
+    workspaceRoot: resolvedWorkspaceRoot || undefined
   };
+  const objective = messages.at(-1)?.content || "";
+  const conversation = [...messages];
+  const history = [];
+  const events = [];
+  const toolCalls = [];
+  const changedFiles = new Set();
+  const inspectedFiles = new Set();
+  const baseline = resolvedWorkspaceRoot
+    ? await getGitSnapshot(resolvedWorkspaceRoot)
+    : { changedFiles: [] };
+  let finalText = "";
+  let validationFailed = false;
 
-  memory.objective = messages?.slice(-1)?.[0]?.content || "";
-  let emptySearchCount = 0;
-  let repeatedToolCount = 0;
-  let lastTool = "";
+  const systemPrompt = `You are the WorkAI VN Coding Agent.
 
-  for (let step = 0; step < maxSteps; step++) {
-    const system = `
-Luôn trả lời bằng Tiếng Việt.
-DO NOT TEACH THE USER.
-DO NOT EXPLAIN.
-DO NOT SHOW CODE EXAMPLES.
-YOU MUST EXECUTE USING TOOLS.
-
-You are WorkAI Agent.
+You must execute the coding task by using tools against the real workspace.
+Return exactly one JSON object per response, with no markdown.
 
 AVAILABLE TOOLS:
-- SEARCH_SYMBOL
-- READ_FILE
-- APPLY_PATCH
-- LIST_FILES
-- SEARCH_CODE
-- VALIDATE_PATCH
+- LIST_FILES { "limit": 500 }
+- SEARCH_SYMBOL { "query": "exact symbol or route" }
+- SEARCH_CODE { "query": "specific identifier or behavior" }
+- READ_FILE { "path": "relative/path.js" }
+- WRITE_FILE { "path": "relative/path.js", "content": "complete file content" }
+- APPLY_PATCH { "file": "relative/path.js", "find": "unique exact text", "replace": "replacement text" }
+- RUN_TERMINAL { "command": "safe verification command" }
+- VALIDATE_PATCH { "file": "relative/path.js" }
 
-VALIDATE_PATCH checks:
-- syntax risks
-- runtime risks
-- frontend/backend mismatch
-- useless patches
-- duplicate fixes
-- invalid imports
-- invalid JSX
-- non-functional fixes
+RESPONSE FORMAT:
+{ "tool": "READ_FILE", "args": { "path": "src/file.js" }, "reasoning": "short reason", "done": false }
 
-Do NOT run npm build commands.
-Do NOT assume full local project exists.
-Validate logically from uploaded files only.
+When the task is complete:
+{ "done": true, "final": "concise implementation summary" }
 
-CRITICAL RULES:
-- You MUST use tools.
-- NEVER answer directly without tools.
-- ALWAYS inspect code before fixing.
-ALWAYS use SEARCH_SYMBOL first.
-Only use SEARCH_CODE if SEARCH_SYMBOL fails.
-- Search semantically, not literally.
-- Think like a senior software engineer debugging a real app.
-- NEVER invent file contents.
-- NEVER skip tool usage.
-- Think step-by-step.
+RULES:
+- Inspect the repository before editing.
+- Use exact relative paths.
+- Make real edits with WRITE_FILE or APPLY_PATCH.
+- Prefer APPLY_PATCH for focused edits.
+- Do not claim completion without a persisted file change.
+- Do not repeat a failed tool call without changing its arguments.
+- Use RUN_TERMINAL for focused verification after edits when useful.
+- Keep changes scoped to the objective.`;
 
-FLOW REQUIREMENTS:
-IMPORTANT:
-If you already found:
-- root cause
-- affected file
-- valid patch
+  conversation.unshift({ role: "system", content: systemPrompt });
+  conversation.push({
+    role: "system",
+    content: resolvedWorkspaceRoot
+      ? `Workspace root is configured. All tool paths must be relative to it. Objective: ${objective}`
+      : "This run uses uploaded in-memory files. Tool paths must match uploaded file paths."
+  });
 
-Then you MUST finish immediately.
+  function recordEvent(type, details = {}) {
+    const event = createEvent(type, details);
+    events.push(event);
+    history.push(event);
+    onEvent(event);
+    return event;
+  }
 
-Do NOT continue searching.
+  for (let step = 0; step < maxSteps; step += 1) {
+    recordEvent("thinking", { step });
 
-NEVER search generic words:
-- function
-- code
-- stream
-- bug
-- fix
-- error
-1. PLAN: Define your investigation path.
-2. READ/SEARCH: Inspect codebases to find root causes.
-3. CRITIC & PATCH: Submit a patch to the critic, then apply it if approved.
-4. VALIDATE: You MUST run VALIDATE_PATCH immediately after applying any patch.
-5. DONE: Conclude only after successful validation.
-
-OUTPUT JSON FORMAT REQUIRED AT EACH STEP:
-{
-  "plan": ["bước 1", "bước 2"],
-  "hypotheses": ["giả thuyết lỗi"],
-  "rootCause": "Mô tả chi tiết lỗi tìm thấy là gì bằng tiếng Việt",
-  "reasoning": "Tại sao lại sửa như thế này bằng tiếng Việt",
-  "tool": "APPLY_PATCH", 
-  "args": { ... },
-  "done": false
-}
-When you are completely finished and validation passes, set "done": true and write a summary in "final".
-Return ONLY valid JSON.
-`;
-
-    if (emptySearchCount >= 3) {
-      return {
-        success: false,
-        final: `Không tìm thấy đoạn code liên quan trong project sau nhiều lần tìm kiếm trống.`,
-        history
-      };
-    }
-
-    const aiResponse = await askAI({
-      messages: [
-        {
-          role: "system",
-          content: system
-        },
-        {
-          role: "system",
-          content: `
-		OBJECTIVE:
-		${memory.objective}
-
-		DISCOVERED FILES:
-		${memory.discoveredFiles.join("\n")}
-
-		ROOT CAUSES:
-		${memory.rootCauses.slice(-3).join("\n")}
-
-		LAST TOOL RESULTS:
-		${JSON.stringify(
-		  history.slice(-3),
-		  null,
-		  2
-		)}
-
-		IMPORTANT:
-		- Do not repeat searches
-		- Use exact files/functions
-		- Prefer patching over more searching
-		`
-        },
-        ...messages
-      ],
-      mode: "agent",
-      plan
-    });
-
-    console.log("\n=== AGENT STEP ===", step);
-    console.log("RAW AI RESPONSE:\n", aiResponse);
-	
-    onEvent({
-      type: "thinking",
-      step
-    });
-
-    let parsed = null;
-
+    let parsed;
+    let rawResponse;
     try {
-      const cleaned = String(aiResponse || "")
-		  .replace(/```json/gi, "")
-		  .replace(/```/g, "")
-		  .trim();
-
-      const first = cleaned.indexOf("{");
-      const last = cleaned.lastIndexOf("}");
-
-      if (first === -1 || last === -1) {
-        throw new Error("No JSON object found");
-      }
-
-      const jsonOnly = cleaned.slice(first, last + 1);
-      parsed = JSON.parse(jsonOnly);
-    } catch (err) {
-      console.log("JSON PARSE FAIL:", aiResponse);
+      rawResponse = await generateResponse({
+        messages: conversation,
+        plan,
+        step,
+        objective
+      });
+      parsed = parseAgentResponse(rawResponse);
+    } catch (error) {
+      recordEvent("error", {
+        step,
+        message: error.message,
+        rawResponse: String(rawResponse || "").slice(0, 2000)
+      });
       return {
         success: false,
-        error: "AI returned invalid JSON",
-        raw: aiResponse
+        error: error.message,
+        final: "Agent stopped because the model returned an invalid execution response.",
+        history,
+        events,
+        toolCalls,
+        changedFiles: [...changedFiles],
+        diffSummary: { stat: "", numstat: "" }
       };
     }
 
-    // 1. Cập nhật Kế hoạch (PLAN)
-    if (Array.isArray(parsed.plan)) {
-      const samePlan = JSON.stringify(parsed.plan) === JSON.stringify(memory.currentPlan);
-      memory.currentPlan = limitMemory(parsed.plan, 10);
-
-      if (!samePlan) {
-        emitStatus(history, "New plan accepted");
-      }
-
-      if (samePlan && memory.discoveredFiles.length < 2) {
-        messages.push({
-          role: "system",
-          content: "STOP REPEATING PLAN. EXECUTE READ_FILE OR SEARCH_CODE NOW."
+    if (parsed.done) {
+      if (changedFiles.size === 0) {
+        const message = "Completion rejected: no persisted file changes were detected.";
+        recordEvent("completion_rejected", { step, message });
+        conversation.push({
+          role: "assistant",
+          content: JSON.stringify(parsed)
         });
-      }
-    }
-
-    // Cập nhật các thông tin Memory cơ bản
-    if (Array.isArray(parsed.hypotheses)) memory.hypotheses = limitMemory([...memory.hypotheses, ...parsed.hypotheses], 20);
-    if (parsed.reflection) memory.reflections.push(parsed.reflection);
-    if (parsed.next) memory.nextActions.push(parsed.next);
-    if (parsed.rootCause) memory.rootCauses = limitMemory([...memory.rootCauses, parsed.rootCause], 20);
-    if (Array.isArray(parsed.rejectedHypotheses)) memory.rejectedHypotheses = limitMemory([...memory.rejectedHypotheses, ...parsed.rejectedHypotheses], 20);
-
-    // 2. Kiểm tra và Đánh chặn để đưa vào quy trình CRITIC -> PATCH
-    const detectedPatch = parsed.PATCH || parsed.patch || (parsed.tool === "APPLY_PATCH" ? [parsed.args] : []);
-    const hasPatchAction = Array.isArray(detectedPatch) && detectedPatch.length > 0;
-    
-    if (hasPatchAction) {
-      if (lastTool === "APPLY_PATCH") {
-        repeatedToolCount++;
-      } else {
-        repeatedToolCount = 0;
-      }
-      lastTool = "APPLY_PATCH";
-
-      if (repeatedToolCount >= 3) {
-        return {
-          success: false,
-          final: "Agent bị lặp vòng lặp vô hạn (loop) APPLY_PATCH mà không hiệu quả.",
-          history
-        };
-      }
-    }
-
-    if (hasPatchAction) {
-      if (memory.discoveredFiles.length < 2) {
-        history.push({
-          type: "warning",
-          text: "Patch rejected: insufficient code context (Read at least 2 files before patching)",
-          time: Date.now()
-        });
-        messages.push({
+        conversation.push({
           role: "system",
-          content: "CRITICAL: Patch rejected because you haven't read enough files. You must use READ_FILE or SEARCH_CODE on at least 2 distinct files first."
+          content: `${message} Continue by inspecting and editing the workspace with tools.`
         });
         continue;
       }
 
-      // --- BƯỚC 3: CRITIC ---
-      const criticResponse = await askAI({
-        messages: [
-          {
-            role: "system",
-            content: `You are a brutal senior code reviewer.
-Reject patches that add useless null checks, do not change runtime behavior, or lack evidence.
-Return ONLY valid JSON.
-APPROVE: { "approve": true }
-REJECT: { "approve": false, "reason": "Reason here" }`
-          },
-          {
-            role: "user",
-            content: JSON.stringify({ patch: detectedPatch, memory, history }, null, 2)
-          }
-        ]
-      });
-
-      let critic = null;
-      try {
-        const cleanedCritic = String(criticResponse || "")
-		  .replace(/```json/gi, "")
-		  .replace(/```/g, "")
-		  .trim();
-        critic = JSON.parse(cleanedCritic);
-      } catch {
-        critic = { approve: false, reason: "Critic invalid JSON" };
-      }
-
-      if (!critic.approve) {
-        history.push({
-          type: "warning",
-          text: `Patch rejected by Critic: ${critic.reason}`,
-          time: Date.now()
-        });
-        // Sửa lỗi: Cần báo cho Agent biết bản vá bị từ chối để tránh lặp lại logic cũ
-        messages.push({
-          role: "system",
-          content: `CRITICAL: Your proposed patch was REJECTED by the code reviewer. Reason: ${critic.reason}. Please rethink your root cause analysis and try another solution.`
-        });
-        continue;
-      }
-
-      history.push({
-        type: "critic",
-        text: "Patch approved by critic",
-        time: Date.now()
-      });
-
-      onEvent({
-        type: "patch",
-        file: detectedPatch[0]?.file
-      });
-
-      // --- BƯỚC 4: PATCH (APPLY_PATCH) ---
-      const patchResult = await executeTool("APPLY_PATCH", detectedPatch[0], activeFiles || []);
-      
-      history.push({
-        step,
-        tool: "APPLY_PATCH",
-        args: detectedPatch[0],
-        result: patchResult,
-        time: Date.now()
-      });
-
-      if (patchResult?.success) {
-        memory.patches.push(detectedPatch[0]);
-        memory.modifiedFiles.push({
-          file: detectedPatch[0]?.file,
-          find: detectedPatch[0]?.find,
-          replace: detectedPatch[0]?.replace,
-          time: Date.now()
-        });
-        memory.successfulFixes.push(detectedPatch[0]?.file || "unknown");
-        memory.thinkingDepth++;
-        memory.reasoning.push(`Generated patch for ${detectedPatch[0]?.file}`);
-
-        onEvent({
-          type: "validate",
-          file: detectedPatch[0]?.file
-        });
-
-        // --- BƯỚC 5: VALIDATE ---
-        emitStatus(history, `Running validation for patch on ${detectedPatch[0]?.file}`);
-        const valResult = await executeTool("VALIDATE_PATCH", { file: detectedPatch[0]?.file }, activeFiles || []);
-        
-        history.push({
-          step,
-          tool: "VALIDATE_PATCH",
-          args: { file: detectedPatch[0]?.file },
-          result: valResult,
-          time: Date.now()
-        });
-
-        if (valResult?.output) {
-          memory.terminalOutputs.push(
-            String(valResult.output).slice(0, 2000)
-          );
-        }
-
-        messages.push({
-          role: "system",
-          content: `
-			PATCH SUCCESSFULLY APPLIED AND VALIDATED.
-
-			If the issue is fixed:
-			you MUST now return:
-
-			{
-			  "done": true,
-			  "final": "..."
-			}
-
-			DO NOT SEARCH AGAIN.
-			`
-        });
-
-        // Chỉ thoát luồng nếu thực sự đạt trạng thái done thông qua AI đánh giá tiếp theo hoặc logic kết thúc trực tiếp
-        // Nếu muốn ép Agent dừng ngay khi validate xong, giữ nguyên lệnh break dưới đây:
-        break;
-      } else {
-        messages.push({
-          role: "system",
-          content: `APPLY_PATCH failed to execute. Error: ${patchResult?.error || "Unknown interface discrepancy"}`
-        });
-      }
+      finalText = parsed.final || "Coding task completed with persisted file changes.";
+      break;
     }
 
-    // 3. Xử lý các TOOL khác ngoại trừ APPLY_PATCH
-    if (parsed.tool && parsed.tool !== "APPLY_PATCH") {
-      if (parsed.tool === lastTool) {
-        repeatedToolCount++;
-      } else {
-        repeatedToolCount = 0;
-      }
-
-      lastTool = parsed.tool;
-
-      if (repeatedToolCount >= 3) {
-        return {
-          success: false,
-          final: `Agent bị loop tool liên tục: ${parsed.tool}`,
-          history
-        };
-      }
-
-      if (parsed.tool === "SEARCH_CODE") {
-        const q = String(parsed.args?.query || "").toLowerCase().trim();
-        const banned = ["function", "code", "bug", "error", "stream", "fix"];
-
-        if (banned.includes(q)) {
-          history.push({
-            type: "warning",
-            text: `Blocked useless search: ${q}`,
-            time: Date.now()
-          });
-
-          messages.push({
-            role: "system",
-            content: `GENERIC SEARCH IS FORBIDDEN. Use exact function names, exact file names, or specific identifiers.`
-          });
-          continue;
-        }
-
-        const normalized = q.replace(/[^\w\s]/g, "");
-        const recent = memory.searchedQueries.slice(-5);
-        const repeated = recent.some(oldQ => {
-          const oldNorm = String(oldQ).toLowerCase().replace(/[^\w\s]/g, "");
-          return oldNorm.includes(normalized) || normalized.includes(oldNorm);
-        });
-
-        if (repeated) {
-          emptySearchCount++;
-          history.push({
-            type: "warning",
-            text: `Repeated code search ignored: ${q}`,
-            time: Date.now()
-          });
-          // Sửa lỗi nuốt hành trình: Đẩy phản hồi cho Agent thay đổi từ khóa
-          messages.push({
-            role: "system",
-            content: `You repeated a very similar query to previous steps (${q}). Please try searching with a completely different context or keyword.`
-          });
-          continue;
-        }
-      }
-
-      const result = await executeTool(parsed.tool, parsed.args || {}, activeFiles || []);
-      onEvent({
-        type: "tool",
-        tool: parsed.tool,
-        args: parsed.args
+    const toolName = String(parsed.tool || "").toUpperCase();
+    if (!toolName) {
+      conversation.push({
+        role: "system",
+        content: "Your response must contain either a tool call or done=true."
       });
-
-      if (result?.success === false) {
-        memory.failedFixes.push({
-          tool: parsed.tool,
-          args: parsed.args,
-          error: result?.error || result?.stderr || "Unknown error"
-        });
-      }
-
-      history.push({
-        step,
-        tool: parsed.tool,
-        args: parsed.args,
-        result
-      });
-
-      memory.thinkingDepth++;
-      memory.reasoning.push(`After ${parsed.tool}, learned: ${JSON.stringify(result).slice(0, 120)}`);
-      memory.evidence.push({ tool: parsed.tool, evidence: JSON.stringify(result).slice(0, 300) });
-
-      if (parsed.tool === "SEARCH_CODE") {
-        if (parsed.args?.query && !memory.searchedQueries.includes(parsed.args.query)) {
-          memory.searchedQueries.push(parsed.args.query);
-        }
-        if (result?.success && Array.isArray(result.results) && result.results.length === 0) {
-          emptySearchCount++;
-        } else {
-          emptySearchCount = 0;
-        }
-      }
-
-      if (parsed.tool === "READ_FILE") {
-        if (parsed.args?.path && !memory.discoveredFiles.includes(parsed.args.path)) {
-          memory.discoveredFiles.push(parsed.args.path);
-        }
-        memory.architectureKnowledge.push(`${parsed.args.path} is part of the application flow`);
-        memory.architectureSummary = limitMemory(memory.architectureKnowledge, 10).join("\n");
-
-        const content = String(result?.content || "");
-        const imports = [...content.matchAll(/import\s+.*?from\s+["'](.+?)["']/g)].map(x => x[1]);
-        if (imports.length) {
-          memory.fileRelationships.push({ file: parsed.args.path, imports });
-        }
-      }
-
-      if (parsed.tool === "VALIDATE_PATCH" && result?.output) {
-        memory.terminalOutputs.push(String(result.output).slice(0, 2000));
-      }
-
       continue;
     }
 
-    // --- BƯỚC 6: DONE ---
-    if (parsed.done || (parsed.final && !parsed.tool)) {
-      if (memory.modifiedFiles.length === 0) {
-        messages.push({
-          role: "system",
-          content: "You cannot finish or set done/final without proposing and validating an actual patch fix first."
-        });
-        continue;
-      }
+    if (WRITE_TOOLS.has(toolName) && inspectedFiles.size === 0) {
+      const message = "Write rejected: inspect at least one relevant file before editing.";
+      recordEvent("tool_rejected", { step, tool: toolName, message });
+      conversation.push({
+        role: "system",
+        content: message
+      });
+      continue;
+    }
 
-      const patchDetails = memory.modifiedFiles.map((f, index) => {
-        return `### 🛠 Vị trí sửa đổi ${index + 1}:
-- **File bị sửa:** \`${f.file}\`
-- **Đoạn code gốc (Cũ):**
-\`\`\`
-${f.find}
-\`\`\`
-- **Đoạn code thay thế (Mới):**
-\`\`\`
-${f.replace}
-\`\`\``;
-      }).join("\n\n");
+    const args = parsed.args || {};
+    recordEvent("tool_started", { step, tool: toolName, args });
+    const startedAt = new Date();
+    const result = await executeTool(toolName, args, toolContext);
+    const completedAt = new Date();
+    const toolCall = {
+      step,
+      tool: toolName,
+      args,
+      success: result?.success !== false,
+      result: summarizeToolResult(result),
+      startedAt,
+      completedAt
+    };
+    toolCalls.push(toolCall);
+    history.push(toolCall);
+    recordEvent("tool_completed", {
+      step,
+      tool: toolName,
+      success: toolCall.success,
+      file: result?.file,
+      error: result?.error || null
+    });
 
-      const finalReport = `## 📋 BÁO CÁO KẾT QUẢ SỬA LỖI TỰ ĐỘNG
+    if (toolName === "READ_FILE" && result?.success && result.file) {
+      inspectedFiles.add(result.file);
+    }
 
-### ❌ 1. Nguyên nhân & Lỗi phát hiện (Root Cause)
-${memory.rootCauses.length > 0 ? memory.rootCauses.map(rc => `- ${rc}`).join("\n") : "- Phát hiện lỗi logic/sai lệch tham số trong luồng mã nguồn của hệ thống."}
+    if (WRITE_TOOLS.has(toolName) && result?.success && result?.changed && result.file) {
+      changedFiles.add(result.file);
+      recordEvent("file_changed", { step, tool: toolName, file: result.file });
 
-### 🔧 2. Chi tiết các File và Nội dung đã sửa
-${patchDetails}
-
-### 💡 3. Lý do thực hiện thay đổi (Reasoning)
-${memory.reasoning.length > 0 ? memory.reasoning.slice(-3).map(r => `- ${r}`).join("\n") : "- Sửa lỗi để đáp ứng đúng cú pháp và logic kiểm tra (Validation)."}
-
-### 🚀 4. Kết quả Kiểm tra (Validation)
-- Hệ thống đã tự động chạy công cụ kiểm tra rủi ro \`VALIDATE_PATCH\`.
-- **Trạng thái:** Hoàn tất thành công và không phát hiện lỗi phát sinh.
-
----
-**Kết luận chung:** ${parsed.final || "Đã khắc phục hoàn toàn sự cố lỗi hệ thống."}`;
-
-      return {
-        success: true,
-        final: finalReport,
-        history
+      const validation = await executeTool(
+        "VALIDATE_PATCH",
+        { file: result.file },
+        toolContext
+      );
+      const validationCall = {
+        step,
+        tool: "VALIDATE_PATCH",
+        args: { file: result.file },
+        success: validation?.success !== false,
+        result: summarizeToolResult(validation),
+        startedAt: new Date(),
+        completedAt: new Date()
       };
+      toolCalls.push(validationCall);
+      history.push(validationCall);
+      recordEvent("validation", {
+        step,
+        file: result.file,
+        success: validationCall.success,
+        output: validation?.output || validation?.error || ""
+      });
+
+      if (!validationCall.success) {
+        validationFailed = true;
+      }
+    }
+
+    conversation.push({
+      role: "assistant",
+      content: JSON.stringify(parsed)
+    });
+    conversation.push({
+      role: "system",
+      content: `TOOL RESULT ${toolName}: ${compactResult(result)}`
+    });
+  }
+
+  if (resolvedWorkspaceRoot) {
+    const after = await getGitSnapshot(resolvedWorkspaceRoot);
+    const baselineFiles = new Set(baseline.changedFiles || []);
+    for (const file of after.changedFiles || []) {
+      if (!baselineFiles.has(file)) changedFiles.add(file);
     }
   }
 
+  const changedFileList = [...changedFiles].sort();
+  const diffSummary = resolvedWorkspaceRoot
+    ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList)
+    : {
+        stat: changedFileList.length ? `${changedFileList.length} uploaded file(s) changed` : "",
+        numstat: ""
+      };
+
+  const success = changedFileList.length > 0 && !validationFailed;
+  if (!finalText) {
+    finalText = success
+      ? "Agent applied persisted file changes and finished at the execution step limit."
+      : "Agent did not produce validated persisted file changes.";
+  }
+
+  recordEvent(success ? "completed" : "failed", {
+    changedFiles: changedFileList,
+    validationFailed
+  });
+
   return {
-    success: false,
-    final: "Không tìm thấy vị trí lỗi phù hợp trong source code hoặc đạt giới hạn số bước (maxSteps).",
-    history
+    success,
+    final: finalText,
+    error: success
+      ? null
+      : validationFailed
+        ? "One or more changed files failed validation."
+        : "No persisted file changes were detected.",
+    history,
+    events,
+    toolCalls,
+    changedFiles: changedFileList,
+    diffSummary,
+    workspaceRoot: resolvedWorkspaceRoot || null
   };
 }

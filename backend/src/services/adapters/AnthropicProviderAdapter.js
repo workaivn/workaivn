@@ -33,12 +33,23 @@ export class AnthropicProviderAdapter extends AiProviderAdapter {
       }
 
       const { modelName, messages, temperature = 0.7, maxTokens = 2000 } = params;
+      const system = messages
+        .filter(message => message.role === "system")
+        .map(message => message.content)
+        .join("\n\n");
+      const conversation = messages
+        .filter(message => message.role !== "system")
+        .map(message => ({
+          role: message.role === "assistant" ? "assistant" : "user",
+          content: message.content
+        }));
 
       const response = await axios.post(`${this.baseUrl}/messages`, {
         model: modelName || "claude-3-opus-20240229",
         max_tokens: maxTokens,
         temperature,
-        messages
+        system: system || undefined,
+        messages: conversation
       }, {
         headers: {
           "x-api-key": this.apiKey,
