@@ -6,6 +6,8 @@ export function runTerminalTool({ command, workspaceRoot }) {
     const normalizedCommand = String(command || "").trim();
     const blocked = [
       /\.\.[\\/]/,
+      /(?:^|\s)(?:[A-Za-z]:[\\/]|\\\\)/,
+      /(?:^|\s)\/(?:etc|usr|var|bin|sbin|root|home|system|library)(?:\/|\s|$)/i,
       /\b(?:rm|rmdir|del|erase|remove-item)\b/i,
       /\b(?:curl|wget|invoke-webrequest)\b/i,
       /\b(?:shutdown|restart-computer|stop-computer)\b/i

@@ -9,9 +9,12 @@ import {
 } from "../../agent/workspace.js";
 
 export async function getWorkspaceByPublicId(workspaceId) {
-  const workspace = await Workspace.findOne({
-    $or: [{ id: workspaceId }, { _id: workspaceId.match?.(/^[a-f\d]{24}$/i) ? workspaceId : null }]
-  });
+  const query = { id: workspaceId };
+  if (/^[a-f\d]{24}$/i.test(String(workspaceId || ""))) {
+    query.$or = [{ id: workspaceId }, { _id: workspaceId }];
+    delete query.id;
+  }
+  const workspace = await Workspace.findOne(query);
 
   if (!workspace) throw new Error("Workspace not found");
   await validateWorkspaceRoot(workspace.rootPath, {
@@ -66,4 +69,3 @@ export async function createZipWorkspace({ name, zipBuffer }) {
     throw error;
   }
 }
-

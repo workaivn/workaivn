@@ -1,3 +1,6 @@
 node_modules
 .env
 dist
+*-server.log
+*-server.err.log
+backend/storage/workspaces/

@@ -85,6 +85,14 @@ test("workspace tools cannot read absolute system paths", async () => {
     );
     assert.equal(result.success, false);
     assert.match(result.error, /relative to the selected workspace/);
+
+    const terminal = await executeTool(
+      "RUN_TERMINAL",
+      { command: "type C:\\Windows\\win.ini" },
+      { workspaceId: "test-workspace", workspaceRoot: projectRoot }
+    );
+    assert.equal(terminal.success, false);
+    assert.match(terminal.error, /blocked/);
   } finally {
     await fs.rm(allowedRoot, { recursive: true, force: true });
   }
