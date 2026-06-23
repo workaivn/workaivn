@@ -8,6 +8,8 @@ import { runAgentLoop } from "../../agent/runAgentLoop.js";
 import { getWorkspaceByPublicId } from "../workspace/workspace.service.js";
 import { isRemoteWorkspaceMode } from "../../agent/workspace.js";
 
+const DEBUG = () => process.env.DEBUG_AGENT === "true";
+
 const activeRuns = new Map();
 
 async function executeAgentRun({
@@ -21,6 +23,15 @@ async function executeAgentRun({
   onEvent = () => {}
 }) {
   const adapter = providerRegistry.getAdapter(agent.providerId.code);
+
+  if (DEBUG()) {
+    console.log("[AgentRun] executeAgentRun agent=%s (%s) provider=%s model=%s",
+      agent.name, agent.code, agent.providerId.code, agent.modelName);
+    console.log("[AgentRun] workspace id=%s rootPath=%s sourceType=%s",
+      workspace.id, workspace.rootPath, workspace.sourceType);
+    console.log("[AgentRun] run=%s task=%s continue=%s",
+      run._id, task._id, continueRun);
+  }
 
   if (agent.providerId.type === "manual" || agent.providerId.code === "manual_external") {
     const error = "Manual external agents cannot execute Coding Agent tools or persist workspace changes";
@@ -75,6 +86,10 @@ async function executeAgentRun({
       onEvent(event);
     },
     generateResponse: async ({ messages }) => {
+      if (DEBUG()) {
+        console.log("[AgentRun] calling provider adapter.run provider=%s model=%s messages=%d",
+          agent.providerId.code, agent.modelName, messages.length);
+      }
       const response = await adapter.run({
         modelName: agent.modelName,
         messages,
@@ -83,12 +98,19 @@ async function executeAgentRun({
       });
 
       if (!response.success) {
+        if (DEBUG()) console.log("[AgentRun] provider error: %s", response.error);
         throw new Error(response.error || "AI provider execution failed");
       }
 
+      if (DEBUG()) console.log("[AgentRun] provider OK outputLength=%d", response.outputText?.length ?? 0);
       return response.outputText;
     }
   });
+
+  if (DEBUG()) {
+    console.log("[AgentRun] runAgentLoop done status=%s success=%s qualityGate=%s",
+      result.status, result.success, result.qualityGate?.passed ?? "N/A");
+  }
 
   run.status = result.status === "error"
     ? "error"
@@ -373,6 +395,7 @@ export async function runTask(req, res) {
 
     task.status = "running";
     task.selectedAgentId = agent._id;
+    task.workspaceId = workspace.id;
     await task.save();
 
     const result = await executeAgentRun({ task, agent, run, workspace });
@@ -540,6 +563,7 @@ export async function runTaskMultiple(req, res) {
 
     // Update task status
     task.status = "running";
+    task.workspaceId = workspace.id;
     await task.save();
 
     // Create runs for all agents
@@ -618,6 +642,7 @@ export async function runTaskMultiple(req, res) {
  * Returns immediately with runId. Agent executes in background.
  */
 export async function runAgentPrompt(req, res) {
+  console.log("[AGENT RUN] received", req.body);
   try {
     const { workspaceId, prompt, agentId } = req.body;
 
@@ -653,6 +678,7 @@ export async function runAgentPrompt(req, res) {
       normalizedPrompt,
       taskType: "build_feature",
       selectedAgentId: agent._id,
+      workspaceId: workspace.id,
       status: "running"
     });
 
@@ -694,7 +720,8 @@ export async function runAgentPrompt(req, res) {
           }
         });
       } catch (err) {
-        console.error("Background agent run error:", err);
+        console.error("Background agent run error:", err.message);
+        if (DEBUG()) console.error("[AgentRun] background stack:", err.stack);
         try {
           await AgentRun.findByIdAndUpdate(run._id, {
             $set: {
@@ -712,7 +739,8 @@ export async function runAgentPrompt(req, res) {
       }
     });
   } catch (error) {
-    console.error("runAgentPrompt error:", error);
+    console.error("runAgentPrompt error:", error.message);
+    if (DEBUG()) console.error("[AgentRun] request stack:", error.stack);
     return res.status(500).json({
       success: false,
       message: "Failed to run Coding Agent",
@@ -956,11 +984,92 @@ export async function updateTask(req, res) {
       data: task,
       message: "Task updated successfully"
     });
+    } catch (error) {
+      console.error("updateTask error:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to update task",
+        error: error.message
+      });
+    }
+  }
+
+function cancelActiveRun(runId) {
+  const controller = activeRuns.get(String(runId));
+  if (controller) {
+    controller.abort();
+    activeRuns.delete(String(runId));
+  }
+}
+
+/**
+ * Delete a task and all its runs.
+ */
+export async function deleteTask(req, res) {
+  try {
+    const { taskId } = req.params;
+
+    const task = await AgentTask.findById(taskId);
+    if (!task) {
+      return res.status(404).json({
+        success: false,
+        message: "Task not found"
+      });
+    }
+
+    // Cancel all active runs for this task
+    const runs = await AgentRun.find({ taskId });
+    for (const run of runs) {
+      cancelActiveRun(run._id);
+    }
+
+    await AgentRun.deleteMany({ taskId });
+    await AgentTask.findByIdAndDelete(taskId);
+
+    console.log(`[TaskCleanup] Deleted task ${taskId} with ${runs.length} runs`);
+    return res.json({
+      success: true,
+      message: "Task and related runs deleted",
+      data: { deletedRuns: runs.length }
+    });
   } catch (error) {
-    console.error("updateTask error:", error);
+    console.error("deleteTask error:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to update task",
+      message: "Failed to delete task",
+      error: error.message
+    });
+  }
+}
+
+/**
+ * Delete a single run.
+ */
+export async function deleteRun(req, res) {
+  try {
+    const { runId } = req.params;
+
+    const run = await AgentRun.findById(runId);
+    if (!run) {
+      return res.status(404).json({
+        success: false,
+        message: "Run not found"
+      });
+    }
+
+    cancelActiveRun(run._id);
+    await AgentRun.findByIdAndDelete(runId);
+
+    console.log(`[TaskCleanup] Deleted run ${runId}`);
+    return res.json({
+      success: true,
+      message: "Run deleted"
+    });
+  } catch (error) {
+    console.error("deleteRun error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete run",
       error: error.message
     });
   }

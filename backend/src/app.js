@@ -95,6 +95,14 @@ app.use(
 
 
 /* =========================
+   REQUEST LOGGER
+========================= */
+app.use((req, res, next) => {
+  console.log("[REQ]", req.method, req.originalUrl);
+  next();
+});
+
+/* =========================
    API ROUTES
 ========================= */
 app.use(

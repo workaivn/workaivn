@@ -11,6 +11,8 @@ import {
 } from "./acceptanceCriteria.js";
 import { evaluateQualityGate } from "./qualityGate.js";
 
+const DEBUG = () => process.env.DEBUG_AGENT === "true";
+
 const WRITE_TOOLS = new Set(["WRITE_FILE", "APPLY_PATCH"]);
 
 function parseAgentResponse(response) {
@@ -109,11 +111,11 @@ function compactResult(result) {
     : serialized;
 }
 
-function summarizeToolResult(result) {
+function summarizeToolResult(result, toolName) {
   if (!result || typeof result !== "object") return result;
 
   const summary = { ...result };
-  if (typeof summary.content === "string") {
+  if (typeof summary.content === "string" && toolName !== "READ_FILE") {
     summary.contentPreview = summary.content.slice(0, 1000);
     summary.contentLength = summary.content.length;
     delete summary.content;
@@ -177,9 +179,28 @@ export async function runAgentLoop({
   const baseline = resolvedWorkspaceRoot
     ? await getGitSnapshot(resolvedWorkspaceRoot)
     : { changedFiles: [] };
+  const readFileCache = new Map();
+  const toolCallCounts = new Map();
+  const MAX_DUPLICATE_TOOL_CALLS = 2;
+  for (const call of initialToolCalls) {
+    if (call.tool === "READ_FILE" && call.success) {
+      const path = call.result?.file || call.args?.path;
+      if (path) {
+        const normalized = String(path).replace(/\\/g, "/");
+        if (call.result?.content) readFileCache.set(normalized, call.result.content);
+        inspectedFiles.add(normalized);
+      }
+    }
+  }
   let finalText = "";
   let validationFailed = false;
   let qualityGate = null;
+
+  if (DEBUG()) {
+    console.log("[runAgentLoop] start workspaceRoot=%s maxSteps=%d plan=%s criteria=%s",
+      resolvedWorkspaceRoot || "(none)", maxSteps, plan, criteria ? "yes" : "no");
+    console.log("[runAgentLoop] conversation messages=%d initialToolCalls=%d", messages.length, initialToolCalls.length);
+  }
 
   const systemPrompt = `You are the WorkAI VN Coding Agent.
 
@@ -215,6 +236,8 @@ RULES:
 - Run a relevant validation command before declaring done.
 - A website/app request requires a meaningful implementation across the existing stack, not only index.html and app.js.
 - Do not repeat a failed tool call without changing its arguments.
+- After READ_FILE succeeds, you have the file content. Do not call READ_FILE on the same path again.
+- If you already read a file, use that content in your final answer. Do not repeat identical tool calls.
 - Use RUN_TERMINAL for focused verification after edits when useful.
 - Keep changes scoped to the objective.`;
 
@@ -259,11 +282,17 @@ RULES:
         }
       };
     }
+    if (DEBUG()) {
+      console.log("[runAgentLoop] step %d/%d conversation=%d toolCalls=%d",
+        step + 1, maxSteps, conversation.length, toolCalls.length);
+    }
+
     recordEvent("thinking", { step });
 
     let parsed;
     let rawResponse;
     try {
+      if (DEBUG()) console.log("[runAgentLoop] step %d calling generateResponse ...", step);
       rawResponse = await generateResponse({
         messages: conversation,
         plan,
@@ -418,16 +447,42 @@ RULES:
     }
 
     const args = parsed.args || {};
+    const callKey = `${toolName}:${JSON.stringify(args)}`;
+    const duplicateCount = toolCallCounts.get(callKey) || 0;
+    toolCallCounts.set(callKey, duplicateCount + 1);
+
+    if (duplicateCount >= MAX_DUPLICATE_TOOL_CALLS) {
+      const message = `Duplicate tool call prevented. You already called ${toolName} with these arguments ${duplicateCount + 1} times. Use the existing result.`;
+      recordEvent("validation", { step, tool: toolName, args, message });
+      conversation.push({ role: "system", content: message });
+      continue;
+    }
+
+    const readFilePath = toolName === "READ_FILE" && args.path
+      ? String(args.path).replace(/\\/g, "/") : null;
+    if (readFilePath && readFileCache.has(readFilePath)) {
+      const cachedContent = readFileCache.get(readFilePath);
+      const message = `You already read "${readFilePath}". Here is its content again:\n\n${cachedContent.slice(0, 12000)}\n\nUse this content. Do not call READ_FILE on this path again.`;
+      conversation.push({ role: "system", content: message });
+      continue;
+    }
+
     recordEvent("tool_started", { step, tool: toolName, args });
+    if (DEBUG()) console.log("[runAgentLoop] step %d tool=%s args=%j", step, toolName, args);
     const startedAt = new Date();
     const result = await executeTool(toolName, args, toolContext);
+    if (DEBUG()) {
+      const ms = (new Date() - startedAt);
+      console.log("[runAgentLoop] step %d tool=%s done success=%s duration=%dms",
+        step, toolName, result?.success !== false, ms);
+    }
     const completedAt = new Date();
     const toolCall = {
       step,
       tool: toolName,
       args,
       success: result?.success !== false,
-      result: summarizeToolResult(result),
+      result: summarizeToolResult(result, toolName),
       startedAt,
       completedAt
     };
@@ -443,6 +498,10 @@ RULES:
 
     if (toolName === "READ_FILE" && result?.success && result.file) {
       inspectedFiles.add(result.file);
+      if (result.content) {
+        const normalized = String(result.file).replace(/\\/g, "/");
+        readFileCache.set(normalized, result.content);
+      }
     }
 
     if (WRITE_TOOLS.has(toolName) && result?.success && result?.changed && result.file) {
@@ -459,7 +518,7 @@ RULES:
         tool: "VALIDATE_PATCH",
         args: { file: result.file },
         success: validation?.success !== false,
-        result: summarizeToolResult(validation),
+        result: summarizeToolResult(validation, "VALIDATE_PATCH"),
         startedAt: new Date(),
         completedAt: new Date()
       };
@@ -526,6 +585,11 @@ RULES:
     validationFailed,
     qualityGate
   });
+
+  if (DEBUG()) {
+    console.log("[runAgentLoop] final status=%s success=%s changedFiles=%d steps=%d",
+      status, success, changedFileList.length, events.filter(e => e.type === "thinking").length);
+  }
 
   return {
     success,

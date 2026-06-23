@@ -21,6 +21,8 @@ router.post("/tasks/:taskId/compare", controller.compareRuns);
 router.post("/runs/:runId/continue", controller.continueAgentRun);
 router.get("/agent-runs/:runId", controller.getAgentRun);
 router.post("/agent-runs/:runId/cancel", controller.cancelAgentRun);
+router.delete("/tasks/:taskId", controller.deleteTask);
+router.delete("/runs/:runId", controller.deleteRun);
 
 // Prompt Templates
 router.get("/prompt-templates", controller.getPromptTemplates);

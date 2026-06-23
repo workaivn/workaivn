@@ -30,6 +30,10 @@ const AgentTaskSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "AiAgent"
     },
+    workspaceId: {
+      type: String,
+      index: true
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User"

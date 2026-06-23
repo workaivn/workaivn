@@ -1,6 +1,8 @@
 import { AiProviderAdapter } from "./AiProviderAdapter.js";
 import OpenAI from "openai";
 
+const DEBUG = () => process.env.DEBUG_AGENT === "true";
+
 export class OllamaProviderAdapter extends AiProviderAdapter {
   constructor() {
     super({
@@ -18,7 +20,13 @@ export class OllamaProviderAdapter extends AiProviderAdapter {
     try {
       this.client = new OpenAI({ apiKey, baseURL });
       this.baseUrl = baseURL;
-    } catch {
+      if (DEBUG()) {
+        console.log("[OllamaAdapter] initialized baseURL=%s", this.baseUrl);
+      }
+    } catch (initError) {
+      if (DEBUG()) {
+        console.log("[OllamaAdapter] initialize failed:", initError.message);
+      }
       this.client = null;
     }
   }
@@ -35,8 +43,17 @@ export class OllamaProviderAdapter extends AiProviderAdapter {
   }
 
   async run(params) {
+    const model = params?.modelName || process.env.OLLAMA_MODEL || "qwen2.5-coder:7b";
+    const endpoint = `${this.baseUrl}/chat/completions`;
+
+    if (DEBUG()) {
+      console.log("[OllamaAdapter] run model=%s endpoint=%s temperature=%s maxTokens=%s messages=%d",
+        model, endpoint, params?.temperature ?? 0.7, params?.maxTokens ?? 4096, params?.messages?.length ?? 0);
+    }
+
     try {
       if (!this.client) {
+        if (DEBUG()) console.log("[OllamaAdapter] client not configured");
         return { success: false, error: this.getConfigError() };
       }
 
@@ -46,6 +63,7 @@ export class OllamaProviderAdapter extends AiProviderAdapter {
         if (Array.isArray(msg.content)) {
           const hasImage = msg.content.some(block => block.type === "image_url" || block.type === "image");
           if (hasImage) {
+            if (DEBUG()) console.log("[OllamaAdapter] rejected: image content detected");
             return {
               success: false,
               error: "This Ollama model does not support image input. Use a vision-capable model (llava, bakllava) or switch to a cloud provider."
@@ -53,7 +71,8 @@ export class OllamaProviderAdapter extends AiProviderAdapter {
           }
         }
       }
-      const model = modelName || process.env.OLLAMA_MODEL || "qwen2.5-coder:7b";
+
+      if (DEBUG()) console.log("[OllamaAdapter] sending request to %s ...", endpoint);
 
       const response = await this.client.chat.completions.create({
         model,
@@ -64,22 +83,46 @@ export class OllamaProviderAdapter extends AiProviderAdapter {
 
       const outputText = response.choices?.[0]?.message?.content || "";
 
+      if (DEBUG()) {
+        console.log("[OllamaAdapter] response OK choices=%d outputLength=%d",
+          response.choices?.length ?? 0, outputText.length);
+      }
+
       return { success: true, outputText, rawResponse: response };
     } catch (error) {
-      console.error("Ollama error:", error.message);
+      const status = error.status || error.code || "unknown";
+      const bodyPreview = error.message ? error.message.slice(0, 500) : "(no body)";
+      console.error("[OllamaAdapter] FAIL status=%s body=%s", status, bodyPreview);
 
       if (error.status === 404 && error.message?.includes("model")) {
-        const model = params?.modelName || process.env.OLLAMA_MODEL || "qwen2.5-coder:7b";
+        if (DEBUG()) console.log("[OllamaAdapter] model not found: %s", model);
         return {
           success: false,
           error: `Model "${model}" not found. Run: ollama pull ${model}`
         };
       }
 
-      if (error.code === "ECONNREFUSED" || error.message?.includes("connect")) {
+      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT" || error.message?.includes("connect")) {
+        if (DEBUG()) console.log("[OllamaAdapter] connection error code=%s", error.code);
         return {
           success: false,
           error: `Ollama is not running at ${this.baseUrl}. Start it with: ollama serve`
+        };
+      }
+
+      if (error.message?.includes("does not support image") || error.message?.includes("Cannot read")) {
+        if (DEBUG()) console.log("[OllamaAdapter] image input rejected by model");
+        return {
+          success: false,
+          error: "This model does not support image input. Use a vision-capable model (llava) or send text only."
+        };
+      }
+
+      if (status === 500 || status === 502 || status === 503) {
+        if (DEBUG()) console.log("[OllamaAdapter] server error status=%s", status);
+        return {
+          success: false,
+          error: `Ollama server error (${status}). The model may be loading or out of memory.`
         };
       }
 
