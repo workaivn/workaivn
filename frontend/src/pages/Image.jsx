@@ -5,7 +5,7 @@ import React, {
 } from "react";
 
 import Sidebar from "../components/Sidebar";
-import { apiGet } from "../services/api";
+import { apiGet, API_BASE_URL } from "../services/api";
 
 export default function ImagePage({
   tab,
@@ -195,7 +195,7 @@ virtual:true
 
       const r =
         await fetch(
-          "https://api.workaivn.com/api/generate-image",
+          API_BASE_URL + "/api/generate-image",
           {
             method: "POST",
             headers: {

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { apiGet } from "../services/api";
+import { apiGet, API_BASE_URL } from "../services/api";
 import "./AdminDashboard.css";
 
 const MENU_GROUPS = [
@@ -147,7 +147,7 @@ function UsersTab() {
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
-  const API = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api").replace(/\/api$/, "");
+  const API = API_BASE_URL;
 
   async function load() {
     setLoading(true);
@@ -211,7 +211,7 @@ function ProvidersTab() {
   const [form, setForm] = useState({});
   const [msg, setMsg] = useState("");
   const [seeding, setSeeding] = useState(false);
-  const API = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api").replace(/\/api$/, "");
+  const API = API_BASE_URL;
 
   async function load() {
     try {
@@ -333,7 +333,7 @@ function AgentsTab() {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
   const [msg, setMsg] = useState("");
-  const API = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api").replace(/\/api$/, "");
+  const API = API_BASE_URL;
 
   async function load() {
     try {
@@ -463,7 +463,7 @@ function ConfigTab() {
   const [activeGroup, setActiveGroup] = useState("general");
   const [localVals, setLocalVals] = useState({});
   const [msg, setMsg] = useState("");
-  const API = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api").replace(/\/api$/, "");
+  const API = API_BASE_URL;
 
   const GROUPS = [
     { key: "general", label: "⚙️ General" },
@@ -555,7 +555,7 @@ function PlansTab() {
   const [settings, setSettings] = useState([]);
   const [localVals, setLocalVals] = useState({});
   const [msg, setMsg] = useState("");
-  const API = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api").replace(/\/api$/, "");
+  const API = API_BASE_URL;
 
   useEffect(() => {
     apiGet("/admin/config/plans").then(r => r.json()).then(d => {

@@ -106,6 +106,40 @@
   flex: 1;
 }
 
+.workspace-selector-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: 1;
+}
+
+.workspace-selector-row select {
+  flex: 1;
+}
+
+.btn-delete-workspace {
+  background: none;
+  border: 1px solid #ddd;
+  cursor: pointer;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0.6;
+  transition: all 0.2s ease;
+}
+
+.btn-delete-workspace:hover:not(:disabled) {
+  opacity: 1;
+  background: rgba(231, 76, 60, 0.1);
+  border-color: #e74c3c;
+}
+
+.btn-delete-workspace:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
 .git-clone-form input:nth-child(2) {
   width: 150px;
 }

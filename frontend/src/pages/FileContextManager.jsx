@@ -1,7 +1,8 @@
 import React, { useMemo, useRef, useState } from "react";
 import "./FileContextManager.css";
+import { API_BASE_URL } from "../services/api.js";
 
-const API_URL = import.meta.env.VITE_API_URL || "https://api.workaivn.com/api";
+const API_URL = API_BASE_URL + "/api";
 
 function parseSseChunk(buffer, onEvent) {
   const events = buffer.split(/\r?\n\r?\n/);

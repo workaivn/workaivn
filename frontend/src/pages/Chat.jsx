@@ -14,7 +14,7 @@ import FileContextManager from "./FileContextManager.jsx";
 import TaskWorkflow from "./TaskWorkflow.jsx";
 import CodexClineMode from "./CodexClineMode.jsx";
 import OutputEvaluator from "./OutputEvaluator.jsx";
-import { apiGet, apiPost } from "../services/api";
+import { apiGet, apiPost, API_BASE_URL } from "../services/api";
 
 export default function Chat({ tab, setTab, mainView = null, navigateTo }) {
 
@@ -525,10 +525,7 @@ async function sendRealFiles(
         "token"
       ) || "";
 
-    const API =
-      import.meta.env
-        .VITE_API_URL ||
-      "https://api.workaivn.com/api";
+    const API = API_BASE_URL + "/api";
 
 	setMessages(prev => [
 	  ...prev,
@@ -805,9 +802,7 @@ if (fileInputRef.current) {
           "token"
         ) || "";
 
-      const API =
-        import.meta.env.VITE_API_URL ||
-        "https://api.workaivn.com/api";
+      const API = API_BASE_URL + "/api";
 
       const r = await fetch(
         `${API}/generate-image`,
@@ -1048,7 +1043,7 @@ async function runTool(item) {
       if (onlyImages) {
         const assistantId = Date.now() + "-vision";
         const token = localStorage.getItem("token") || "";
-        const API_URL = import.meta.env.VITE_API_URL || "https://api.workaivn.com/api";
+        const API_URL = API_BASE_URL + "/api";
 
         const preview = await new Promise((resolve) => {
           const reader = new FileReader();

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import "./Landing.css";
+import { API_BASE_URL } from "../services/api.js";
 
 const APP = "https://app.workaivn.com";
 function go(path = "") { window.location.href = APP + path; }
@@ -56,7 +57,7 @@ export default function Landing() {
   const [heroSub, setHeroSub] = useState("Gửi một yêu cầu, chia task thành nhiều phase, chạy qua nhiều AI Agent, lưu lịch sử và so sánh kết quả.");
 
   useEffect(() => {
-    const API = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api");
+    const API = API_BASE_URL + "/api";
     fetch(`${API}/app/config`)
       .then(r => r.json())
       .then(d => {

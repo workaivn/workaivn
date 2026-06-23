@@ -237,6 +237,91 @@
   color: #333;
 }
 
+.btn-cancel {
+  background: #f90;
+  color: white;
+}
+
+.btn-cancel:hover:not(:disabled) {
+  background: #e68a00;
+}
+
+.btn-delete {
+  background: #e74c3c;
+  color: white;
+}
+
+.btn-delete:hover:not(:disabled) {
+  background: #c0392b;
+}
+
+.task-detail-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.task-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.task-item-header h3 {
+  margin: 0 0 10px 0;
+  color: #333;
+  font-size: 1.1em;
+  flex: 1;
+}
+
+.task-item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.run-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.btn-icon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 14px;
+  opacity: 0.6;
+  transition: all 0.2s ease;
+  line-height: 1;
+}
+
+.btn-icon:hover {
+  opacity: 1;
+  background: rgba(0,0,0,0.08);
+}
+
+.btn-cancel-icon:hover {
+  background: rgba(255, 153, 0, 0.15);
+}
+
+.btn-delete-icon:hover {
+  background: rgba(231, 76, 60, 0.15);
+}
+
+.orphaned {
+  opacity: 0.75;
+  border-left-color: #999 !important;
+}
+
+.orphaned-status {
+  color: #999 !important;
+  font-style: italic;
+}
+
 /* =====================================
    MULTI-AGENT SELECTOR
 ===================================== */

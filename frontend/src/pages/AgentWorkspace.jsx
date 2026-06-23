@@ -1,11 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import "./AgentWorkspace.css";
+import { API_BASE_URL } from "../services/api.js";
 
-const API_URL = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api")
-  .replace(/\/api\/api/, "/api")
-  .replace(/\/$/, "")
-  .replace(/\/api$/, "");
+const API_URL = API_BASE_URL;
 
 function TreeNode({ node, selectedPath, onSelect }) {
   const [expanded, setExpanded] = useState(false);
@@ -184,19 +182,36 @@ export default function AgentWorkspace() {
   const pollingRunIdRef = useRef(null);
   const selectedWorkspace = workspaces.find(item => item.id === selectedWorkspaceId) || null;
 
+  const staleWorkspaceIdsRef = useRef(new Set());
+
   useEffect(() => {
     loadInitialData();
     return () => stopPolling();
   }, []);
 
   useEffect(() => {
-    if (selectedWorkspaceId) loadTree(selectedWorkspaceId);
-    else {
+    if (!selectedWorkspaceId) {
       setTree([]);
       setSelectedFile("");
       setFileContent("");
+      return;
     }
-  }, [selectedWorkspaceId]);
+    const ws = workspaces.find(w => w.id === selectedWorkspaceId);
+    if (!ws) {
+      staleWorkspaceIdsRef.current.add(selectedWorkspaceId);
+      setSelectedWorkspaceId("");
+      setError("Workspace not found. Please re-upload or select another workspace.");
+      return;
+    }
+    if (ws.status === "error") {
+      setTree([]);
+      setSelectedFile("");
+      setFileContent("");
+      setError("This workspace is in error state. You can delete it and re-upload.");
+      return;
+    }
+    loadTree(selectedWorkspaceId);
+  }, [selectedWorkspaceId, workspaces]);
 
   async function loadInitialData() {
     try {
@@ -216,7 +231,10 @@ export default function AgentWorkspace() {
         message: ""
       });
       setAgents(loadedAgents);
-      if (loadedWorkspaces[0]) setSelectedWorkspaceId(loadedWorkspaces[0].id);
+      const firstValid = loadedWorkspaces.find(w =>
+        !staleWorkspaceIdsRef.current.has(w.id) && w.status !== "error"
+      );
+      if (firstValid) setSelectedWorkspaceId(firstValid.id);
       if (loadedAgents[0]) setSelectedAgentId(loadedAgents[0]._id);
 
       const lastRunId = sessionStorage.getItem("lastAgentRunId");
@@ -230,13 +248,35 @@ export default function AgentWorkspace() {
     }
   }
 
+  async function deleteSelectedWorkspace() {
+    if (!selectedWorkspace) return;
+    if (!window.confirm(`Delete workspace "${selectedWorkspace.name}"? This will remove its files from disk.`)) return;
+    try {
+      await axios.delete(`${API_URL}/api/workspaces/${selectedWorkspace.id}`);
+      staleWorkspaceIdsRef.current.add(selectedWorkspace.id);
+      sessionStorage.removeItem("lastAgentRunId");
+      setWorkspaces(prev => prev.filter(w => w.id !== selectedWorkspace.id));
+      setSelectedWorkspaceId("");
+      setError("Workspace deleted. Please upload or select another workspace.");
+    } catch (err) {
+      setError(err.response?.data?.message || err.message);
+    }
+  }
+
   async function loadTree(workspaceId) {
     try {
       const response = await axios.get(`${API_URL}/api/workspaces/${workspaceId}/tree`);
       setTree(response.data.data?.tree || []);
       setError("");
     } catch (err) {
-      setError(err.response?.data?.message || err.message);
+      const status = err.response?.status;
+      if (status === 400 || status === 404) {
+        staleWorkspaceIdsRef.current.add(workspaceId);
+        setSelectedWorkspaceId("");
+        setError("Workspace not found. Please re-upload or select another workspace.");
+      } else {
+        setError(err.response?.data?.message || err.message);
+      }
     }
   }
 
@@ -467,14 +507,25 @@ export default function AgentWorkspace() {
 
       <section className="managed-workspace-picker">
         <label>Managed workspaces</label>
-        <select value={selectedWorkspaceId} onChange={event => setSelectedWorkspaceId(event.target.value)}>
-          <option value="">-- Create or select a workspace --</option>
-          {workspaces.map(workspace => (
-            <option key={workspace.id} value={workspace.id}>
-              {workspace.name} · {workspace.sourceType} · {workspace.status}
-            </option>
-          ))}
-        </select>
+        <div className="workspace-selector-row">
+          <select value={selectedWorkspaceId} onChange={event => setSelectedWorkspaceId(event.target.value)}>
+            <option value="">-- Create or select a workspace --</option>
+            {workspaces.map(workspace => (
+              <option key={workspace.id} value={workspace.id}>
+                {workspace.name} · {workspace.sourceType} · {workspace.status}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn btn-delete-workspace"
+            onClick={deleteSelectedWorkspace}
+            disabled={!selectedWorkspace}
+            title="Delete workspace"
+          >
+            🗑
+          </button>
+        </div>
       </section>
 
       {showProjectForm && workspaceConfig.allowLocalPath && (
@@ -545,7 +596,15 @@ export default function AgentWorkspace() {
           <div className="agent-controls">
             <select value={selectedAgentId} onChange={event => setSelectedAgentId(event.target.value)}>
               <option value="">-- Select Coding Agent --</option>
-              {agents.map(agent => (
+              {(() => {
+                const autoAgent = agents.find(a => a.code === "auto_coding");
+                return autoAgent ? (
+                  <option key={autoAgent._id} value={autoAgent._id}>
+                    🤖 Auto Coding Agent · fallback priority
+                  </option>
+                ) : null;
+              })()}
+              {agents.filter(a => a.code !== "auto_coding").map(agent => (
                 <option key={agent._id} value={agent._id}>
                   {agent.name} · {agent.modelName}
                 </option>
@@ -560,6 +619,7 @@ export default function AgentWorkspace() {
               {loading ? "Agent is running..." : "▶ Run Agent"}
             </button>
           </div>
+
 
           <textarea
             className="agent-prompt"

@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import "./AgentHub.css";
+import { API_BASE_URL } from "../services/api.js";
 
-const API_URL = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api").replace(/\/api\/api/, "/api").replace(/\/$/, "").replace(/\/api$/, "");
+const API_URL = API_BASE_URL;
 
 export default function AgentHub() {
   const [tab, setTab] = useState("tasks");
@@ -15,6 +16,7 @@ export default function AgentHub() {
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [successMsg, setSuccessMsg] = useState("");
   const [compareMode, setCompareMode] = useState(false);
   const [selectedRunIds, setSelectedRunIds] = useState([]);
   const [comparison, setComparison] = useState(null);
@@ -142,6 +144,50 @@ export default function AgentHub() {
     }
   }
 
+  async function cancelTask(taskId) {
+    if (!window.confirm("Cancel all active runs for this task?")) return;
+    try {
+      const task = tasks.find(t => t._id === taskId);
+      if (!task) return;
+      const runs = selectedTask?.runs?.filter(r => r.status === "running") || [];
+      for (const run of runs) {
+        await axios.post(`${API_URL}/api/ai/agent-runs/${run._id}/cancel`);
+      }
+      await loadTaskDetail(taskId);
+      setSuccessMsg("Task runs cancelled");
+      setTimeout(() => setSuccessMsg(""), 3000);
+    } catch (err) {
+      setError(err.response?.data?.message || err.message);
+    }
+  }
+
+  async function deleteTask(taskId) {
+    if (!window.confirm("Delete this task and all its runs? This cannot be undone.")) return;
+    try {
+      await axios.delete(`${API_URL}/api/ai/tasks/${taskId}`);
+      setTasks(prev => prev.filter(t => t._id !== taskId));
+      if (selectedTask?.task._id === taskId) setSelectedTask(null);
+      setSuccessMsg("Task deleted");
+      setTimeout(() => setSuccessMsg(""), 3000);
+    } catch (err) {
+      setError(err.response?.data?.message || err.message);
+    }
+  }
+
+  async function deleteRun(runId) {
+    if (!window.confirm("Delete this run?")) return;
+    try {
+      await axios.delete(`${API_URL}/api/ai/runs/${runId}`);
+      if (selectedTask) {
+        await loadTaskDetail(selectedTask.task._id);
+      }
+      setSuccessMsg("Run deleted");
+      setTimeout(() => setSuccessMsg(""), 3000);
+    } catch (err) {
+      setError(err.response?.data?.message || err.message);
+    }
+  }
+
   async function compareSelectedRuns(taskId) {
     if (selectedRunIds.length < 2) {
       setError("Select at least 2 runs to compare");
@@ -254,19 +300,45 @@ export default function AgentHub() {
 
       <div className="multi-agent-selector">
         <h4>Project Workspace</h4>
-        <select
-          value={selectedWorkspaceId}
-          onChange={event => setSelectedWorkspaceId(event.target.value)}
-        >
-          <option value="">-- Select project workspace --</option>
-          {workspaces.map(workspace => (
-            <option key={workspace.id} value={workspace.id}>
-              {workspace.name} — {workspace.sourceType || "local"}
-            </option>
-          ))}
-        </select>
+        <div className="workspace-selector-row">
+          <select
+            value={selectedWorkspaceId}
+            onChange={event => setSelectedWorkspaceId(event.target.value)}
+          >
+            <option value="">-- Select project workspace --</option>
+            {workspaces.map(workspace => (
+              <option key={workspace.id} value={workspace.id}>
+                {workspace.name} — {workspace.sourceType || "local"}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn btn-delete-workspace"
+            onClick={async () => {
+              if (!selectedWorkspaceId) return;
+              const ws = workspaces.find(w => w.id === selectedWorkspaceId);
+              if (!ws) return;
+              if (!window.confirm(`Delete workspace "${ws.name}"? This will remove its files from disk.`)) return;
+              try {
+                await axios.delete(`${API_URL}/api/workspaces/${selectedWorkspaceId}`);
+                setWorkspaces(prev => prev.filter(w => w.id !== selectedWorkspaceId));
+                setSelectedWorkspaceId("");
+                setSuccessMsg("Workspace deleted");
+                setTimeout(() => setSuccessMsg(""), 3000);
+              } catch (err) {
+                setError(err.response?.data?.message || err.message);
+              }
+            }}
+            disabled={!selectedWorkspaceId}
+            title="Delete workspace"
+          >
+            🗑
+          </button>
+        </div>
       </div>
 
+      {successMsg && <div className="alert alert-success">{successMsg}</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
       <div className="agent-hub-content">
@@ -278,22 +350,56 @@ export default function AgentHub() {
               <p className="empty-state">No tasks yet. Create one!</p>
             ) : (
               <div className="task-list">
-                {tasks.map(task => (
-                  <div
-                    key={task._id}
-                    className={`task-item ${selectedTask?.task._id === task._id ? "active" : ""}`}
-                    onClick={() => {
-                      loadTaskDetail(task._id);
-                      setCompareMode(false);
-                      setComparison(null);
-                      setSelectedRunIds([]);
-                    }}
-                  >
-                    <h3>{task.title}</h3>
-                    <p className="task-type">{task.taskType}</p>
-                    <p className="task-status">Status: {task.status}</p>
-                  </div>
-                ))}
+                {tasks.map(task => {
+                  const isRunning = task.status === "running";
+                  const isOrphaned = task.workspaceId && !workspaces.some(w => w.id === task.workspaceId);
+                  return (
+                    <div
+                      key={task._id}
+                      className={`task-item ${selectedTask?.task._id === task._id ? "active" : ""} ${isOrphaned ? "orphaned" : ""}`}
+                      onClick={() => {
+                        loadTaskDetail(task._id);
+                        setCompareMode(false);
+                        setComparison(null);
+                        setSelectedRunIds([]);
+                      }}
+                    >
+                      <div className="task-item-header">
+                        <h3>{task.title}</h3>
+                        <div className="task-item-actions">
+                          {isRunning && (
+                            <button
+                              className="btn-icon btn-cancel-icon"
+                              title="Cancel task"
+                              onClick={event => {
+                                event.stopPropagation();
+                                cancelTask(task._id);
+                              }}
+                            >
+                              ⏹
+                            </button>
+                          )}
+                          <button
+                            className="btn-icon btn-delete-icon"
+                            title="Delete task"
+                            onClick={event => {
+                              event.stopPropagation();
+                              deleteTask(task._id);
+                            }}
+                          >
+                            🗑
+                          </button>
+                        </div>
+                      </div>
+                      <p className="task-type">{task.taskType}</p>
+                      {isOrphaned ? (
+                        <p className="task-status orphaned-status">Workspace deleted</p>
+                      ) : (
+                        <p className="task-status">Status: {task.status}</p>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
 
@@ -307,15 +413,31 @@ export default function AgentHub() {
                       <span>Status: {selectedTask.task.status}</span>
                     </div>
                   </div>
-                  <button
-                    className={`btn btn-toggle ${compareMode ? "active" : ""}`}
-                    onClick={() => {
-                      setCompareMode(!compareMode);
-                      setComparison(null);
-                    }}
-                  >
-                    ⚖️ Compare Mode
-                  </button>
+                  <div className="task-detail-actions">
+                    {selectedTask.task.status === "running" && (
+                      <button
+                        className="btn btn-cancel"
+                        onClick={() => cancelTask(selectedTask.task._id)}
+                      >
+                        ⏹ Cancel
+                      </button>
+                    )}
+                    <button
+                      className="btn btn-delete"
+                      onClick={() => deleteTask(selectedTask.task._id)}
+                    >
+                      🗑 Delete
+                    </button>
+                    <button
+                      className={`btn btn-toggle ${compareMode ? "active" : ""}`}
+                      onClick={() => {
+                        setCompareMode(!compareMode);
+                        setComparison(null);
+                      }}
+                    >
+                      ⚖️ Compare Mode
+                    </button>
+                  </div>
                 </div>
 
                 {!compareMode && (
@@ -334,7 +456,7 @@ export default function AgentHub() {
                     <div className="multi-agent-selector">
                       <h4>Select Agents to Run:</h4>
                       <div className="agent-checkboxes">
-                        {agents.map(agent => (
+                        {agents.filter(a => a.code !== "auto_coding").map(agent => (
                           <label key={agent._id} className="checkbox-label">
                             <input
                               type="checkbox"
@@ -364,6 +486,39 @@ export default function AgentHub() {
                             <div className="run-header">
                               <span className="run-agent">{run.agentId?.name}</span>
                               <span className={`status status-${run.status}`}>{run.status}</span>
+                              <div className="run-actions">
+                                {run.status === "running" && (
+                                  <button
+                                    className="btn-icon btn-cancel-icon"
+                                    title="Cancel run"
+                                    onClick={event => {
+                                      event.stopPropagation();
+                                      (async () => {
+                                        try {
+                                          await axios.post(`${API_URL}/api/ai/agent-runs/${run._id}/cancel`);
+                                          await loadTaskDetail(selectedTask.task._id);
+                                          setSuccessMsg("Run cancelled");
+                                          setTimeout(() => setSuccessMsg(""), 3000);
+                                        } catch (err) {
+                                          setError(err.response?.data?.message || err.message);
+                                        }
+                                      })();
+                                    }}
+                                  >
+                                    ⏹
+                                  </button>
+                                )}
+                                <button
+                                  className="btn-icon btn-delete-icon"
+                                  title="Delete run"
+                                  onClick={event => {
+                                    event.stopPropagation();
+                                    deleteRun(run._id);
+                                  }}
+                                >
+                                  🗑
+                                </button>
+                              </div>
                             </div>
                             {run.outputText && (
                               <div className="run-output">

@@ -3,9 +3,9 @@
 import React, {
   useState
 } from "react";
+import { API_BASE_URL } from "../services/api.js";
 
-const API =
-  "https://api.workaivn.com/api";
+const API = API_BASE_URL + "/api";
 
 export default function Register({
   setPage

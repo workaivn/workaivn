@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import "./TaskWorkflow.css";
+import { API_BASE_URL } from "../services/api.js";
 
-const API_URL = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api").replace(/\/api\/api/, "/api").replace(/\/$/, "").replace(/\/api$/, "");
+const API_URL = API_BASE_URL;
 
 const emptyStep = (order = 1) => ({
   order,
@@ -209,7 +210,7 @@ export default function TaskWorkflow() {
                   <input placeholder="Step title" value={step.title} onChange={e => updateStep(index, "title", e.target.value)} />
                   <select value={step.agentId} onChange={e => updateStep(index, "agentId", e.target.value)}>
                     <option value="">Select agent</option>
-                    {agents.map(agent => <option key={agent._id} value={agent._id}>{agent.name} ({agent.providerId?.code})</option>)}
+                    {agents.filter(a => a.code !== "auto_coding").map(agent => <option key={agent._id} value={agent._id}>{agent.name} ({agent.providerId?.code})</option>)}
                   </select>
                   <textarea rows={5} placeholder="Instruction for this step" value={step.instruction} onChange={e => updateStep(index, "instruction", e.target.value)} />
                 </div>

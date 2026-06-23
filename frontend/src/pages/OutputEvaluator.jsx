@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import "./OutputEvaluator.css";
+import { API_BASE_URL } from "../services/api.js";
 
-const API_URL = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api").replace(/\/api\/api/, "/api").replace(/\/$/, "").replace(/\/api$/, "");
+const API_URL = API_BASE_URL;
 
 const evaluationChecklist = [
   { key: "completeness", label: "Completeness" },

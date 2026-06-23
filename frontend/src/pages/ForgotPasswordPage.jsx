@@ -3,6 +3,7 @@ import React, {
 } from "react";
 
 import axios from "axios";
+import { API_BASE_URL } from "../services/api.js";
 
 export default function ForgotPasswordPage() {
 
@@ -26,8 +27,7 @@ export default function ForgotPasswordPage() {
   const [message, setMessage] =
     useState("");
 
-  const API =
-    "https://api.workaivn.com/api";
+  const API = API_BASE_URL + "/api";
 
   async function handleSendOtp(e) {
 

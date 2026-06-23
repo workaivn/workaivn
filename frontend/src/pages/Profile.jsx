@@ -3,7 +3,7 @@ import React, {
   useState
 } from "react";
 
-import { apiGet } from "../services/api";
+import { apiGet, API_BASE_URL } from "../services/api";
 
 export default function Profile() {
 
@@ -83,7 +83,7 @@ export default function Profile() {
 
       const r =
         await fetch(
-          "https://api.workaivn.com/api/me",
+          API_BASE_URL + "/api/me",
           {
             method: "PUT",
 
@@ -160,7 +160,7 @@ export default function Profile() {
 
       const r =
         await fetch(
-          "https://api.workaivn.com/api/me/password",
+          API_BASE_URL + "/api/me/password",
           {
             method: "PUT",
 
@@ -238,7 +238,7 @@ async function uploadAvatar(file) {
 
     const r =
       await fetch(
-        "https://api.workaivn.com/api/upload-avatar",
+        API_BASE_URL + "/api/upload-avatar",
         {
           method: "POST",
 

@@ -1,5 +1,6 @@
 // src/components/Sidebar.jsx
 import { formatLimit } from "../utils/format";
+import { API_BASE_URL } from "../services/api.js";
 
 import React, {
   useEffect,
@@ -46,9 +47,7 @@ const [
   setPaymentPending
 ] = useState(false);
   const menuRef = useRef(null);
-const API =
-  import.meta.env.VITE_API_URL ||
-  "https://api.workaivn.com";
+const API = API_BASE_URL;
   
   const [showUpgrade, setShowUpgrade] =
   useState(false);
@@ -68,7 +67,7 @@ const [planConfig, setPlanConfig] = useState({
 });
 
 useEffect(() => {
-  const base = (import.meta.env.VITE_API_URL || "https://api.workaivn.com/api").replace(/\/api$/, "");
+  const base = API_BASE_URL;
   fetch(`${base}/api/app/config`)
     .then(r => r.json())
     .then(d => {

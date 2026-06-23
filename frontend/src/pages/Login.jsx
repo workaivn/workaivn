@@ -3,12 +3,9 @@
 import React, {
   useState
 } from "react";
+import { API_BASE_URL } from "../services/api.js";
 
-const API_BASE = (
-  import.meta.env.VITE_API_URL ||
-  "https://api.workaivn.com/api"
-).replace(/\/$/, "").replace(/\/api$/, "");
-const API = `${API_BASE}/api`;
+const API = API_BASE_URL + "/api";
 
 const ADMIN_EMAIL =
   import.meta.env
