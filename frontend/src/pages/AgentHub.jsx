@@ -261,7 +261,7 @@ export default function AgentHub() {
           <option value="">-- Select project workspace --</option>
           {workspaces.map(workspace => (
             <option key={workspace.id} value={workspace.id}>
-              {workspace.name} — {workspace.rootPath}
+              {workspace.name} — {workspace.sourceType || "local"}
             </option>
           ))}
         </select>

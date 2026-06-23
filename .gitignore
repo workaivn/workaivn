@@ -3,4 +3,4 @@ node_modules
 dist
 *-server.log
 *-server.err.log
-backend/storage/workspaces/
+storage/workspaces/

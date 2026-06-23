@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import "./AgentWorkspace.css";
 
@@ -13,11 +13,7 @@ function TreeNode({ node, selectedPath, onSelect }) {
   if (node.type === "folder") {
     return (
       <div className="tree-node">
-        <button
-          type="button"
-          className="tree-row folder"
-          onClick={() => setExpanded(value => !value)}
-        >
+        <button type="button" className="tree-row folder" onClick={() => setExpanded(value => !value)}>
           <span>{expanded ? "▾" : "▸"}</span>
           <span>📁</span>
           <span>{node.name}</span>
@@ -51,52 +47,84 @@ function TreeNode({ node, selectedPath, onSelect }) {
   );
 }
 
-function ExecutionSummary({ run }) {
+function ExecutionSummary({ run, onCancel }) {
   if (!run) return null;
 
+  const isRunning = run.status === "running" || run.status === "queued" || run.status === "pending";
+  const isTerminal = ["completed", "error", "needs_revision", "cancelled"].includes(run.status);
   const toolCalls = run.toolCalls || [];
+  const executionEvents = run.executionEvents || [];
   const filesRead = [...new Set(
     toolCalls
-      .filter(call => call.tool === "READ_FILE" && call.success)
-      .map(call => call.result?.file || call.args?.path)
+      .filter(call => call.tool === "READ_FILE" && call.success !== false)
+      .map(call => call.args?.path || call.result?.file)
       .filter(Boolean)
   )];
   const patches = toolCalls.filter(call => call.tool === "APPLY_PATCH");
   const terminalCommands = toolCalls.filter(call => call.tool === "RUN_TERMINAL");
   const errors = [
     run.errorMessage,
-    ...(run.executionEvents || [])
+    ...executionEvents
       .filter(event => event.type === "error" || event.type === "failed")
       .map(event => event.message)
   ].filter(Boolean);
 
+  const isCancellable = isRunning && !isTerminal;
+
   return (
     <section className="execution-summary">
       <div className="summary-heading">
-        <h3>Kết quả Agent</h3>
-        <span className={`run-badge status-${run.status}`}>{run.status}</span>
+        <h3>Agent result</h3>
+        <div className="summary-heading-actions">
+          <span className={`run-badge status-${run.status}`}>{run.status}</span>
+          {isCancellable && (
+            <button type="button" className="btn btn-cancel" onClick={onCancel}>
+              Cancel
+            </button>
+          )}
+        </div>
       </div>
+
+      {isRunning && (
+        <div className="running-indicator">
+          <span className="spinner" />
+          <span>
+            {run.currentStep > 0 ? `Step ${run.currentStep}` : "Starting..."}
+            {run.currentTool ? ` · ${run.currentTool}` : ""}
+          </span>
+        </div>
+      )}
 
       <div className="summary-grid">
         <div>
           <h4>Files read</h4>
-          {filesRead.length ? filesRead.map(file => <code key={file}>{file}</code>) : <span className="muted">Không có</span>}
+          {filesRead.length
+            ? filesRead.map(file => <code key={file}>{file}</code>)
+            : <span className="muted">{isRunning ? "Reading files..." : "None"}</span>}
         </div>
         <div>
           <h4>Files changed</h4>
-          {run.changedFiles?.length ? run.changedFiles.map(file => <code key={file}>{file}</code>) : <span className="muted">Không có</span>}
+          {run.changedFiles?.length
+            ? run.changedFiles.map(file => <code key={file}>{file}</code>)
+            : <span className="muted">{isRunning ? "No changes yet" : "None"}</span>}
         </div>
         <div>
           <h4>Patches applied</h4>
-          {patches.length ? patches.map((call, index) => (
-            <code key={`${call.step}-${index}`}>{call.args?.file} · {call.success ? "OK" : "Failed"}</code>
-          )) : <span className="muted">Không có</span>}
+          {patches.length
+            ? patches.map((call, index) => (
+                <code key={`${call.step}-${index}`}>
+                  {call.args?.file} · {call.success ? "OK" : "Failed"}
+                </code>
+              ))
+            : <span className="muted">{isRunning ? "Waiting..." : "None"}</span>}
         </div>
         <div>
           <h4>Terminal commands</h4>
-          {terminalCommands.length ? terminalCommands.map((call, index) => (
-            <code key={`${call.step}-${index}`}>{call.args?.command}</code>
-          )) : <span className="muted">Không có</span>}
+          {terminalCommands.length
+            ? terminalCommands.map((call, index) => (
+                <code key={`${call.step}-${index}`}>{call.args?.command}</code>
+              ))
+            : <span className="muted">{isRunning ? "Waiting..." : "None"}</span>}
         </div>
       </div>
 
@@ -107,7 +135,7 @@ function ExecutionSummary({ run }) {
         </div>
       )}
 
-      {run.qualityGate && (
+      {run.qualityGate && Object.keys(run.qualityGate).length > 0 && (
         <div className={run.qualityGate.passed ? "summary-final" : "summary-errors"}>
           <h4>Quality gate · {run.qualityGate.score ?? 0}/100</h4>
           {run.qualityGate.failures?.length
@@ -118,11 +146,13 @@ function ExecutionSummary({ run }) {
         </div>
       )}
 
-      <div className="summary-final">
-        <h4>Final summary</h4>
-        <pre>{run.outputText || run.executionSummary?.final || "Không có tóm tắt."}</pre>
-        {run.diffSummary?.stat && <pre className="diff-stat">{run.diffSummary.stat}</pre>}
-      </div>
+      {isTerminal && (
+        <div className="summary-final">
+          <h4>Final summary</h4>
+          <pre>{run.outputText || run.executionSummary?.final || "No summary."}</pre>
+          {run.diffSummary?.stat && <pre className="diff-stat">{run.diffSummary.stat}</pre>}
+        </div>
+      )}
     </section>
   );
 }
@@ -150,10 +180,13 @@ export default function AgentWorkspace() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const pollIntervalRef = useRef(null);
+  const pollingRunIdRef = useRef(null);
   const selectedWorkspace = workspaces.find(item => item.id === selectedWorkspaceId) || null;
 
   useEffect(() => {
     loadInitialData();
+    return () => stopPolling();
   }, []);
 
   useEffect(() => {
@@ -185,6 +218,11 @@ export default function AgentWorkspace() {
       setAgents(loadedAgents);
       if (loadedWorkspaces[0]) setSelectedWorkspaceId(loadedWorkspaces[0].id);
       if (loadedAgents[0]) setSelectedAgentId(loadedAgents[0]._id);
+
+      const lastRunId = sessionStorage.getItem("lastAgentRunId");
+      if (lastRunId) {
+        startPolling(lastRunId);
+      }
     } catch (err) {
       setError(err.response?.data?.message || err.message);
     } finally {
@@ -202,12 +240,47 @@ export default function AgentWorkspace() {
     }
   }
 
-  async function createWorkspace() {
-    if (!workspaceForm.rootPath.trim()) {
-      setError("Nhập đường dẫn project trước.");
-      return;
+  function stopPolling() {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    pollingRunIdRef.current = null;
+    sessionStorage.removeItem("lastAgentRunId");
+  }
+
+  function startPolling(runId) {
+    stopPolling();
+    pollingRunIdRef.current = runId;
+    sessionStorage.setItem("lastAgentRunId", runId);
+
+    async function pollRun() {
+      try {
+        const response = await axios.get(`${API_URL}/api/ai/agent-runs/${runId}`);
+        const data = response.data.data;
+        setRun(data);
+        if (["completed", "error", "needs_revision", "cancelled"].includes(data.status)) {
+          stopPolling();
+          setLoading(false);
+          await loadTree(selectedWorkspaceId);
+          if (selectedFile) await openFile(selectedFile);
+        }
+      } catch (pollErr) {
+        stopPolling();
+        setLoading(false);
+        setError(pollErr.response?.data?.message || pollErr.message);
+      }
     }
 
+    pollRun();
+    pollIntervalRef.current = setInterval(pollRun, 1500);
+  }
+
+  async function createWorkspace() {
+    if (!workspaceForm.rootPath.trim()) {
+      setError("Enter a project path first.");
+      return;
+    }
     try {
       setLoading(true);
       const response = await axios.post(`${API_URL}/api/workspaces`, workspaceForm);
@@ -227,7 +300,6 @@ export default function AgentWorkspace() {
   async function uploadZip(event) {
     const file = event.target.files?.[0];
     if (!file) return;
-
     try {
       setLoading(true);
       const form = new FormData();
@@ -242,6 +314,30 @@ export default function AgentWorkspace() {
       setError(err.response?.data?.message || err.message);
     } finally {
       event.target.value = "";
+      setLoading(false);
+    }
+  }
+
+  async function cloneGitWorkspace() {
+    if (!gitForm.repoUrl.trim()) {
+      setError("Enter a Git repository URL first.");
+      return;
+    }
+    try {
+      setLoading(true);
+      const response = await axios.post(`${API_URL}/api/workspaces/clone-git`, {
+        repoUrl: gitForm.repoUrl.trim(),
+        branch: gitForm.branch.trim() || "main"
+      });
+      const workspace = response.data.data;
+      setWorkspaces(current => [workspace, ...current]);
+      setSelectedWorkspaceId(workspace.id);
+      setGitForm({ repoUrl: "", branch: "main" });
+      setShowGitForm(false);
+      setError("");
+    } catch (err) {
+      setError(err.response?.data?.message || err.message);
+    } finally {
       setLoading(false);
     }
   }
@@ -276,41 +372,48 @@ export default function AgentWorkspace() {
     }
   }
 
+  async function cancelRun() {
+    if (!pollingRunIdRef.current) return;
+    try {
+      await axios.post(`${API_URL}/api/ai/agent-runs/${pollingRunIdRef.current}/cancel`);
+      setError("");
+    } catch (err) {
+      setError(err.response?.data?.message || err.message);
+    }
+  }
+
   async function runAgent() {
     if (!selectedWorkspaceId) {
-      setError("Please select a project workspace first.");
+      setError("Please create or select a workspace first.");
       return;
     }
     if (!selectedAgentId || !prompt.trim()) {
-      setError("Chọn agent và nhập yêu cầu trước.");
+      setError("Select an agent and enter a task first.");
       return;
     }
-
     try {
       setLoading(true);
-      setRun(null);
+      setRun({ status: "queued" });
+      setError("");
+
       const response = await axios.post(`${API_URL}/api/agents/run`, {
         workspaceId: selectedWorkspaceId,
         agentId: selectedAgentId,
         prompt: prompt.trim()
       });
-      setRun(response.data.data.run);
-      await loadTree(selectedWorkspaceId);
-      if (selectedFile) await openFile(selectedFile);
-      setError("");
+
+      const runId = response.data.data.runId;
+      startPolling(runId);
     } catch (err) {
-      const failedRun = err.response?.data?.data?.run;
-      if (failedRun) setRun(failedRun);
-      setError(err.response?.data?.message || err.message);
-    } finally {
       setLoading(false);
+      setRun(null);
+      setError(err.response?.data?.message || err.message);
     }
   }
 
   const filteredTree = useMemo(() => {
     const query = fileSearch.trim().toLowerCase();
     if (!query) return tree;
-
     function filterNodes(nodes) {
       return nodes.flatMap(node => {
         if (node.type === "file") {
@@ -320,7 +423,6 @@ export default function AgentWorkspace() {
         return children.length ? [{ ...node, children }] : [];
       });
     }
-
     return filterNodes(tree);
   }, [tree, fileSearch]);
 
@@ -329,47 +431,84 @@ export default function AgentWorkspace() {
       <header className="project-header">
         <div>
           <span className="eyebrow">CURRENT PROJECT</span>
-          <h2>{selectedWorkspace?.name || "Chưa chọn project"}</h2>
-          <p>{selectedWorkspace?.rootPath || "Chọn một thư mục project để Agent có thể đọc và sửa code."}</p>
+          <h2>{selectedWorkspace?.name || "No workspace selected"}</h2>
+          <p>
+            {selectedWorkspace
+              ? workspaceConfig.mode === "remote"
+                ? `${selectedWorkspace.sourceType?.toUpperCase()} workspace · ${selectedWorkspace.status}`
+                : selectedWorkspace.rootPath
+              : workspaceConfig.message || "Create or select a workspace for the Coding Agent."}
+          </p>
         </div>
         <div className="project-actions">
-          <button type="button" className="btn btn-secondary" onClick={() => setShowProjectForm(value => !value)}>
-            Chọn project
-          </button>
           <label className="btn btn-secondary zip-button">
-            Upload ZIP
+            {workspaceConfig.mode === "remote" ? "Upload project ZIP" : "Upload ZIP"}
             <input type="file" accept=".zip,application/zip" onChange={uploadZip} />
           </label>
+          <button type="button" className="btn btn-secondary" onClick={() => setShowGitForm(value => !value)}>
+            Clone Git repository
+          </button>
+          {workspaceConfig.allowLocalPath && (
+            <button type="button" className="btn btn-secondary" onClick={() => setShowProjectForm(value => !value)}>
+              Select local project
+            </button>
+          )}
           {selectedWorkspace && (
             <a className="btn btn-secondary" href={`${API_URL}/api/workspaces/${selectedWorkspace.id}/download-zip`}>
-              Download ZIP
+              Download patched ZIP
             </a>
           )}
         </div>
       </header>
 
-      {showProjectForm && (
+      {workspaceConfig.mode === "remote" && (
+        <div className="remote-workspace-notice">{workspaceConfig.message}</div>
+      )}
+
+      <section className="managed-workspace-picker">
+        <label>Managed workspaces</label>
+        <select value={selectedWorkspaceId} onChange={event => setSelectedWorkspaceId(event.target.value)}>
+          <option value="">-- Create or select a workspace --</option>
+          {workspaces.map(workspace => (
+            <option key={workspace.id} value={workspace.id}>
+              {workspace.name} · {workspace.sourceType} · {workspace.status}
+            </option>
+          ))}
+        </select>
+      </section>
+
+      {showProjectForm && workspaceConfig.allowLocalPath && (
         <section className="project-picker">
-          <select value={selectedWorkspaceId} onChange={event => setSelectedWorkspaceId(event.target.value)}>
-            <option value="">-- Chọn workspace đã lưu --</option>
-            {workspaces.map(workspace => (
-              <option key={workspace.id} value={workspace.id}>
-                {workspace.name} — {workspace.rootPath}
-              </option>
-            ))}
-          </select>
           <input
             value={workspaceForm.name}
             onChange={event => setWorkspaceForm(current => ({ ...current, name: event.target.value }))}
-            placeholder="Tên project"
+            placeholder="Project name"
           />
           <input
             value={workspaceForm.rootPath}
             onChange={event => setWorkspaceForm(current => ({ ...current, rootPath: event.target.value }))}
-            placeholder="G:\langtuvn\workaivn"
+            placeholder="/home/user/projects/my-project"
           />
           <button type="button" className="btn btn-primary" onClick={createWorkspace} disabled={loading}>
-            Lưu workspace
+            Save workspace
+          </button>
+        </section>
+      )}
+
+      {showGitForm && (
+        <section className="git-clone-form">
+          <input
+            value={gitForm.repoUrl}
+            onChange={event => setGitForm(current => ({ ...current, repoUrl: event.target.value }))}
+            placeholder="https://github.com/owner/repository.git"
+          />
+          <input
+            value={gitForm.branch}
+            onChange={event => setGitForm(current => ({ ...current, branch: event.target.value }))}
+            placeholder="main"
+          />
+          <button type="button" className="btn btn-primary" onClick={cloneGitWorkspace} disabled={loading}>
+            Clone repository
           </button>
         </section>
       )}
@@ -386,24 +525,26 @@ export default function AgentWorkspace() {
             className="file-search"
             value={fileSearch}
             onChange={event => setFileSearch(event.target.value)}
-            placeholder="Tìm file..."
+            placeholder="Search files..."
           />
           <div className="file-tree">
-            {filteredTree.length ? filteredTree.map(node => (
-              <TreeNode
-                key={`${node.type}:${node.path}`}
-                node={node}
-                selectedPath={selectedFile}
-                onSelect={openFile}
-              />
-            )) : <div className="muted">Chưa có file tree.</div>}
+            {filteredTree.length
+              ? filteredTree.map(node => (
+                  <TreeNode
+                    key={`${node.type}:${node.path}`}
+                    node={node}
+                    selectedPath={selectedFile}
+                    onSelect={openFile}
+                  />
+                ))
+              : <div className="muted">No files yet.</div>}
           </div>
         </aside>
 
         <main className="agent-main">
           <div className="agent-controls">
             <select value={selectedAgentId} onChange={event => setSelectedAgentId(event.target.value)}>
-              <option value="">-- Chọn Coding Agent --</option>
+              <option value="">-- Select Coding Agent --</option>
               {agents.map(agent => (
                 <option key={agent._id} value={agent._id}>
                   {agent.name} · {agent.modelName}
@@ -416,7 +557,7 @@ export default function AgentWorkspace() {
               onClick={runAgent}
               disabled={loading || !selectedWorkspaceId || !selectedAgentId || !prompt.trim()}
             >
-              {loading ? "Agent đang chạy..." : "▶ Run Agent"}
+              {loading ? "Agent is running..." : "▶ Run Agent"}
             </button>
           </div>
 
@@ -424,24 +565,18 @@ export default function AgentWorkspace() {
             className="agent-prompt"
             value={prompt}
             onChange={event => setPrompt(event.target.value)}
-            placeholder="Ví dụ: Đọc package.json, kiểm tra cấu trúc project và sửa test đang lỗi..."
+            placeholder="Example: inspect package.json, understand the stack, and fix the failing test..."
           />
-
-          <ExecutionSummary run={run} />
+          <ExecutionSummary run={run} onCancel={cancelRun} />
         </main>
 
         <aside className="file-preview-panel">
           <div className="preview-heading">
             <div>
               <span className="eyebrow">FILE PREVIEW</span>
-              <h3>{selectedFile || "Chọn một file"}</h3>
+              <h3>{selectedFile || "Select a file"}</h3>
             </div>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={saveFile}
-              disabled={!selectedFile || loading}
-            >
+            <button type="button" className="btn btn-primary" onClick={saveFile} disabled={!selectedFile || loading}>
               Save
             </button>
           </div>
@@ -450,7 +585,7 @@ export default function AgentWorkspace() {
             value={fileContent}
             onChange={event => setFileContent(event.target.value)}
             disabled={!selectedFile}
-            placeholder="Nội dung file sẽ hiển thị tại đây."
+            placeholder="File content appears here."
             spellCheck={false}
           />
         </aside>

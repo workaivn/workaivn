@@ -150,7 +150,8 @@ export async function runAgentLoop({
   initialToolCalls = [],
   initialEvents = [],
   onEvent = () => {},
-  generateResponse = defaultGenerateResponse
+  generateResponse = defaultGenerateResponse,
+  abortSignal = null
 }) {
   const resolvedWorkspaceRoot = workspaceRoot
     ? getWorkspaceRoot(workspaceRoot)
@@ -238,6 +239,26 @@ RULES:
   }
 
   for (let step = 0; step < maxSteps; step += 1) {
+    if (abortSignal?.aborted) {
+      recordEvent("cancelled", { step, message: "Run was cancelled by user" });
+      return {
+        success: false,
+        status: "cancelled",
+        error: "Run was cancelled",
+        final: "Agent execution was cancelled.",
+        history,
+        events,
+        toolCalls,
+        changedFiles: [...changedFiles],
+        diffSummary: { stat: "", numstat: "" },
+        acceptanceCriteria: criteria,
+        qualityGate: {
+          passed: false,
+          failures: ["Cancelled by user"],
+          feedback: "Run cancelled by user."
+        }
+      };
+    }
     recordEvent("thinking", { step });
 
     let parsed;

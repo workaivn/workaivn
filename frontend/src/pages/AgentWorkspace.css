@@ -7,6 +7,8 @@
 
 .project-header,
 .project-picker,
+.managed-workspace-picker,
+.git-clone-form,
 .file-explorer,
 .agent-main,
 .file-preview-panel {
@@ -65,13 +67,15 @@
 
 .project-picker {
   display: grid;
-  grid-template-columns: 1.2fr .8fr 1.5fr auto;
+  grid-template-columns: .8fr 1.5fr auto;
   gap: 8px;
   padding: 12px;
 }
 
 .project-picker input,
 .project-picker select,
+.managed-workspace-picker select,
+.git-clone-form input,
 .agent-controls select,
 .file-search {
   min-width: 0;
@@ -80,6 +84,39 @@
   padding: 9px 10px;
   background: #fff;
   color: #0f172a;
+}
+
+.managed-workspace-picker,
+.git-clone-form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+}
+
+.managed-workspace-picker label {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.managed-workspace-picker select,
+.git-clone-form input:first-child {
+  flex: 1;
+}
+
+.git-clone-form input:nth-child(2) {
+  width: 150px;
+}
+
+.remote-workspace-notice {
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  padding: 11px 13px;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 13px;
 }
 
 .agent-workspace-layout {
@@ -190,6 +227,60 @@
   justify-content: space-between;
   align-items: center;
 }
+
+.summary-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.running-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  color: #0369a1;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #bae6fd;
+  border-top-color: #0369a1;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.btn-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-weight: 700;
+  cursor: pointer;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.btn-cancel:hover {
+  background: #fee2e2;
+}
+
+.status-cancelled { color: #6b7280; }
 
 .summary-heading h3,
 .summary-grid h4,
@@ -329,9 +420,21 @@
   }
 
   .project-picker,
+  .managed-workspace-picker,
+  .git-clone-form,
   .agent-workspace-layout,
   .summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .managed-workspace-picker,
+  .git-clone-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .git-clone-form input:nth-child(2) {
+    width: auto;
   }
 
   .file-preview-panel {

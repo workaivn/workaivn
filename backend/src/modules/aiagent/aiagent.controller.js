@@ -6,6 +6,9 @@ import AgentPromptTemplate from "../../models/AgentPromptTemplate.js";
 import { providerRegistry } from "../../services/adapters/index.js";
 import { runAgentLoop } from "../../agent/runAgentLoop.js";
 import { getWorkspaceByPublicId } from "../workspace/workspace.service.js";
+import { isRemoteWorkspaceMode } from "../../agent/workspace.js";
+
+const activeRuns = new Map();
 
 async function executeAgentRun({
   task,
@@ -13,7 +16,9 @@ async function executeAgentRun({
   run,
   workspace,
   continueRun = false,
-  continuationFeedback = ""
+  continuationFeedback = "",
+  abortSignal = null,
+  onEvent = () => {}
 }) {
   const adapter = providerRegistry.getAdapter(agent.providerId.code);
 
@@ -65,6 +70,10 @@ async function executeAgentRun({
     initialChangedFiles: continueRun ? run.changedFiles || [] : [],
     initialToolCalls: continueRun ? run.toolCalls || [] : [],
     initialEvents: continueRun ? run.executionEvents || [] : [],
+    abortSignal,
+    onEvent: (event) => {
+      onEvent(event);
+    },
     generateResponse: async ({ messages }) => {
       const response = await adapter.run({
         modelName: agent.modelName,
@@ -100,6 +109,8 @@ async function executeAgentRun({
   run.diffSummary = result.diffSummary || {};
   run.qualityGate = result.qualityGate || {};
   run.acceptanceCriteria = result.acceptanceCriteria || {};
+  run.currentStep = result.history?.length || 0;
+  run.currentTool = "";
   run.executionSummary = {
     changedFileCount: run.changedFiles.length,
     toolCallCount: run.toolCalls.length,
@@ -604,11 +615,9 @@ export async function runTaskMultiple(req, res) {
 
 /**
  * Run an ad-hoc Coding Agent prompt in a selected project workspace.
+ * Returns immediately with runId. Agent executes in background.
  */
 export async function runAgentPrompt(req, res) {
-  let task = null;
-  let run = null;
-
   try {
     const { workspaceId, prompt, agentId } = req.body;
 
@@ -638,7 +647,7 @@ export async function runAgentPrompt(req, res) {
       });
     }
 
-    task = await AgentTask.create({
+    const task = await AgentTask.create({
       title: normalizedPrompt.slice(0, 100),
       inputPrompt: normalizedPrompt,
       normalizedPrompt,
@@ -647,7 +656,7 @@ export async function runAgentPrompt(req, res) {
       status: "running"
     });
 
-    run = await AgentRun.create({
+    const run = await AgentRun.create({
       taskId: task._id,
       agentId: agent._id,
       providerCode: agent.providerId.code,
@@ -655,38 +664,55 @@ export async function runAgentPrompt(req, res) {
       inputPrompt: normalizedPrompt,
       workspaceId: workspace.id,
       workspaceRoot: workspace.rootPath,
-      status: "pending"
+      status: "running",
+      startedAt: new Date()
     });
 
-    const result = await executeAgentRun({ task, agent, run, workspace });
-    task.status = taskStatusForRun(result.run);
-    await task.save();
+    const abortController = new AbortController();
+    activeRuns.set(String(run._id), abortController);
 
-    return res.status(result.success ? 200 : 422).json({
-      success: result.success,
+    res.status(200).json({
+      success: true,
       data: {
-        task,
-        run: result.run,
-        workspace: {
-          id: workspace.id,
-          name: workspace.name,
-          rootPath: workspace.rootPath
-        }
-      },
-      message: result.success ? "Agent completed with file changes" : result.error
+        runId: run._id,
+        status: "running"
+      }
+    });
+
+    setImmediate(async () => {
+      try {
+        await executeAgentRun({
+          task, agent, run, workspace,
+          abortSignal: abortController.signal,
+          onEvent: (event) => {
+            if (abortController.signal.aborted) return;
+            const update = { $push: { executionEvents: event }, $set: {} };
+            if (event.step !== undefined) update.$set.currentStep = event.step;
+            if (event.tool) update.$set.currentTool = event.tool;
+            if (Object.keys(update.$set).length === 0) delete update.$set;
+            AgentRun.findByIdAndUpdate(run._id, update).catch(() => {});
+          }
+        });
+      } catch (err) {
+        console.error("Background agent run error:", err);
+        try {
+          await AgentRun.findByIdAndUpdate(run._id, {
+            $set: {
+              status: "error",
+              errorMessage: err.message,
+              completedAt: new Date()
+            }
+          });
+        } catch (e) { /* ignore cleanup error */ }
+        try {
+          await AgentTask.findByIdAndUpdate(task._id, { $set: { status: "error" } });
+        } catch (e) { /* ignore */ }
+      } finally {
+        activeRuns.delete(String(run._id));
+      }
     });
   } catch (error) {
     console.error("runAgentPrompt error:", error);
-    if (run) {
-      run.status = "error";
-      run.errorMessage = error.message;
-      run.completedAt = new Date();
-      await run.save().catch(() => {});
-    }
-    if (task) {
-      task.status = "error";
-      await task.save().catch(() => {});
-    }
     return res.status(500).json({
       success: false,
       message: "Failed to run Coding Agent",
@@ -755,6 +781,94 @@ export async function continueAgentRun(req, res) {
       message: "Failed to continue agent run",
       error: error.message
     });
+  }
+}
+
+/**
+ * Get current status of an agent run (for polling).
+ */
+export async function getAgentRun(req, res) {
+  try {
+    const run = await AgentRun.findById(req.params.runId)
+      .populate("agentId", "name code modelName");
+
+    if (!run) {
+      return res.status(404).json({ success: false, message: "Run not found" });
+    }
+
+    const toolCalls = run.toolCalls || [];
+    const executionEvents = run.executionEvents || [];
+
+    const filesRead = [...new Set(
+      toolCalls
+        .filter(call => call.tool === "READ_FILE" && call.success !== false)
+        .map(call => call.args?.path || call.result?.file)
+        .filter(Boolean)
+    )];
+
+    const errors = [
+      run.errorMessage,
+      ...executionEvents
+        .filter(event => event.type === "error" || event.type === "failed")
+        .map(event => event.message)
+    ].filter(Boolean);
+
+    return res.json({
+      success: true,
+      data: {
+        id: run._id,
+        status: run.status,
+        currentStep: run.currentStep || 0,
+        currentTool: run.currentTool || "",
+        filesRead,
+        changedFiles: run.changedFiles || [],
+        toolCalls,
+        executionEvents,
+        errors,
+        qualityGate: run.qualityGate || {},
+        outputText: run.outputText || "",
+        diffSummary: run.diffSummary || {}
+      }
+    });
+  } catch (error) {
+    console.error("getAgentRun error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+/**
+ * Cancel a running agent run.
+ */
+export async function cancelAgentRun(req, res) {
+  try {
+    const run = await AgentRun.findById(req.params.runId);
+
+    if (!run) {
+      return res.status(404).json({ success: false, message: "Run not found" });
+    }
+
+    if (["completed", "error", "cancelled"].includes(run.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Run is already ${run.status}`
+      });
+    }
+
+    run.status = "cancelled";
+    run.completedAt = new Date();
+    run.errorMessage = "Cancelled by user";
+    await run.save();
+
+    const controller = activeRuns.get(String(run._id));
+    if (controller) {
+      controller.abort();
+      activeRuns.delete(String(run._id));
+    }
+
+    return res.json({ success: true, message: "Run cancelled" });
+  } catch (error) {
+    console.error("cancelAgentRun error:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 }
 

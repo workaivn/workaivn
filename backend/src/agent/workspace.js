@@ -8,7 +8,7 @@ const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const BACKEND_ROOT = path.resolve(__dirname, "../..");
-export const MANAGED_WORKSPACE_ROOT = path.join(BACKEND_ROOT, "storage", "workspaces");
+export const MANAGED_WORKSPACE_ROOT = path.resolve(BACKEND_ROOT, "..", "storage", "workspaces");
 
 const IGNORED_DIRECTORIES = new Set([
   ".git",
@@ -51,6 +51,11 @@ function isInsidePath(parent, child) {
   const normalizedChild = normalizeForComparison(child);
   return normalizedChild === normalizedParent ||
     normalizedChild.startsWith(`${normalizedParent}${path.sep}`);
+}
+
+function isBlockedFileName(name) {
+  const normalized = String(name || "").toLowerCase();
+  return BLOCKED_FILE_NAMES.has(normalized) || /^\.env(?:\.|$)/i.test(normalized);
 }
 
 export function getWorkspaceMode() {
@@ -149,7 +154,7 @@ function assertRelativePathAllowed(relativePath) {
   const segments = normalized.split("/").filter(Boolean);
   if (
     segments.some(segment => IGNORED_DIRECTORIES.has(segment.toLowerCase())) ||
-    segments.some(segment => BLOCKED_FILE_NAMES.has(segment.toLowerCase()))
+    segments.some(segment => isBlockedFileName(segment))
   ) {
     throw new Error(`Path is not available to the agent: ${relativePath}`);
   }
@@ -213,7 +218,7 @@ export async function listWorkspaceFiles(workspaceRoot, { limit = 500 } = {}) {
       if (files.length >= limit) break;
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory() && IGNORED_DIRECTORIES.has(entry.name.toLowerCase())) continue;
-      if (entry.isFile() && BLOCKED_FILE_NAMES.has(entry.name.toLowerCase())) continue;
+      if (entry.isFile() && isBlockedFileName(entry.name)) continue;
 
       const absolutePath = path.join(directory, entry.name);
       if (entry.isDirectory()) {

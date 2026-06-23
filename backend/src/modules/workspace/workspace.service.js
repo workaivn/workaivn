@@ -23,7 +23,7 @@ const BLOCKED_SEGMENTS = new Set([
   "uploads"
 ]);
 const SECRET_FILE_PATTERNS = [
-  /^\.env(?:\.|$)/i,
+  /(?:^|\/)\.env(?:\.|$)/i,
   /(?:^|\/)id_(?:rsa|ed25519)$/i,
   /\.(?:pem|key|p12|pfx)$/i
 ];
@@ -35,7 +35,7 @@ function isSecretOrBlockedEntry(entryName) {
     SECRET_FILE_PATTERNS.some(pattern => pattern.test(normalized));
 }
 
-function validateArchiveEntry(entryName) {
+export function validateArchiveEntry(entryName) {
   const normalized = path.posix.normalize(String(entryName || "").replace(/\\/g, "/"));
   if (
     !normalized ||
@@ -53,7 +53,7 @@ function validateArchiveEntry(entryName) {
   return normalized;
 }
 
-async function detectProjectRoot(containerRoot) {
+export async function detectProjectRoot(containerRoot) {
   let currentRoot = containerRoot;
 
   for (let depth = 0; depth < 3; depth += 1) {
@@ -75,7 +75,7 @@ async function detectProjectRoot(containerRoot) {
   return fs.realpath(currentRoot);
 }
 
-function validateGitRepoUrl(repoUrl) {
+export function validateGitRepoUrl(repoUrl) {
   let parsed;
   try {
     parsed = new URL(String(repoUrl || ""));
@@ -173,6 +173,14 @@ export async function createZipWorkspace({ name, zipBuffer, originalName = "" })
     const zip = new AdmZip(zipBuffer);
     const entries = zip.getEntries();
     if (!entries.length) throw new Error("ZIP archive is empty");
+    if (entries.length > 10000) throw new Error("ZIP archive contains too many files");
+    const totalUncompressedBytes = entries.reduce(
+      (total, entry) => total + Number(entry.header?.size || 0),
+      0
+    );
+    if (totalUncompressedBytes > 500 * 1024 * 1024) {
+      throw new Error("ZIP archive is too large after extraction");
+    }
 
     for (const entry of entries) {
       const normalized = validateArchiveEntry(entry.entryName);
@@ -236,4 +244,3 @@ export async function createGitWorkspace({ repoUrl, branch = "main" }) {
     throw new Error(error.stderr || error.message || "Git clone failed");
   }
 }
-

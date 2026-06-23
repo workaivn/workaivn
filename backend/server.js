@@ -5,6 +5,7 @@ import http from "http";
 import { Server } from "socket.io";
 import healthRoute from "./src/routes/health.js";
 import { configureRealtime, emitPaymentSuccess } from "./src/services/realtime.js";
+import { ensureManagedWorkspaceRoot } from "./src/agent/workspace.js";
 healthRoute(app);
 
 // ✅ FIX CORS FULL
@@ -34,6 +35,7 @@ export { emitPaymentSuccess };
 
 async function start() {
   try {
+    await ensureManagedWorkspaceRoot();
     await connectDB();
 
     server.listen(PORT, "0.0.0.0", () => {

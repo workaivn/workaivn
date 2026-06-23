@@ -39,6 +39,14 @@ const AgentRunSchema = new mongoose.Schema(
       type: String,
       index: true
     },
+    currentStep: {
+      type: Number,
+      default: 0
+    },
+    currentTool: {
+      type: String,
+      default: ""
+    },
     changedFiles: {
       type: [String],
       default: []
@@ -69,7 +77,7 @@ const AgentRunSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["pending", "running", "completed", "needs_revision", "error"],
+      enum: ["pending", "running", "completed", "needs_revision", "error", "cancelled"],
       default: "pending",
       index: true
     },
