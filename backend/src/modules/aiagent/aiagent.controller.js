@@ -186,8 +186,8 @@ async function executeAgentRun({
     workspaceId: workspace.id,
     workspaceRoot: run.workspaceRoot,
     maxSteps: 20,
-    acceptanceCriteria: criteria?.acceptanceCriteria?.objective
-      ? criteria
+    acceptanceCriteria: run.acceptanceCriteria?.objective
+      ? run.acceptanceCriteria
       : null,
     initialChangedFiles: continueRun ? run.changedFiles || [] : [],
     initialToolCalls: continueRun ? run.toolCalls || [] : [],
@@ -821,7 +821,8 @@ export async function runAgentPrompt(req, res) {
       workspaceId: workspace.id,
       workspaceRoot: workspace.rootPath,
       status: "running",
-      startedAt: new Date()
+      startedAt: new Date(),
+      acceptanceCriteria: criteria
     });
 
     const abortController = new AbortController();
