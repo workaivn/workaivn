@@ -280,7 +280,7 @@ async function seedAgents(providerMap) {
       description: "Local coding with Ollama (qwen2.5-coder:7b)",
       modelName: "qwen2.5-coder:7b",
       agentType: "coding",
-      priority: 40,
+      priority: 1000,
       capabilityTags: ["local", "coding", "offline"],
       systemPrompt: `You are an expert software engineer running locally via Ollama.
 1. Analyze the problem carefully
@@ -313,7 +313,7 @@ async function seedAgents(providerMap) {
       description: "Fast coding with Groq (llama-3.1-8b-instant)",
       modelName: "llama-3.1-8b-instant",
       agentType: "coding",
-      priority: 50,
+      priority: 35,
       capabilityTags: ["fast", "coding", "groq"],
       systemPrompt: `You are an expert software engineer. Analyze, modify, and improve code using available tools (READ_FILE, WRITE_FILE, APPLY_PATCH, LIST_FILES, RUN_TERMINAL). Always return valid JSON.`,
       temperature: 0.5,

@@ -60,6 +60,14 @@ export function classifyTaskType(prompt) {
   }
 
   // Check in priority order: CHAT → SEARCH → ANALYSIS
+  // Strong CHAT patterns: direct reply/answer intent
+  const strongChatPatterns = [
+    /^(?:reply|answer|respond|say)\b/i,
+    /\b(?:exactly|chính\s*xác)\s+one\s+line\b/i,
+    /\b(?:one|single)\s+line\b/i
+  ];
+  if (strongChatPatterns.some(p => p.test(text))) return "CHAT";
+
   for (const lc of ["chat", "search", "analysis"]) {
     for (const pattern of TASK_TYPE_PATTERNS[lc]) {
       if (pattern.test(text)) return lc.toUpperCase();

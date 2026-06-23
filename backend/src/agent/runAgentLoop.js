@@ -1,9 +1,11 @@
 import { askAI } from "../services/aiRouter.js";
+import fs from "fs/promises";
 import { executeTool } from "./toolExecutor.js";
 import {
   getDiffSummary,
   getGitSnapshot,
-  getWorkspaceRoot
+  getWorkspaceRoot,
+  resolveWorkspacePathSafe
 } from "./workspace.js";
 import {
   acceptanceCriteriaToPrompt,
@@ -251,11 +253,30 @@ function summarizeToolResult(result, toolName) {
   return summary;
 }
 
+function extractRequestedValidationCommand(objective) {
+  const text = String(objective || "");
+  // Prefer explicit Run: lines
+  const label = text.match(/(?:^|\n)\s*Run:\s*([^\n]+)/i);
+  if (label && label[1]) return label[1].trim();
+  // Fallback: detect common package manager scripts or tests
+  const pkgScript = text.match(/\b(?:npm|pnpm|yarn)\s+(?:run\s+)?[A-Za-z0-9:_\-]+\b/i);
+  if (pkgScript) return pkgScript[0].trim();
+  const nodeCheck = text.match(/\bnode\s+--check\b[^\n]*/i);
+  if (nodeCheck) return nodeCheck[0].trim();
+  return null;
+}
+
 function isReadOnlyTask(objective, criteria) {
   if (!objective) return false;
   const taskType = (criteria?.taskType || "CODING").toUpperCase();
   if (READ_ONLY_TASK_TYPES.has(taskType)) return true;
   const lower = objective.toLowerCase();
+  // If the prompt has explicit write intent, do NOT treat as read-only
+  const writeKeywords = [
+    "create", "write", "add file", "touch", "make new file",
+    "modify", "update", "edit", "patch", "change", "generate file"
+  ];
+  if (writeKeywords.some(kw => lower.includes(kw))) return false;
   const readKeywords = [
     "read", "summarize", "list", "show", "what", "describe",
     "tell", "explain", "do not modify", "without modifying",
@@ -382,6 +403,62 @@ export async function runAgentLoop({
     console.log("[runAgentLoop] start workspaceRoot=%s maxSteps=%d plan=%s criteria=%s",
       resolvedWorkspaceRoot || "(none)", maxSteps, plan, criteria ? "yes" : "no");
     console.log("[runAgentLoop] conversation messages=%d initialToolCalls=%d", messages.length, initialToolCalls.length);
+  }
+
+  // Emergency: If task is CHAT, bypass tools and coding system prompt entirely
+  if ((criteria.taskType || "CODING").toUpperCase() === "CHAT") {
+    try {
+      const chatMessages = [
+        { role: "user", content: objective }
+      ];
+      const raw = await generateResponse({ messages: chatMessages, plan, step: 0, objective });
+      const text = extractChatText(raw);
+      finalText = text || "";
+      qualityGate = await evaluateQualityGate({
+        acceptanceCriteria: criteria,
+        changedFiles: [],
+        toolCalls: [],
+        workspaceRoot: resolvedWorkspaceRoot,
+        finalText
+      });
+      recordEvent("completion", { step: 0, message: "Chat completed.", finalText });
+      return {
+        success: true,
+        status: "completed",
+        final: finalText,
+        error: null,
+        history,
+        events,
+        toolCalls,
+        changedFiles: [],
+        diffSummary: { stat: "", numstat: "" },
+        qualityGate,
+        acceptanceCriteria: criteria,
+        workspaceRoot: resolvedWorkspaceRoot || null,
+        workspaceId: workspaceId || null
+      };
+    } catch (error) {
+      return {
+        success: false,
+        status: "error",
+        final: "",
+        error: error.message,
+        history,
+        events,
+        toolCalls,
+        changedFiles: [],
+        diffSummary: { stat: "", numstat: "" },
+        qualityGate: {
+          passed: false,
+          score: 0,
+          failures: [error.message],
+          feedback: error.message
+        },
+        acceptanceCriteria: criteria,
+        workspaceRoot: resolvedWorkspaceRoot || null,
+        workspaceId: workspaceId || null
+      };
+    }
   }
 
   const systemPrompt = `You are the WorkAI VN Coding Agent.
@@ -613,10 +690,17 @@ console.log("==============================\n");
       }
     }
 
+    // Treat presence of a non-empty final as completion even if done flag missing
+    if (parsed?.final && typeof parsed.final === "string" && parsed.final.trim() && !parsed.done) {
+      parsed.done = true;
+    }
+
     if (parsed.done) {
-      const proposedFinal = parsed.final || (isReadOnly || isNonCodingTask
-        ? `${taskType.toUpperCase()} task completed.`
-        : "Coding task completed with persisted file changes.");
+      const proposedFinal = parsed.final
+        ? parsed.final
+        : (isReadOnly || isNonCodingTask
+          ? extractChatText(rawResponse)
+          : "Coding task completed with persisted file changes.");
 
       // For CHAT/SEARCH/ANALYSIS: accept immediately
       if (isNonCodingTask || isReadOnly) {
@@ -646,8 +730,28 @@ console.log("==============================\n");
 
       if (qualityGate.passed) {
         finalText = proposedFinal;
-        console.log("[AgentLoop] CODING done=true — quality gate passed, stopping");
-        break;
+        recordEvent("completion", { step, message: "Task completed.", finalText });
+        console.log("[AgentLoop] CODING done=true — quality gate passed, returning immediately");
+        const changedFileList = [...changedFiles].sort();
+        const isCodingTask = true;
+        const diffSummary = resolvedWorkspaceRoot && isCodingTask
+          ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList)
+          : { stat: "", numstat: "" };
+        return {
+          success: true,
+          status: "completed",
+          final: finalText,
+          error: null,
+          history,
+          events,
+          toolCalls,
+          changedFiles: changedFileList,
+          diffSummary,
+          qualityGate,
+          acceptanceCriteria: criteria,
+          workspaceRoot: resolvedWorkspaceRoot || null,
+          workspaceId: workspaceId || null
+        };
       }
 
       // Quality gate failed — continue with feedback
@@ -661,9 +765,10 @@ console.log("==============================\n");
         continue;
       }
 
-      // No file changes and quality gate failed — this is a dead end
+      // No file changes and quality gate failed — reject completion and continue as needs revision
       finalText = proposedFinal;
-      console.log("[AgentLoop] CODING done=true — no changes, accepting as-is");
+      recordEvent("completion_rejected", { step, message: "Done=true returned with no file changes. Rejecting completion." });
+      console.log("[AgentLoop] CODING done=true — no changes, returning needs_revision");
       break;
     }
 
@@ -692,8 +797,27 @@ console.log("==============================\n");
           failures: qualityGate.failures
         });
         if (qualityGate.passed) {
-          console.log("[AgentLoop] CODING quality gate passed — stopping");
-          break;
+          recordEvent("completion", { step, message: "Task completed.", finalText });
+          console.log("[AgentLoop] CODING quality gate passed — returning immediately");
+          const changedFileList = [...changedFiles].sort();
+          const diffSummary = resolvedWorkspaceRoot
+            ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList)
+            : { stat: "", numstat: "" };
+          return {
+            success: true,
+            status: "completed",
+            final: finalText,
+            error: null,
+            history,
+            events,
+            toolCalls,
+            changedFiles: changedFileList,
+            diffSummary,
+            qualityGate,
+            acceptanceCriteria: criteria,
+            workspaceRoot: resolvedWorkspaceRoot || null,
+            workspaceId: workspaceId || null
+          };
         }
       }
       if (!finalText) finalText = "Model returned no tool and not done.";
@@ -707,24 +831,100 @@ console.log("==============================\n");
       break;
     }
 
+    const args = parsed.args || {};
+
     if (WRITE_TOOLS.has(toolName) && inspectedFiles.size === 0) {
-      const message = "Write rejected: inspect at least one relevant file before editing.";
-      recordEvent("tool_rejected", { step, tool: toolName, message });
-      conversation.push({
-        role: "system",
-        content: message
-      });
-      continue;
+      // Allow first-time WRITE_FILE to create a brand new file when on disk workspace
+      let allowCreate = false;
+      const hasWorkspace = !!resolvedWorkspaceRoot;
+      const writeIntent = (() => {
+        const txt = String(objective || "").toLowerCase();
+        const keys = [
+          "create", "write", "add file", "touch", "make new file",
+          "modify", "update", "edit", "patch", "change", "generate file"
+        ];
+        return keys.some(k => txt.includes(k));
+      })();
+
+      if (hasWorkspace && toolName === "WRITE_FILE" && typeof args.path === "string" && args.path.trim()) {
+        try {
+          const resolved = await resolveWorkspacePathSafe(resolvedWorkspaceRoot, args.path, { allowMissing: true });
+          try {
+            await fs.stat(resolved.absolutePath);
+            // File exists already — do not allow creating/editing before inspection
+            allowCreate = false;
+          } catch (err) {
+            if (err && err.code === "ENOENT") {
+              // File does not exist — allow creating it
+              allowCreate = true;
+            }
+          }
+        } catch {
+          // If path cannot be resolved, fall back to intention only
+          allowCreate = writeIntent;
+        }
+      }
+
+      if (allowCreate) {
+        console.log("[AgentLoop] allowing first WRITE_FILE create path=%s", args.path);
+      } else {
+        const message = "Write rejected: inspect at least one relevant file before editing.";
+        console.log("[AgentLoop] write rejected: inspect at least one relevant file before editing");
+        recordEvent("tool_rejected", { step, tool: toolName, message });
+        conversation.push({ role: "system", content: message });
+        continue;
+      }
     }
 
-    const args = parsed.args || {};
-    const callKey = `${toolName}:${JSON.stringify(args)}`;
+    // For WRITE_FILE, de-duplicate by path only to avoid content tweaks bypassing the limiter
+    const callKey = toolName === "WRITE_FILE"
+      ? `${toolName}:${String(args.path || "").replace(/\\/g, "/").toLowerCase().trim()}`
+      : `${toolName}:${JSON.stringify(args)}`;
     const duplicateCount = toolCallCounts.get(callKey) || 0;
-    toolCallCounts.set(callKey, duplicateCount + 1);
 
-    if (duplicateCount >= MAX_DUPLICATE_TOOL_CALLS) {
-      console.log("[AgentLoop] repeated tool call detected: %s %j", toolName, args);
-      const message = `Duplicate tool call prevented. You already called ${toolName} with these arguments ${duplicateCount + 1} times. Use the existing result.`;
+    // Special handling for RUN_TERMINAL duplicates: allow if meaningful progress occurred since last identical command
+    let blockForDuplicate = false;
+    if (toolName === "RUN_TERMINAL" && typeof args.command === "string") {
+      // Find last identical RUN_TERMINAL
+      let lastIndex = -1;
+      for (let i = toolCalls.length - 1; i >= 0; i -= 1) {
+        const c = toolCalls[i];
+        if (c.tool === "RUN_TERMINAL" && (c.args?.command || "") === args.command) {
+          lastIndex = i;
+          break;
+        }
+      }
+      if (lastIndex !== -1) {
+        const lastCall = toolCalls[lastIndex];
+        let meaningful = false;
+        for (let j = lastIndex + 1; j < toolCalls.length; j += 1) {
+          const c = toolCalls[j];
+          if (!c || c.success === false) continue;
+          // Successful code changes
+          if ((c.tool === "APPLY_PATCH" || c.tool === "WRITE_FILE") && c.result?.changed) {
+            meaningful = true; break;
+          }
+          // After a failed terminal, allow if the agent inspected files/logs
+          if (lastCall.success === false && (c.tool === "READ_FILE" || c.tool === "SEARCH_CODE" || c.tool === "SEARCH_SYMBOL")) {
+            meaningful = true; break;
+          }
+        }
+        if (!meaningful) {
+          // No meaningful progress since last identical RUN_TERMINAL
+          blockForDuplicate = true;
+        }
+      }
+    } else {
+      // Default duplicate limiter for non-terminal tools
+      toolCallCounts.set(callKey, duplicateCount + 1);
+      if (duplicateCount >= MAX_DUPLICATE_TOOL_CALLS) blockForDuplicate = true;
+    }
+
+    if (blockForDuplicate) {
+      console.log("[AgentLoop] repeated tool call detected without progress: %s %j", toolName, args);
+      const message = toolName === "RUN_TERMINAL"
+        ? `Duplicate RUN_TERMINAL prevented: "${args.command}" was already executed with no meaningful progress in between.`
+        : `Duplicate tool call prevented. You already called ${toolName} with these arguments ${duplicateCount + 1} times.`;
       recordEvent("validation", { step, tool: toolName, args, message });
       if ((isNonCodingTask || isReadOnly) && inspectedFiles.size > 0 && changedFiles.size === 0) {
         const summary = buildReadOnlySummary(toolCalls, readFileCache);
@@ -734,10 +934,15 @@ console.log("==============================\n");
         break;
       }
       // For CODING: return NEEDS_REVISION immediately
-      finalText = parsed.final || `Task failed due to repeated identical tool call: ${toolName} ${JSON.stringify(args)}`;
-      qualityGate = { passed: false, score: 0, failures: [`Repeated identical tool call detected: ${toolName} ${JSON.stringify(args)}`], feedback: `Repeated identical tool call detected: ${toolName} ${JSON.stringify(args)}` };
-      console.log("[AgentLoop] CODING repeated tool — returning NEEDS_REVISION");
+      finalText = parsed.final || message;
+      qualityGate = { passed: false, score: 0, failures: [message], feedback: message };
+      console.log("[AgentLoop] CODING repeated tool without progress — returning NEEDS_REVISION");
       break;
+    }
+
+    // For terminal commands that are allowed, update duplicate count now
+    if (toolName === "RUN_TERMINAL") {
+      toolCallCounts.set(callKey, duplicateCount + 1);
     }
 
     const readFilePath = toolName === "READ_FILE" && args.path
@@ -754,6 +959,16 @@ console.log("==============================\n");
       }
       conversation.push({ role: "system", content: message });
       continue;
+    }
+
+    // Guard: prevent write tools when no disk workspaceRoot is configured
+    if (WRITE_TOOLS.has(toolName) && !resolvedWorkspaceRoot) {
+      const message = "Coding Agent requires a disk workspaceRoot. Please open/select a workspace first.";
+      recordEvent("tool_rejected", { step, tool: toolName, args, message });
+      finalText = message;
+      qualityGate = { passed: false, score: 0, failures: [message], feedback: message };
+      console.log("[AgentLoop] write tool requested without workspaceRoot — stopping run");
+      break;
     }
 
     recordEvent("tool_started", { step, tool: toolName, args });
@@ -833,6 +1048,80 @@ console.log("==============================\n");
       if (!validationCall.success) {
         validationFailed = true;
       }
+
+      // Deterministic validation command execution if requested by objective
+      const requestedCmd = extractRequestedValidationCommand(objective);
+      if (requestedCmd) {
+        console.log("[AgentLoop] Running requested validation command: %s", requestedCmd);
+        const termStartedAt = new Date();
+        const termResult = await executeTool(
+          "RUN_TERMINAL",
+          { command: requestedCmd },
+          toolContext
+        );
+        const termCall = {
+          step,
+          tool: "RUN_TERMINAL",
+          args: { command: requestedCmd },
+          success: termResult?.success !== false,
+          result: summarizeToolResult(termResult, "RUN_TERMINAL"),
+          startedAt: termStartedAt,
+          completedAt: new Date()
+        };
+        toolCalls.push(termCall);
+        history.push(termCall);
+        recordEvent("tool_completed", {
+          step,
+          tool: "RUN_TERMINAL",
+          success: termCall.success,
+          file: null,
+          error: termResult?.error || null
+        });
+
+        if (termCall.success) {
+          if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
+          qualityGate = await evaluateQualityGate({
+            acceptanceCriteria: criteria,
+            changedFiles: [...changedFiles],
+            toolCalls,
+            workspaceRoot: resolvedWorkspaceRoot,
+            finalText
+          });
+          recordEvent("quality_gate", {
+            step,
+            passed: qualityGate.passed,
+            score: qualityGate.score,
+            failures: qualityGate.failures
+          });
+          if (qualityGate.passed) {
+            recordEvent("completion", { step, message: "Task completed.", finalText });
+            console.log("[AgentLoop] Deterministic validation passed — returning immediately");
+            return {
+              success: true,
+              status: "completed",
+              final: finalText,
+              error: null,
+              history,
+              events,
+              toolCalls,
+              changedFiles: [...changedFiles].sort(),
+              diffSummary: { stat: "", numstat: "" },
+              qualityGate,
+              acceptanceCriteria: criteria,
+              workspaceRoot: resolvedWorkspaceRoot || null,
+              workspaceId: workspaceId || null
+            };
+          }
+        } else {
+          // On failure, feed back limited stdout/stderr and continue for the model to inspect/patch
+          const stdout = String(termResult?.stdout || "").slice(0, 1000);
+          const stderr = String(termResult?.stderr || "").slice(0, 1000);
+          conversation.push({
+            role: "system",
+            content: `VALIDATION COMMAND FAILED: ${requestedCmd}\nSTDOUT:\n${stdout}\n\nSTDERR:\n${stderr}`
+          });
+        }
+      }
     }
 
     // If WRITE_FILE produced no content change, guide the agent to use APPLY_PATCH
@@ -876,8 +1165,27 @@ console.log("==============================\n");
         failures: qualityGate.failures
       });
       if (qualityGate.passed) {
-        console.log("[AgentLoop] CODING quality gate passed — stopping");
-        break;
+        recordEvent("completion", { step, message: "Task completed.", finalText });
+        console.log("[AgentLoop] CODING quality gate passed — returning immediately");
+        const changedFileList = [...changedFiles].sort();
+        const diffSummary = resolvedWorkspaceRoot
+          ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList)
+          : { stat: "", numstat: "" };
+        return {
+          success: true,
+          status: "completed",
+          final: finalText,
+          error: null,
+          history,
+          events,
+          toolCalls,
+          changedFiles: changedFileList,
+          diffSummary,
+          qualityGate,
+          acceptanceCriteria: criteria,
+          workspaceRoot: resolvedWorkspaceRoot || null,
+          workspaceId: workspaceId || null
+        };
       }
     }
 
@@ -906,7 +1214,20 @@ console.log("==============================\n");
     }
   }
 
-  const changedFileList = [...changedFiles].sort();
+  // Ensure changed files are strictly within the workspaceRoot (defense in depth)
+  let changedFileList = [...changedFiles].sort();
+  if (resolvedWorkspaceRoot) {
+    const filtered = [];
+    for (const f of changedFileList) {
+      try {
+        await resolveWorkspacePathSafe(resolvedWorkspaceRoot, f);
+        filtered.push(f);
+      } catch {
+        // Drop any path that cannot be resolved inside workspace root
+      }
+    }
+    changedFileList = filtered;
+  }
   // For non-CODING tasks, diffSummary must be empty even if git reports changes
   const isCodingTask = taskType === "CODING" && !isReadOnly && !isNonCodingTask;
   const diffSummary = isCodingTask && resolvedWorkspaceRoot

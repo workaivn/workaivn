@@ -29,8 +29,25 @@ function classifyLayer(file) {
 }
 
 function isValidationCommand(command) {
-  return /\b(?:npm|pnpm|yarn)\s+(?:test|run\s+(?:test|build|lint|check|typecheck))\b|node\s+--check\b|pytest\b|python\s+-m\s+(?:pytest|compileall)\b|cargo\s+(?:test|check)\b|go\s+test\b|dotnet\s+(?:test|build)\b|mvn\s+test\b|gradle\w*\s+(?:test|build)\b/i
-    .test(String(command || ""));
+  const cmd = String(command || "");
+  const patterns = [
+    /\b(?:npm|pnpm|yarn)\s+test\b/i,
+    /\b(?:npm|pnpm|yarn)\s+run\s+[A-Za-z0-9:_\-]+\b/i, // accept any script name like check_test
+    // npm run with common silent flags before or after 'run'
+    /\bnpm\s+(?:--silent|-s)\s+run\s+[A-Za-z0-9:_\-]+\b/i,
+    /\bnpm\s+run\s+(?:--silent|-s)\s*[A-Za-z0-9:_\-]+\b/i,
+    // yarn/pnpm allow running scripts without 'run'
+    /\b(?:yarn|pnpm)\s+(?:--silent|-s\s+)?[A-Za-z0-9:_\-]+\b/i,
+    /\bnode\s+--check\b/i,
+    /\bpytest\b/i,
+    /\bpython\s+-m\s+(?:pytest|compileall)\b/i,
+    /\bcargo\s+(?:test|check)\b/i,
+    /\bgo\s+test\b/i,
+    /\bdotnet\s+(?:test|build)\b/i,
+    /\bmvn\s+test\b/i,
+    /\bgradle\w*\s+(?:test|build)\b/i
+  ];
+  return patterns.some(rx => rx.test(cmd));
 }
 
 async function readChangedFileEvidence(workspaceRoot, changedFiles) {
@@ -95,6 +112,33 @@ export async function evaluateQualityGate({
         layers: []
       }
     };
+  }
+
+  // ── Behavior-based read-only pass for CODING prompts that only read ──
+  // If the run performed only reads (no write/patch tools), produced a final answer,
+  // and changedFiles is empty, treat it as a read-only task and pass.
+  {
+    const successfulReads = toolCalls.filter(call => call.tool === "READ_FILE" && call.success);
+    const writeToolUsed = toolCalls.some(call => call && (call.tool === "WRITE_FILE" || call.tool === "APPLY_PATCH"));
+    const isReadOnlyBehavior = !writeToolUsed && successfulReads.length > 0 && changedFiles.length === 0 && !!String(finalText || "").trim();
+    if (isReadOnlyBehavior) {
+      return {
+        passed: true,
+        evaluatedAt: new Date(),
+        score: 100,
+        checks: [
+          { id: "behavior_read_only", passed: true, message: "Read-only behavior detected: successful READ_FILE, no writes, non-empty final." },
+          { id: "no_file_changes", passed: true, message: "No files were modified." }
+        ],
+        failures: [],
+        feedback: "Quality gate passed.",
+        evidence: {
+          filesRead: unique(successfulReads.map(call => call.result?.file || call.args?.path)),
+          filesChanged: [],
+          layers: []
+        }
+      };
+    }
   }
 
   const meaningfulFiles = unique(changedFiles).filter(isMeaningfulFile);

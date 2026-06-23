@@ -736,17 +736,28 @@ export async function streamChat({
 
 		if (isAgentTask) {
 
-		  const agentResult =
-			await runAgentLoop({
+		  // Determine a disk-backed workspace root for Coding Agent runs.
+		  // If none is available, do not start the agent.
+		  const workspaceRoot = process.env.AGENT_WORKSPACE_ROOT
+		    ? String(process.env.AGENT_WORKSPACE_ROOT).trim()
+		    : "";
 
-			  messages:
-				cleanedMessages,
+		  if (!workspaceRoot) {
+			answer = "Coding Agent requires a disk workspaceRoot. Please open/select a workspace first.";
+		  } else {
+		    const agentResult =
+		      await runAgentLoop({
 
-			  plan
+		        messages:
+		          cleanedMessages,
 
-			});
+		        plan,
 
-		  answer = `
+		        workspaceRoot
+
+		      });
+
+		    answer = `
 
 			${agentResult.history
 			  ?.filter(
@@ -761,39 +772,40 @@ export async function streamChat({
 
 			`;
 
-			if (
-			  agentResult.patch
-			) {
+			  if (
+			    agentResult.patch
+			  ) {
 
-			  answer += `
+			    answer += `
 
 			PATCH:
 
 			${JSON.stringify(
 
-			  agentResult.patch,
+			    agentResult.patch,
 
-			  null,
+			    null,
 
-			  2
+			    2
 
-			)}
+			  )}
 
 			`;
 
-			}
+			  }
 
-			if (
-			  agentResult.final
-			) {
+			  if (
+			    agentResult.final
+			  ) {
 
-			  answer += `
+			    answer += `
 
 			${agentResult.final}
 
 			`;
 
-			}
+			  }
+		  }
 
 		} else {
 
