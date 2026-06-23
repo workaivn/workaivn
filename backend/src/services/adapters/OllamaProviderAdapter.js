@@ -41,6 +41,18 @@ export class OllamaProviderAdapter extends AiProviderAdapter {
       }
 
       const { modelName, messages, temperature = 0.7, maxTokens = 4096 } = params;
+
+      for (const msg of messages) {
+        if (Array.isArray(msg.content)) {
+          const hasImage = msg.content.some(block => block.type === "image_url" || block.type === "image");
+          if (hasImage) {
+            return {
+              success: false,
+              error: "This Ollama model does not support image input. Use a vision-capable model (llava, bakllava) or switch to a cloud provider."
+            };
+          }
+        }
+      }
       const model = modelName || process.env.OLLAMA_MODEL || "qwen2.5-coder:7b";
 
       const response = await this.client.chat.completions.create({

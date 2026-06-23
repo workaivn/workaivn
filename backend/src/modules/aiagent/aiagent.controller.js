@@ -36,20 +36,6 @@ async function executeAgentRun({
     return { success: false, error, run };
   }
 
-  if (agent.providerId.code === "ollama" && isRemoteWorkspaceMode()) {
-    const error = "Ollama is a local provider and cannot be used in remote/cloud mode. Select a cloud provider (OpenAI, Gemini) or run locally.";
-    run.status = "error";
-    run.errorMessage = error;
-    run.executionEvents = [{
-      type: "failed",
-      message: error,
-      time: new Date()
-    }];
-    run.completedAt = new Date();
-    await run.save();
-    return { success: false, error, run };
-  }
-
   const isConfigured = await adapter.isConfigured();
 
   if (!isConfigured) {

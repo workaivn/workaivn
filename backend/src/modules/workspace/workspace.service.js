@@ -125,9 +125,18 @@ export async function getWorkspaceByPublicId(workspaceId) {
     throw new Error("Remote mode cannot access local disk workspaces");
   }
 
-  await validateWorkspaceRoot(workspace.rootPath, {
-    allowManaged: workspace.sourceType !== "local"
-  });
+  try {
+    await validateWorkspaceRoot(workspace.rootPath, {
+      allowManaged: workspace.sourceType !== "local"
+    });
+  } catch (validationError) {
+    if (workspace.sourceType === "zip" || workspace.sourceType === "git") {
+      workspace.status = "error";
+      await workspace.save();
+      throw new Error(`Workspace data not found on disk. The workspace may have been cleaned up. Please delete it and re-upload.`);
+    }
+    throw validationError;
+  }
   return workspace;
 }
 
