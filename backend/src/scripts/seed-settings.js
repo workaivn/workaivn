@@ -4,6 +4,9 @@
  * Usage: node src/scripts/seed-settings.js
  */
 import "dotenv/config";
+import dns from "node:dns";
+
+dns.setServers(["8.8.8.8", "1.1.1.1"]);
 import mongoose from "mongoose";
 import SystemSetting from "../models/SystemSetting.js";
 
@@ -46,6 +49,25 @@ const settings = [
   { key: "ANTHROPIC_DEFAULT_MODEL", value: "claude-3-haiku-20240307", type: "string", group: "ai_providers", label: "Anthropic Model mặc định" },
   { key: "OPENROUTER_API_KEY", value: process.env.OPENROUTER_API_KEY || "", type: "secret", group: "ai_providers", label: "OpenRouter API Key", isSecret: true },
   { key: "OPENROUTER_DEFAULT_MODEL", value: "mistralai/mistral-7b-instruct", type: "string", group: "ai_providers", label: "OpenRouter Model mặc định" },
+  { key: "GROQ_API_KEY", value: process.env.GROQ_API_KEY || "", type: "secret", group: "ai_providers", label: "Groq API Key", isSecret: true },
+  { key: "GROQ_DEFAULT_MODEL", value: "llama-3.1-8b-instant", type: "string", group: "ai_providers", label: "Groq Model mặc định" },
+  { key: "DEEPSEEK_API_KEY", value: process.env.DEEPSEEK_API_KEY || "", type: "secret", group: "ai_providers", label: "DeepSeek API Key", isSecret: true },
+  { key: "DEEPSEEK_DEFAULT_MODEL", value: "deepseek-chat", type: "string", group: "ai_providers", label: "DeepSeek Model mặc định" },
+  { key: "TOGETHER_API_KEY", value: process.env.TOGETHER_API_KEY || "", type: "secret", group: "ai_providers", label: "Together AI API Key", isSecret: true },
+  { key: "TOGETHER_DEFAULT_MODEL", value: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", type: "string", group: "ai_providers", label: "Together AI Model mặc định" },
+  { key: "FIREWORKS_API_KEY", value: process.env.FIREWORKS_API_KEY || "", type: "secret", group: "ai_providers", label: "Fireworks AI API Key", isSecret: true },
+  { key: "FIREWORKS_DEFAULT_MODEL", value: "accounts/fireworks/models/llama-v3p1-8b-instruct", type: "string", group: "ai_providers", label: "Fireworks AI Model mặc định" },
+  { key: "MISTRAL_API_KEY", value: process.env.MISTRAL_API_KEY || "", type: "secret", group: "ai_providers", label: "Mistral AI API Key", isSecret: true },
+  { key: "MISTRAL_DEFAULT_MODEL", value: "mistral-small-latest", type: "string", group: "ai_providers", label: "Mistral AI Model mặc định" },
+  { key: "CEREBRAS_API_KEY", value: process.env.CEREBRAS_API_KEY || "", type: "secret", group: "ai_providers", label: "Cerebras API Key", isSecret: true },
+  { key: "CEREBRAS_DEFAULT_MODEL", value: "llama3.1-8b", type: "string", group: "ai_providers", label: "Cerebras Model mặc định" },
+  { key: "PERPLEXITY_API_KEY", value: process.env.PERPLEXITY_API_KEY || "", type: "secret", group: "ai_providers", label: "Perplexity API Key", isSecret: true },
+  { key: "PERPLEXITY_DEFAULT_MODEL", value: "sonar", type: "string", group: "ai_providers", label: "Perplexity Model mặc định" },
+  { key: "XAI_API_KEY", value: process.env.XAI_API_KEY || "", type: "secret", group: "ai_providers", label: "xAI API Key", isSecret: true },
+  { key: "XAI_DEFAULT_MODEL", value: "grok-2-latest", type: "string", group: "ai_providers", label: "xAI Model mặc định" },
+  { key: "CUSTOM_OPENAI_BASE_URL", value: process.env.CUSTOM_OPENAI_BASE_URL || "", type: "url", group: "ai_providers", label: "Custom OpenAI Base URL" },
+  { key: "CUSTOM_OPENAI_API_KEY", value: process.env.CUSTOM_OPENAI_API_KEY || "", type: "secret", group: "ai_providers", label: "Custom OpenAI API Key", isSecret: true },
+  { key: "CUSTOM_OPENAI_MODEL", value: process.env.CUSTOM_OPENAI_MODEL || "gpt-4o-mini", type: "string", group: "ai_providers", label: "Custom OpenAI Model" },
   { key: "DEFAULT_AI_PROVIDER", value: "openai", type: "string", group: "ai_providers", label: "Provider AI mặc định" },
   { key: "AI_REQUEST_TIMEOUT", value: "30000", type: "number", group: "ai_providers", label: "AI Request Timeout (ms)" },
 

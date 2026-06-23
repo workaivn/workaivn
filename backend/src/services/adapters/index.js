@@ -9,6 +9,7 @@ import { AnthropicProviderAdapter } from "./AnthropicProviderAdapter.js";
 import { OpenRouterProviderAdapter } from "./OpenRouterProviderAdapter.js";
 import { ManualExternalProviderAdapter } from "./ManualExternalProviderAdapter.js";
 import { OllamaProviderAdapter } from "./OllamaProviderAdapter.js";
+import { OpenAICompatibleProviderAdapter } from "./OpenAICompatibleProviderAdapter.js";
 
 class ProviderRegistry {
   constructor() {
@@ -31,6 +32,15 @@ class ProviderRegistry {
     this.adapters.set("openrouter", openrouter);
     this.adapters.set("manual_external", manual);
     this.adapters.set("ollama", ollama);
+
+    // OpenAI-compatible providers (all share the same adapter class)
+    const openaiCompatibleCodes = [
+      "groq", "deepseek", "together", "fireworks", "mistral",
+      "cerebras", "perplexity", "xai", "openai_compatible"
+    ];
+    for (const code of openaiCompatibleCodes) {
+      this.adapters.set(code, new OpenAICompatibleProviderAdapter(code));
+    }
   }
 
   /**

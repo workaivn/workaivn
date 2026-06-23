@@ -69,17 +69,95 @@ async function seedProviders() {
       baseUrl: "http://localhost:11434/v1",
       apiKeyEnv: "OLLAMA_API_KEY",
       isActive: true
+    },
+    {
+      name: "Groq",
+      code: "groq",
+      type: "api",
+      baseUrl: "https://api.groq.com/openai/v1",
+      apiKeyEnv: "GROQ_API_KEY",
+      isActive: true
+    },
+    {
+      name: "DeepSeek",
+      code: "deepseek",
+      type: "api",
+      baseUrl: "https://api.deepseek.com",
+      apiKeyEnv: "DEEPSEEK_API_KEY",
+      isActive: true
+    },
+    {
+      name: "Together AI",
+      code: "together",
+      type: "api",
+      baseUrl: "https://api.together.xyz/v1",
+      apiKeyEnv: "TOGETHER_API_KEY",
+      isActive: true
+    },
+    {
+      name: "Fireworks AI",
+      code: "fireworks",
+      type: "api",
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      apiKeyEnv: "FIREWORKS_API_KEY",
+      isActive: true
+    },
+    {
+      name: "Mistral AI",
+      code: "mistral",
+      type: "api",
+      baseUrl: "https://api.mistral.ai/v1",
+      apiKeyEnv: "MISTRAL_API_KEY",
+      isActive: true
+    },
+    {
+      name: "Cerebras",
+      code: "cerebras",
+      type: "api",
+      baseUrl: "https://api.cerebras.ai/v1",
+      apiKeyEnv: "CEREBRAS_API_KEY",
+      isActive: true
+    },
+    {
+      name: "Perplexity",
+      code: "perplexity",
+      type: "api",
+      baseUrl: "https://api.perplexity.ai",
+      apiKeyEnv: "PERPLEXITY_API_KEY",
+      isActive: true
+    },
+    {
+      name: "xAI",
+      code: "xai",
+      type: "api",
+      baseUrl: "https://api.x.ai/v1",
+      apiKeyEnv: "XAI_API_KEY",
+      isActive: true
+    },
+    {
+      name: "OpenAI Compatible Custom",
+      code: "openai_compatible",
+      type: "api",
+      baseUrl: "",
+      apiKeyEnv: "CUSTOM_OPENAI_API_KEY",
+      isActive: true
     }
   ];
 
-  // Delete existing providers
-  await AiProvider.deleteMany({});
+  let upsertedCount = 0;
+  for (const provider of providers) {
+    await AiProvider.findOneAndUpdate(
+      { code: provider.code },
+      { $setOnInsert: provider },
+      { upsert: true, new: true }
+    );
+    upsertedCount++;
+  }
 
-  // Insert new providers
-  const created = await AiProvider.insertMany(providers);
-  console.log(`✅ Created ${created.length} providers`);
+  const allProviders = await AiProvider.find({});
+  console.log(`✅ Upserted ${upsertedCount} providers (${allProviders.length} total)`);
 
-  return new Map(created.map(p => [p.code, p._id]));
+  return new Map(allProviders.map(p => [p.code, p._id]));
 }
 
 // Seed agents
@@ -232,15 +310,146 @@ async function seedAgents(providerMap) {
       temperature: 0.5,
       maxTokens: 4000,
       isActive: true
+    },
+    {
+      providerId: providerMap.get("groq"),
+      name: "Groq Coding Agent",
+      code: "groq_coding",
+      description: "Fast coding with Groq (llama-3.1-8b-instant)",
+      modelName: "llama-3.1-8b-instant",
+      agentType: "coding",
+      priority: 50,
+      capabilityTags: ["fast", "coding", "groq"],
+      systemPrompt: `You are an expert software engineer. Analyze, modify, and improve code using available tools (READ_FILE, WRITE_FILE, APPLY_PATCH, LIST_FILES, RUN_TERMINAL). Always return valid JSON.`,
+      temperature: 0.5,
+      maxTokens: 4000,
+      isActive: true
+    },
+    {
+      providerId: providerMap.get("deepseek"),
+      name: "DeepSeek Coding Agent",
+      code: "deepseek_coding",
+      description: "Advanced coding with DeepSeek",
+      modelName: "deepseek-chat",
+      agentType: "coding",
+      priority: 50,
+      capabilityTags: ["coding", "deepseek"],
+      systemPrompt: `You are an expert software engineer. Analyze, modify, and improve code using available tools (READ_FILE, WRITE_FILE, APPLY_PATCH, LIST_FILES, RUN_TERMINAL). Always return valid JSON.`,
+      temperature: 0.5,
+      maxTokens: 4000,
+      isActive: true
+    },
+    {
+      providerId: providerMap.get("together"),
+      name: "Together Coding Agent",
+      code: "together_coding",
+      description: "Cost-effective coding with Together AI",
+      modelName: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+      agentType: "coding",
+      priority: 50,
+      capabilityTags: ["coding", "together"],
+      systemPrompt: `You are an expert software engineer. Analyze, modify, and improve code using available tools (READ_FILE, WRITE_FILE, APPLY_PATCH, LIST_FILES, RUN_TERMINAL). Always return valid JSON.`,
+      temperature: 0.5,
+      maxTokens: 4000,
+      isActive: true
+    },
+    {
+      providerId: providerMap.get("fireworks"),
+      name: "Fireworks Coding Agent",
+      code: "fireworks_coding",
+      description: "Fast inference with Fireworks AI",
+      modelName: "accounts/fireworks/models/llama-v3p1-8b-instruct",
+      agentType: "coding",
+      priority: 50,
+      capabilityTags: ["coding", "fireworks"],
+      systemPrompt: `You are an expert software engineer. Analyze, modify, and improve code using available tools (READ_FILE, WRITE_FILE, APPLY_PATCH, LIST_FILES, RUN_TERMINAL). Always return valid JSON.`,
+      temperature: 0.5,
+      maxTokens: 4000,
+      isActive: true
+    },
+    {
+      providerId: providerMap.get("mistral"),
+      name: "Mistral Coding Agent",
+      code: "mistral_coding",
+      description: "Efficient coding with Mistral AI",
+      modelName: "mistral-small-latest",
+      agentType: "coding",
+      priority: 50,
+      capabilityTags: ["coding", "mistral"],
+      systemPrompt: `You are an expert software engineer. Analyze, modify, and improve code using available tools (READ_FILE, WRITE_FILE, APPLY_PATCH, LIST_FILES, RUN_TERMINAL). Always return valid JSON.`,
+      temperature: 0.5,
+      maxTokens: 4000,
+      isActive: true
+    },
+    {
+      providerId: providerMap.get("cerebras"),
+      name: "Cerebras Coding Agent",
+      code: "cerebras_coding",
+      description: "Fast coding with Cerebras",
+      modelName: "llama3.1-8b",
+      agentType: "coding",
+      priority: 50,
+      capabilityTags: ["coding", "cerebras"],
+      systemPrompt: `You are an expert software engineer. Analyze, modify, and improve code using available tools (READ_FILE, WRITE_FILE, APPLY_PATCH, LIST_FILES, RUN_TERMINAL). Always return valid JSON.`,
+      temperature: 0.5,
+      maxTokens: 4000,
+      isActive: true
+    },
+    {
+      providerId: providerMap.get("perplexity"),
+      name: "Perplexity Research Agent",
+      code: "perplexity_research",
+      description: "Research and documentation with Perplexity",
+      modelName: "sonar",
+      agentType: "documentation",
+      priority: 50,
+      capabilityTags: ["research", "documentation", "perplexity"],
+      systemPrompt: `You are a research assistant. Analyze codebases, provide documentation, and research best practices. Always return valid JSON.`,
+      temperature: 0.4,
+      maxTokens: 4000,
+      isActive: true
+    },
+    {
+      providerId: providerMap.get("xai"),
+      name: "xAI Coding Agent",
+      code: "xai_coding",
+      description: "Coding with xAI Grok",
+      modelName: "grok-2-latest",
+      agentType: "coding",
+      priority: 50,
+      capabilityTags: ["coding", "xai"],
+      systemPrompt: `You are an expert software engineer. Analyze, modify, and improve code using available tools (READ_FILE, WRITE_FILE, APPLY_PATCH, LIST_FILES, RUN_TERMINAL). Always return valid JSON.`,
+      temperature: 0.5,
+      maxTokens: 4000,
+      isActive: true
+    },
+    {
+      providerId: providerMap.get("openai_compatible"),
+      name: "Custom OpenAI Compatible Agent",
+      code: "custom_openai_compatible",
+      description: "Use any OpenAI-compatible API endpoint",
+      modelName: process.env.CUSTOM_OPENAI_MODEL || "gpt-4o-mini",
+      agentType: "coding",
+      priority: 50,
+      capabilityTags: ["custom", "openai_compatible", "coding"],
+      systemPrompt: `You are an expert software engineer. Analyze, modify, and improve code using available tools (READ_FILE, WRITE_FILE, APPLY_PATCH, LIST_FILES, RUN_TERMINAL). Always return valid JSON.`,
+      temperature: 0.5,
+      maxTokens: 4000,
+      isActive: true
     }
   ];
 
-  // Delete existing agents
-  await AiAgent.deleteMany({});
-
-  // Insert new agents
-  const created = await AiAgent.insertMany(agents);
-  console.log(`✅ Created ${created.length} agents`);
+  let upsertedCount = 0;
+  for (const agent of agents) {
+    await AiAgent.findOneAndUpdate(
+      { code: agent.code },
+      { $setOnInsert: agent },
+      { upsert: true, new: true }
+    );
+    upsertedCount++;
+  }
+  const allAgents = await AiAgent.find({});
+  console.log(`✅ Upserted ${upsertedCount} agents (${allAgents.length} total)`);
 }
 
 // Seed prompt templates
@@ -386,12 +595,17 @@ Please provide:
     }
   ];
 
-  // Delete existing templates
-  await AgentPromptTemplate.deleteMany({});
-
-  // Insert new templates
-  const created = await AgentPromptTemplate.insertMany(templates);
-  console.log(`✅ Created ${created.length} prompt templates`);
+  let upsertedCount = 0;
+  for (const template of templates) {
+    await AgentPromptTemplate.findOneAndUpdate(
+      { title: template.title, taskType: template.taskType },
+      { $setOnInsert: template },
+      { upsert: true, new: true }
+    );
+    upsertedCount++;
+  }
+  const allTemplates = await AgentPromptTemplate.find({});
+  console.log(`✅ Upserted ${upsertedCount} prompt templates (${allTemplates.length} total)`);
 }
 
 // Main seed function
