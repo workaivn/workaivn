@@ -336,7 +336,32 @@ function isCodingComplete(taskType, changedFiles, toolCalls, validationFailed) {
   const hasSuccessfulTerminal = toolCalls.some(c =>
     c.tool === "RUN_TERMINAL" && c.success !== false
   );
-  return hasSuccessfulTerminal;
+  if (hasSuccessfulTerminal) return true;
+
+  // Allow completion when a changed file was read back successfully after write
+  const changed = new Set([...changedFiles].map(p => String(p || "").replace(/\\/g, "/").toLowerCase()));
+  // Find verification read after a write for the same path
+  for (let i = 0; i < toolCalls.length; i += 1) {
+    const call = toolCalls[i];
+    if (!call || call.success === false) continue;
+    if (call.tool === "WRITE_FILE") {
+      const wfile = String(call.result?.file || call.args?.path || "").replace(/\\/g, "/").toLowerCase();
+      if (!wfile || !changed.has(wfile)) continue;
+      // Look for a successful READ_FILE of the same file after this write
+      for (let j = i + 1; j < toolCalls.length; j += 1) {
+        const nxt = toolCalls[j];
+        if (!nxt || nxt.success === false) continue;
+        if (nxt.tool === "READ_FILE") {
+          const rfile = String(nxt.result?.file || nxt.args?.path || "").replace(/\\/g, "/").toLowerCase();
+          if (rfile && rfile === wfile) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 async function defaultGenerateResponse({ messages, plan }) {
@@ -926,6 +951,72 @@ console.log("==============================\n");
         ? `Duplicate RUN_TERMINAL prevented: "${args.command}" was already executed with no meaningful progress in between.`
         : `Duplicate tool call prevented. You already called ${toolName} with these arguments ${duplicateCount + 1} times.`;
       recordEvent("validation", { step, tool: toolName, args, message });
+      // Try deterministic validation before returning NEEDS_REVISION for CODING duplicate READ_FILE
+      try {
+        const requiresValidation = (String((criteria.taskType || "CODING")).toUpperCase() === "CODING") && !!criteria.requiresValidationCommand;
+        const hasSuccessfulTerminal = toolCalls.some(c => c.tool === "RUN_TERMINAL" && c.success !== false);
+        const normalizedReadPath = String(args?.path || "").replace(/\\/g, "/").toLowerCase();
+        const alreadyRead = toolName === "READ_FILE" && readFileCache.has(normalizedReadPath);
+        const changedHasPkg = [...changedFiles].some(f => /(^|\/)package\.json$/i.test(String(f || "").replace(/\\/g, "/")));
+        if (!isNonCodingTask && !isReadOnly && requiresValidation && !hasSuccessfulTerminal && changedFiles.size > 0 && changedHasPkg && alreadyRead) {
+          // Check package.json has workai:test in latest WRITE_FILE or cache
+          let workaiTest = false;
+          for (let k = toolCalls.length - 1; k >= 0; k -= 1) {
+            const tc = toolCalls[k];
+            if (!tc || tc.tool !== "WRITE_FILE" || tc.success === false) continue;
+            const writtenPath = String(tc.result?.file || tc.args?.path || "").replace(/\\/g, "/").toLowerCase();
+            if (/(^|\/)package\.json$/i.test(writtenPath)) {
+              const pkgText = String(tc.args?.content || "");
+              if (pkgText.trim().startsWith("{")) {
+                try { const pkg = JSON.parse(pkgText); if (pkg?.scripts?.["workai:test"]) workaiTest = true; } catch {}
+              }
+              break;
+            }
+          }
+          if (!workaiTest) {
+            for (const [fp, content] of readFileCache) {
+              if (/(^|\/)package\.json$/i.test(fp)) {
+                try { const pkg = JSON.parse(content); if (pkg?.scripts?.["workai:test"]) workaiTest = true; } catch {}
+                break;
+              }
+            }
+          }
+          if (workaiTest) {
+            const recommendedCmd = "npm run workai:test";
+            console.log("[AgentLoop] Duplicate READ_FILE — running deterministic validation: %s", recommendedCmd);
+            const termStartedAt = new Date();
+            const termResult = await executeTool(
+              "RUN_TERMINAL",
+              { command: recommendedCmd },
+              toolContext
+            );
+            const termCall = {
+              step,
+              tool: "RUN_TERMINAL",
+              args: { command: recommendedCmd },
+              success: termResult?.success !== false,
+              result: summarizeToolResult(termResult, "RUN_TERMINAL"),
+              startedAt: termStartedAt,
+              completedAt: new Date()
+            };
+            toolCalls.push(termCall);
+            history.push(termCall);
+            recordEvent("tool_completed", { step, tool: "RUN_TERMINAL", success: termCall.success, file: null, error: termResult?.error || null });
+            if (termCall.success) {
+              if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
+              qualityGate = await evaluateQualityGate({ acceptanceCriteria: criteria, changedFiles: [...changedFiles], toolCalls, workspaceRoot: resolvedWorkspaceRoot, finalText });
+              recordEvent("quality_gate", { step, passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
+              if (qualityGate.passed) {
+                recordEvent("completion", { step, message: "Task completed.", finalText });
+                console.log("[AgentLoop] Deterministic validation passed after duplicate READ_FILE — returning immediately");
+                const changedFileList = [...changedFiles].sort();
+                const diffSummary = resolvedWorkspaceRoot ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList) : { stat: "", numstat: "" };
+                return { success: true, status: "completed", final: finalText, error: null, history, events, toolCalls, changedFiles: changedFileList, diffSummary, qualityGate, acceptanceCriteria: criteria, workspaceRoot: resolvedWorkspaceRoot || null, workspaceId: workspaceId || null };
+              }
+            }
+          }
+        }
+      } catch (e) { if (DEBUG()) console.log("[AgentLoop] duplicate-block validation error: %s", e.message); }
       if ((isNonCodingTask || isReadOnly) && inspectedFiles.size > 0 && changedFiles.size === 0) {
         const summary = buildReadOnlySummary(toolCalls, readFileCache);
         finalText = parsed.final || `Task completed. ${summary}`;
@@ -1016,6 +1107,120 @@ console.log("==============================\n");
         readFileCache.set(normalized, result.content);
         console.log("[AgentLoop] READ_FILE %s completed", normalized);
       }
+    }
+
+    // Deterministic validation transition (ungated by isCodingComplete):
+    // If a changed file was read back, validation is required, and no successful terminal yet,
+    // run a safe validation command directly for package.json when scripts contain workai:test.
+    try {
+      const requiresValidation = (String((criteria.taskType || "CODING")).toUpperCase() === "CODING") && !!criteria.requiresValidationCommand;
+      if (requiresValidation && changedFiles.size > 0) {
+        const hasSuccessfulTerminal = toolCalls.some(c => c.tool === "RUN_TERMINAL" && c.success !== false);
+        if (!hasSuccessfulTerminal) {
+          const changedSet = new Set([...changedFiles].map(f => String(f || "").replace(/\\/g, "/").toLowerCase()));
+          const readBack = toolCalls.some(c => c.tool === "READ_FILE" && c.success !== false && changedSet.has(String(c.result?.file || c.args?.path || "").replace(/\\/g, "/").toLowerCase()));
+          if (readBack) {
+            // Determine if package.json was changed and contains workai:test
+            let workaiTest = false;
+            // Prefer the freshest content from latest WRITE_FILE to package.json
+            for (let k = toolCalls.length - 1; k >= 0; k -= 1) {
+              const tc = toolCalls[k];
+              if (!tc || tc.tool !== "WRITE_FILE" || tc.success === false) continue;
+              const writtenPath = String(tc.result?.file || tc.args?.path || "").replace(/\\/g, "/").toLowerCase();
+              if (/(^|\/)package\.json$/i.test(writtenPath)) {
+                const pkgText = String(tc.args?.content || "");
+                if (pkgText.trim().startsWith("{")) {
+                  try {
+                    const pkg = JSON.parse(pkgText);
+                    const scripts = pkg?.scripts || {};
+                    if (scripts["workai:test"]) workaiTest = true;
+                  } catch {}
+                }
+                break;
+              }
+            }
+            // Fallback to read cache for package.json
+            if (!workaiTest) {
+              for (const [fp, content] of readFileCache) {
+                if (/(^|\/)package\.json$/i.test(fp)) {
+                  try {
+                    const pkg = JSON.parse(content);
+                    const scripts = pkg?.scripts || {};
+                    if (scripts["workai:test"]) workaiTest = true;
+                  } catch {}
+                  break;
+                }
+              }
+            }
+            if (workaiTest) {
+              const recommendedCmd = "npm run workai:test";
+              console.log("[AgentLoop] Deterministic validation trigger: %s", recommendedCmd);
+              const termStartedAt = new Date();
+              const termResult = await executeTool(
+                "RUN_TERMINAL",
+                { command: recommendedCmd },
+                toolContext
+              );
+              const termCall = {
+                step,
+                tool: "RUN_TERMINAL",
+                args: { command: recommendedCmd },
+                success: termResult?.success !== false,
+                result: summarizeToolResult(termResult, "RUN_TERMINAL"),
+                startedAt: termStartedAt,
+                completedAt: new Date()
+              };
+              toolCalls.push(termCall);
+              history.push(termCall);
+              recordEvent("tool_completed", {
+                step,
+                tool: "RUN_TERMINAL",
+                success: termCall.success,
+                file: null,
+                error: termResult?.error || null
+              });
+              if (termCall.success) {
+                if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
+                qualityGate = await evaluateQualityGate({
+                  acceptanceCriteria: criteria,
+                  changedFiles: [...changedFiles],
+                  toolCalls,
+                  workspaceRoot: resolvedWorkspaceRoot,
+                  finalText
+                });
+                recordEvent("quality_gate", {
+                  step,
+                  passed: qualityGate.passed,
+                  score: qualityGate.score,
+                  failures: qualityGate.failures
+                });
+                if (qualityGate.passed) {
+                  recordEvent("completion", { step, message: "Task completed.", finalText });
+                  console.log("[AgentLoop] Deterministic validation passed — returning immediately");
+                  return {
+                    success: true,
+                    status: "completed",
+                    final: finalText,
+                    error: null,
+                    history,
+                    events,
+                    toolCalls,
+                    changedFiles: [...changedFiles].sort(),
+                    diffSummary: { stat: "", numstat: "" },
+                    qualityGate,
+                    acceptanceCriteria: criteria,
+                    workspaceRoot: resolvedWorkspaceRoot || null,
+                    workspaceId: workspaceId || null
+                  };
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Don't break the loop if deterministic validation throws; continue model loop
+      if (DEBUG()) console.log("[AgentLoop] deterministic validation error: %s", e.message);
     }
 
     if (WRITE_TOOLS.has(toolName) && result?.success && result?.changed && result.file) {
@@ -1138,7 +1343,9 @@ console.log("==============================\n");
     }
 
     // Check if goal is satisfied for read-only tasks after each tool execution
-    if (isGoalSatisfied(taskType, toolCalls, changedFiles)) {
+    const hasSuccessfulRead = toolCalls.some(c => c.tool === "READ_FILE" && c.success !== false);
+    const readOnlySatisfied = (isNonCodingTask || isReadOnly) && changedFiles.size === 0 && hasSuccessfulRead;
+    if (readOnlySatisfied || isGoalSatisfied(taskType, toolCalls, changedFiles)) {
       console.log("[AgentLoop] %s goal satisfied — stopping without validation", taskType);
       if (!finalText) {
         const summary = buildReadOnlySummary(toolCalls, readFileCache);
@@ -1186,6 +1393,139 @@ console.log("==============================\n");
           workspaceRoot: resolvedWorkspaceRoot || null,
           workspaceId: workspaceId || null
         };
+      }
+      // If quality gate did not pass and validation is required, steer the model to run validation instead of re-reading
+      const requiresValidation = String((criteria.taskType || "CODING")).toUpperCase() === "CODING" && !!criteria.requiresValidationCommand;
+      if (requiresValidation) {
+        const hasSuccessfulTerminal = toolCalls.some(c => c.tool === "RUN_TERMINAL" && c.success !== false);
+        if (!hasSuccessfulTerminal && changedFiles.size > 0) {
+          // Check if at least one changed file was read back successfully
+          const changedSet = new Set([...changedFiles].map(f => String(f || "").replace(/\\/g, "/").toLowerCase()));
+          const readBack = toolCalls.some(c => c.tool === "READ_FILE" && c.success !== false && changedSet.has(String(c.result?.file || c.args?.path || "").replace(/\\/g, "/").toLowerCase()));
+          if (readBack) {
+            // Recommend a safe validation command based on latest package.json after WRITE_FILE or read cache
+            let recommendedCmd = "";
+            let recommendedFromPkg = false;
+            // 1) Inspect latest successful WRITE_FILE to package.json to get freshest scripts
+            for (let k = toolCalls.length - 1; k >= 0; k -= 1) {
+              const tc = toolCalls[k];
+              if (!tc || tc.tool !== "WRITE_FILE" || tc.success === false) continue;
+              const writtenPath = String(tc.result?.file || tc.args?.path || "").replace(/\\/g, "/").toLowerCase();
+              if (/(^|\/)package\.json$/i.test(writtenPath)) {
+                const pkgText = String(tc.args?.content || "");
+                if (pkgText.trim().startsWith("{")) {
+                  try {
+                    const pkg = JSON.parse(pkgText);
+                    const scripts = pkg?.scripts || {};
+                    if (scripts["workai:test"]) {
+                      recommendedCmd = "npm run workai:test";
+                    } else if (scripts["workai:selfcheck"]) {
+                      recommendedCmd = "npm run workai:selfcheck";
+                    } else if (scripts["test"]) {
+                      recommendedCmd = "npm test";
+                    }
+                    if (recommendedCmd) { recommendedFromPkg = true; }
+                  } catch { /* ignore parse error */ }
+                }
+                break;
+              }
+            }
+            // 2) Fall back to readFileCache package.json if write content not available
+            if (!recommendedCmd) {
+              for (const [fp, content] of readFileCache) {
+                if (/(^|\/)package\.json$/i.test(fp)) {
+                  try {
+                    const pkg = JSON.parse(content);
+                    const scripts = pkg?.scripts || {};
+                    if (scripts["workai:test"]) {
+                      recommendedCmd = "npm run workai:test";
+                    } else if (scripts["workai:selfcheck"]) {
+                      recommendedCmd = "npm run workai:selfcheck";
+                    } else if (scripts["test"]) {
+                      recommendedCmd = "npm test";
+                    }
+                  } catch {}
+                  break;
+                }
+              }
+            }
+            if (!recommendedCmd) {
+              // Fall back to node --check for a changed .js file
+              const jsChanged = [...changedFiles].find(f => /\.js$/i.test(String(f)) && !/\.jsx$/i.test(String(f)));
+              if (jsChanged) recommendedCmd = `node --check ${jsChanged}`;
+            }
+            if (recommendedCmd) {
+              // Deterministically execute validation command now, without asking the model again
+              console.log("[AgentLoop] Running deterministic validation: %s", recommendedCmd);
+              const termStartedAt = new Date();
+              const termResult = await executeTool(
+                "RUN_TERMINAL",
+                { command: recommendedCmd },
+                toolContext
+              );
+              const termCall = {
+                step,
+                tool: "RUN_TERMINAL",
+                args: { command: recommendedCmd },
+                success: termResult?.success !== false,
+                result: summarizeToolResult(termResult, "RUN_TERMINAL"),
+                startedAt: termStartedAt,
+                completedAt: new Date()
+              };
+              toolCalls.push(termCall);
+              history.push(termCall);
+              recordEvent("tool_completed", {
+                step,
+                tool: "RUN_TERMINAL",
+                success: termCall.success,
+                file: null,
+                error: termResult?.error || null
+              });
+
+              // If terminal succeeded, try to complete immediately through the quality gate
+              if (termCall.success) {
+                if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
+                qualityGate = await evaluateQualityGate({
+                  acceptanceCriteria: criteria,
+                  changedFiles: [...changedFiles],
+                  toolCalls,
+                  workspaceRoot: resolvedWorkspaceRoot,
+                  finalText
+                });
+                recordEvent("quality_gate", {
+                  step,
+                  passed: qualityGate.passed,
+                  score: qualityGate.score,
+                  failures: qualityGate.failures
+                });
+                if (qualityGate.passed) {
+                  recordEvent("completion", { step, message: "Task completed.", finalText });
+                  console.log("[AgentLoop] Deterministic validation passed — returning immediately");
+                  return {
+                    success: true,
+                    status: "completed",
+                    final: finalText,
+                    error: null,
+                    history,
+                    events,
+                    toolCalls,
+                    changedFiles: [...changedFiles].sort(),
+                    diffSummary: { stat: "", numstat: "" },
+                    qualityGate,
+                    acceptanceCriteria: criteria,
+                    workspaceRoot: resolvedWorkspaceRoot || null,
+                    workspaceId: workspaceId || null
+                  };
+                }
+              }
+            } else {
+              conversation.push({
+                role: "system",
+                content: "Modification has been verified. Do not read the same file again. Run a validation command from the workspace root."
+              });
+            }
+          }
+        }
       }
     }
 

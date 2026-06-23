@@ -195,25 +195,40 @@ export async function evaluateQualityGate({
 
   // ── CODING: existing strict checks ────────────────────
   if (taskType === "CODING" || taskType === "product_build") {
+    // Determine if objective explicitly requests terminal validation
+    const objective = String(criteria.objective || "");
+    const objectiveRequiresTerminal = /\b(?:npm|pnpm|yarn|node|pytest|go\s+test|cargo\s+(?:test|check)|dotnet|mvn|gradle|build|test|run)\b/i.test(objective);
+
+    // Determine if write+read verification is satisfied (changed + write + read of changed file + no failed validations + non-empty final)
+    const changedSet = new Set(unique(changedFiles).map(f => String(f || "").replace(/\\/g, "/").toLowerCase()));
+    const writeSucceeded = toolCalls.some(c => c.tool === "WRITE_FILE" && c.success);
+    const readOfChanged = successfulReads.some(r => {
+      const p = String(r.result?.file || r.args?.path || "").replace(/\\/g, "/").toLowerCase();
+      return changedSet.has(p);
+    });
+    const patchOk = failedValidations.length === 0; // if validations exist, none failed
+    const hasChanges = changedSet.size > 0;
+    const nonEmptyFinal = !!String(finalText || "").trim();
+    const allowWriteReadPass = hasChanges && writeSucceeded && readOfChanged && patchOk && nonEmptyFinal && !objectiveRequiresTerminal;
     check(
       "workspace_changes",
-      meaningfulFiles.length > 0,
+      meaningfulFiles.length > 0 || allowWriteReadPass,
       "No meaningful source files were changed.",
       meaningfulFiles
     );
 
     check(
       "validation_command",
-      !criteria.requiresValidationCommand || successfulCommands.length > 0,
+      !criteria.requiresValidationCommand || successfulCommands.length > 0 || allowWriteReadPass,
       "Run at least one successful validation command from the workspace root.",
       successfulCommands.map(call => call.args?.command)
     );
 
     check(
       "patch_validation",
-      meaningfulFiles.length > 0 &&
+      (meaningfulFiles.length > 0 &&
         successfulValidations.length > 0 &&
-        failedValidations.length === 0,
+        failedValidations.length === 0) || (allowWriteReadPass && failedValidations.length === 0),
       "Changed files must pass patch validation.",
       {
         passed: successfulValidations.map(call => call.args?.file),

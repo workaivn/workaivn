@@ -85,47 +85,99 @@ export class OpenAICompatibleProviderAdapter extends AiProviderAdapter {
   async run(params) {
     try {
       if (!this.apiKey) {
-        return {
-          success: false,
-          error: this.getConfigError()
-        };
+        return { success: false, error: this.getConfigError() };
       }
       if (this.code === "openai_compatible" && !this.baseUrl) {
-        return {
-          success: false,
-          error: "CUSTOM_OPENAI_BASE_URL is not set"
-        };
+        return { success: false, error: "CUSTOM_OPENAI_BASE_URL is not set" };
       }
 
       const { modelName, messages, temperature = 0.7, maxTokens = 2000 } = params;
 
-      const response = await axios.post(`${this.baseUrl}/chat/completions`, {
-        model: modelName,
-        messages,
-        temperature,
-        max_tokens: maxTokens
-      }, {
-        headers: {
-          "Authorization": `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json"
-        },
-        timeout: 30000
-      });
+      // Provider-specific model fallback (Groq)
+      let candidates = [modelName].filter(Boolean);
+      if (this.code === "groq") {
+        const groqFallback = [
+          "llama-3.3-70b-versatile",
+          "llama-3.1-8b-instant",
+		  "meta-llama/llama-prompt-guard-2-86m",
+		  "openai/gpt-oss-safeguard-20b",
+		  "qwen/qwen3-32b"
+        ];
+        for (const m of groqFallback) {
+          if (!candidates.includes(m)) candidates.push(m);
+        }
+      }
 
-      const outputText = response.data.choices?.[0]?.message?.content || "";
+      let lastError = null;
+      for (let i = 0; i < candidates.length; i += 1) {
+        const model = candidates[i];
+        try {
+          if (this.code === "groq") {
+            console.log(`[GroqAdapter] trying model=%s (%d/%d)`, model, i + 1, candidates.length);
+          }
+          const response = await axios.post(`${this.baseUrl}/chat/completions`, {
+            model,
+            messages,
+            temperature,
+            max_tokens: maxTokens
+          }, {
+            headers: {
+              "Authorization": `Bearer ${this.apiKey}`,
+              "Content-Type": "application/json"
+            },
+            timeout: 30000,
+            validateStatus: () => true
+          });
 
-      return {
-        success: true,
-        outputText,
-        rawResponse: response.data
-      };
+          // Accept 2xx
+          if (response.status >= 200 && response.status < 300) {
+            const outputText = response.data.choices?.[0]?.message?.content || "";
+            if (this.code === "groq") {
+              console.log(`[GroqAdapter] using model=%s OK`, model);
+            }
+            return { success: true, outputText, rawResponse: response.data };
+          }
+
+          const status = response.status;
+          const bodyMsg = response.data?.error?.message || "";
+          const lowerMsg = String(bodyMsg).toLowerCase();
+          const isRateLimit = status === 429 || /rate.?limit|tpm|rpm|quota|too many/i.test(lowerMsg);
+          const isOverload = status >= 500 || /overload|overloaded|busy|temporar/i.test(lowerMsg);
+          const modelUnknown = status === 404 || /model.*not.*found/i.test(lowerMsg);
+
+          if (this.code === "groq") {
+            console.log(`[GroqAdapter] model=%s failed status=%s msg=%s`, model, status, bodyMsg || "(no message)");
+          }
+
+          if (isRateLimit || isOverload || modelUnknown) {
+            // Try next candidate
+            if (this.code === "groq") {
+              console.log(`[GroqAdapter] fallback to next model (rate limit/overload/not-found)`);
+            }
+            lastError = bodyMsg || `HTTP ${status}`;
+            continue;
+          }
+
+          // Non-retryable
+          return { success: false, error: bodyMsg || `HTTP ${status}` };
+        } catch (error) {
+          const msg = error.message || `${this.providerConfig.name} API error`;
+          const lower = String(msg).toLowerCase();
+          const transient = /timeout|timed out|etimedout|econn|reset|refused|unavailable|busy|overload/i.test(lower);
+          if (this.code === "groq") {
+            console.log(`[GroqAdapter] model=%s exception: %s`, model, msg);
+          }
+          if (transient && i < candidates.length - 1) {
+            lastError = msg;
+            continue;
+          }
+          return { success: false, error: msg, errorDetails: error };
+        }
+      }
+      return { success: false, error: lastError || `${this.providerConfig.name} API error` };
     } catch (error) {
       console.error(`${this.providerConfig.name} error:`, error.message);
-      return {
-        success: false,
-        error: error.message || `${this.providerConfig.name} API error`,
-        errorDetails: error
-      };
+      return { success: false, error: error.message || `${this.providerConfig.name} API error`, errorDetails: error };
     }
   }
 }
