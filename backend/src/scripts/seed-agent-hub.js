@@ -1,4 +1,7 @@
 import "dotenv/config";
+import dns from "node:dns";
+
+dns.setServers(["8.8.8.8", "1.1.1.1"]);
 import mongoose from "mongoose";
 import AiProvider from "../models/AiProvider.js";
 import AiAgent from "../models/AiAgent.js";
@@ -57,6 +60,14 @@ async function seedProviders() {
       code: "manual_external",
       type: "manual",
       apiKeyEnv: null,
+      isActive: true
+    },
+    {
+      name: "Ollama Local",
+      code: "ollama",
+      type: "api",
+      baseUrl: "http://localhost:11434/v1",
+      apiKeyEnv: "OLLAMA_API_KEY",
       isActive: true
     }
   ];
@@ -184,6 +195,24 @@ async function seedAgents(providerMap) {
       systemPrompt: "Copy the prompt below into Claude.ai and run it manually.",
       temperature: 0.7,
       maxTokens: 2000,
+      isActive: true
+    },
+    {
+      providerId: providerMap.get("ollama"),
+      name: "Ollama Coding Agent",
+      code: "ollama_coder",
+      description: "Local coding with Ollama (qwen2.5-coder:7b)",
+      modelName: "qwen2.5-coder:7b",
+      agentType: "coding",
+      capabilityTags: ["local", "coding", "offline"],
+      systemPrompt: `You are an expert software engineer running locally via Ollama.
+1. Analyze the problem carefully
+2. Provide clear explanations
+3. Write clean, maintainable code
+4. Consider edge cases
+5. Always return valid JSON when using agent tools`,
+      temperature: 0.5,
+      maxTokens: 4096,
       isActive: true
     }
   ];

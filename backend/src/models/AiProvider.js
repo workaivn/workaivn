@@ -12,7 +12,7 @@ const AiProviderSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
-      enum: ["openai", "gemini", "anthropic", "openrouter", "manual_external"],
+      enum: ["openai", "gemini", "anthropic", "openrouter", "manual_external", "ollama"],
       index: true
     },
     type: {

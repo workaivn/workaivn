@@ -155,15 +155,51 @@ router.post("/admin/providers/:id/test", isAdmin, async (req, res) => {
     const p = await AiProvider.findById(req.params.id);
     if (!p) return res.status(404).json({ success: false, message: "Not found" });
 
-    const apiKey = process.env[p.apiKeyEnv || ""] || "";
-    if (!apiKey && p.type === "api") {
-      return res.json({ success: false, message: `API key chưa được cấu hình (env: ${p.apiKeyEnv || "N/A"})` });
-    }
     if (p.type === "manual") {
       return res.json({ success: true, message: "Provider thủ công — không cần kết nối." });
     }
 
-    return res.json({ success: true, message: `Provider "${p.name}" có API key. Kiểm tra thực tế khi chạy task.` });
+    if (p.code === "ollama") {
+      const baseUrl = p.baseUrl || process.env.OLLAMA_BASE_URL || "http://localhost:11434/v1";
+      const rootUrl = baseUrl.replace(/\/v1\/?$/, "");
+      try {
+        const resp = await axios.get(`${rootUrl}/api/tags`, { timeout: 3000 });
+        const models = resp.data?.models || [];
+        return res.json({
+          success: true,
+          message: `Ollama đang chạy tại ${rootUrl}. Số model: ${models.length}.`
+        });
+      } catch (e) {
+        return res.json({
+          success: false,
+          message: `Không thể kết nối Ollama tại ${rootUrl}. Chạy: ollama serve (${e.message})`
+        });
+      }
+    }
+
+    const apiKey = process.env[p.apiKeyEnv || ""] || "";
+    if (!apiKey && p.code !== "ollama") {
+      return res.json({ success: false, message: `API key chưa được cấu hình (env: ${p.apiKeyEnv || "N/A"})` });
+    }
+
+    if (p.baseUrl) {
+      try {
+        await axios.get(`${p.baseUrl.replace(/\/v1\/?$/, "")}/v1/models`, {
+          timeout: 3000,
+          headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {}
+        });
+      } catch (e) {
+        if (e.response?.status === 401 || e.response?.status === 403) {
+          return res.json({ success: false, message: `API key không hợp lệ cho ${p.name}` });
+        }
+        return res.json({
+          success: true,
+          message: `${p.name} — API key OK (${apiKey ? "có key" : "không key"}), không thể verify baseUrl: ${e.message}`
+        });
+      }
+    }
+
+    return res.json({ success: true, message: `Provider "${p.name}" OK.` });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
   }

@@ -8,6 +8,7 @@ import { GeminiProviderAdapter } from "./GeminiProviderAdapter.js";
 import { AnthropicProviderAdapter } from "./AnthropicProviderAdapter.js";
 import { OpenRouterProviderAdapter } from "./OpenRouterProviderAdapter.js";
 import { ManualExternalProviderAdapter } from "./ManualExternalProviderAdapter.js";
+import { OllamaProviderAdapter } from "./OllamaProviderAdapter.js";
 
 class ProviderRegistry {
   constructor() {
@@ -22,12 +23,14 @@ class ProviderRegistry {
     const anthropic = new AnthropicProviderAdapter();
     const openrouter = new OpenRouterProviderAdapter();
     const manual = new ManualExternalProviderAdapter();
+    const ollama = new OllamaProviderAdapter();
 
     this.adapters.set("openai", openai);
     this.adapters.set("gemini", gemini);
     this.adapters.set("anthropic", anthropic);
     this.adapters.set("openrouter", openrouter);
     this.adapters.set("manual_external", manual);
+    this.adapters.set("ollama", ollama);
   }
 
   /**
