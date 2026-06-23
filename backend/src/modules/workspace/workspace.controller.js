@@ -40,7 +40,7 @@ function workspaceError(res, error, fallback = "Workspace operation failed") {
 
 export async function listWorkspaces(_req, res) {
   const filter = isRemoteWorkspaceMode()
-    ? { sourceType: { $in: ["zip", "git"] }, status: "ready" }
+    ? { sourceType: { $in: ["zip", "git"] }, status: { $in: ["ready", "error"] } }
     : {};
   const workspaces = await Workspace.find(filter).sort({ updatedAt: -1 });
   return res.json({ success: true, data: workspaces.map(publicWorkspace) });
@@ -193,5 +193,28 @@ export async function downloadWorkspaceZip(req, res) {
     await archive.finalize();
   } catch (error) {
     return workspaceError(res, error);
+  }
+}
+
+export async function deleteWorkspace(req, res) {
+  try {
+    const workspace = await Workspace.findOne({ id: req.params.id });
+    if (!workspace) {
+      return res.status(404).json({ success: false, message: "Workspace not found" });
+    }
+
+    try {
+      await fs.rm(workspace.rootPath, { recursive: true, force: true });
+    } catch {
+      // Folder may not exist — continue with DB cleanup
+    }
+
+    await Workspace.findByIdAndDelete(workspace._id);
+
+    console.log(`[WorkspaceCleanup] Deleted workspace ${workspace.id} (${workspace.name})`);
+    return res.json({ success: true, message: "Workspace deleted" });
+  } catch (error) {
+    console.error("deleteWorkspace error:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 }

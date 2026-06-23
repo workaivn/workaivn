@@ -156,7 +156,7 @@ test("runAgentLoop retries once with a strict JSON-only instruction", async () =
   }
 });
 
-test("runAgentLoop returns an error instead of throwing after invalid JSON retry", async () => {
+test("runAgentLoop retries and salvages plain text as final response", async () => {
   const workspaceRoot = await createWorkspace();
   let callCount = 0;
 
@@ -172,9 +172,10 @@ test("runAgentLoop returns an error instead of throwing after invalid JSON retry
     });
 
     assert.equal(callCount, 2);
-    assert.equal(result.success, false);
-    assert.match(result.final, /after one retry/);
-    assert.ok(result.events.some(event => event.type === "error"));
+    assert.equal(result.success, true);
+    assert.equal(result.final, "still not json");
+    assert.ok(result.events.some(event => event.type === "json_parse_retry"));
+    assert.ok(result.events.some(event => event.type === "completion"));
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }

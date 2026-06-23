@@ -19,5 +19,6 @@ router.put("/:id/file", controller.putWorkspaceFile);
 router.post("/:id/run-terminal", controller.runWorkspaceTerminal);
 router.post("/:id/apply-patch", controller.applyWorkspacePatch);
 router.get("/:id/download-zip", controller.downloadWorkspaceZip);
+router.delete("/:id", controller.deleteWorkspace);
 
 export default router;
