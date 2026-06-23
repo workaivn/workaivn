@@ -558,7 +558,9 @@ RULES:
     if (parsed.done) {
       if (changedFiles.size === 0) {
         const isReadOnly = isReadOnlyTask(objective);
-        if (!isReadOnly) {
+        const taskType = (criteria.taskType || "coding").toLowerCase();
+        const isNonCoding = taskType === "chat" || taskType === "search" || taskType === "analysis";
+        if (!isReadOnly && !isNonCoding) {
           const message = "Completion rejected: no persisted file changes were detected.";
           recordEvent("completion_rejected", { step, message });
           conversation.push({
@@ -571,7 +573,7 @@ RULES:
           });
           continue;
         }
-        // Read-only task: allow completion without file changes
+        // Read-only or non-coding task: allow completion without file changes
       }
 
       const proposedFinal = parsed.final || (isReadOnly

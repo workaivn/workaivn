@@ -5,6 +5,7 @@ import AgentRun from "../../models/AgentRun.js";
 import AgentPromptTemplate from "../../models/AgentPromptTemplate.js";
 import { providerRegistry } from "../../services/adapters/index.js";
 import { runAgentLoop } from "../../agent/runAgentLoop.js";
+import { buildAcceptanceCriteria } from "../../agent/acceptanceCriteria.js";
 import { getWorkspaceByPublicId } from "../workspace/workspace.service.js";
 import { isRemoteWorkspaceMode } from "../../agent/workspace.js";
 
@@ -185,8 +186,8 @@ async function executeAgentRun({
     workspaceId: workspace.id,
     workspaceRoot: run.workspaceRoot,
     maxSteps: 20,
-    acceptanceCriteria: run.acceptanceCriteria?.objective
-      ? run.acceptanceCriteria
+    acceptanceCriteria: criteria?.acceptanceCriteria?.objective
+      ? criteria
       : null,
     initialChangedFiles: continueRun ? run.changedFiles || [] : [],
     initialToolCalls: continueRun ? run.toolCalls || [] : [],
@@ -798,11 +799,14 @@ export async function runAgentPrompt(req, res) {
       }
     }
 
+    const criteria = buildAcceptanceCriteria(normalizedPrompt);
+    const taskType = criteria.taskType || "coding";
+
     const task = await AgentTask.create({
       title: normalizedPrompt.slice(0, 100),
       inputPrompt: normalizedPrompt,
       normalizedPrompt,
-      taskType: "build_feature",
+      taskType,
       selectedAgentId: agent._id,
       workspaceId: workspace.id,
       status: "running"

@@ -16,7 +16,7 @@ const AgentTaskSchema = new mongoose.Schema(
     },
     taskType: {
       type: String,
-      enum: ["build_feature", "fix_bug", "refactor", "review", "documentation", "phase_plan"],
+      enum: ["build_feature", "fix_bug", "refactor", "review", "documentation", "phase_plan", "analysis", "search", "chat"],
       required: true,
       index: true
     },

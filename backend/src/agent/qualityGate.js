@@ -61,8 +61,26 @@ export async function evaluateQualityGate({
   finalText = ""
 }) {
   const criteria = acceptanceCriteria || {};
+  const taskType = (criteria.taskType || "coding").toLowerCase();
+
+  // ── CHAT: always passes ──────────────────────────────
+  if (taskType === "chat") {
+    return {
+      passed: true,
+      evaluatedAt: new Date(),
+      score: 100,
+      checks: [{ id: "task_type", passed: true, message: "Chat task — no quality gate required." }],
+      failures: [],
+      feedback: "Quality gate passed.",
+      evidence: { filesChanged: [], filesRead: [], layers: [] }
+    };
+  }
+
   const meaningfulFiles = unique(changedFiles).filter(isMeaningfulFile);
   const successfulReads = toolCalls.filter(call => call.tool === "READ_FILE" && call.success);
+  const successfulToolCalls = toolCalls.filter(call =>
+    call.success && ["READ_FILE", "LIST_FILES", "SEARCH_FILES"].includes(call.tool)
+  );
   const successfulCommands = toolCalls.filter(call =>
     call.tool === "RUN_TERMINAL" &&
     call.success &&
@@ -90,31 +108,54 @@ export async function evaluateQualityGate({
     if (!passed) failures.push(message);
   }
 
-  check(
-    "workspace_changes",
-    meaningfulFiles.length > 0,
-    "No meaningful source files were changed.",
-    meaningfulFiles
-  );
+  // ── SEARCH: require at least one successful read/list ──
+  if (taskType === "search") {
+    check(
+      "files_read",
+      successfulToolCalls.length > 0,
+      "Read at least one file or list directory contents.",
+      successfulToolCalls.map(call => call.result?.file || call.args?.path)
+    );
+  }
 
-  check(
-    "validation_command",
-    !criteria.requiresValidationCommand || successfulCommands.length > 0,
-    "Run at least one successful validation command from the workspace root.",
-    successfulCommands.map(call => call.args?.command)
-  );
+  // ── ANALYSIS: require at least one READ_FILE ──────────
+  if (taskType === "analysis") {
+    check(
+      "files_read",
+      successfulReads.length >= 1,
+      "Read at least one file to analyze.",
+      successfulReads.map(call => call.result?.file || call.args?.path)
+    );
+  }
 
-  check(
-    "patch_validation",
-    meaningfulFiles.length > 0 &&
-      successfulValidations.length > 0 &&
-      failedValidations.length === 0,
-    "Changed files must pass patch validation.",
-    {
-      passed: successfulValidations.map(call => call.args?.file),
-      failed: failedValidations.map(call => call.args?.file)
-    }
-  );
+  // ── CODING: existing strict checks ────────────────────
+  if (taskType === "coding" || taskType === "product_build") {
+    check(
+      "workspace_changes",
+      meaningfulFiles.length > 0,
+      "No meaningful source files were changed.",
+      meaningfulFiles
+    );
+
+    check(
+      "validation_command",
+      !criteria.requiresValidationCommand || successfulCommands.length > 0,
+      "Run at least one successful validation command from the workspace root.",
+      successfulCommands.map(call => call.args?.command)
+    );
+
+    check(
+      "patch_validation",
+      meaningfulFiles.length > 0 &&
+        successfulValidations.length > 0 &&
+        failedValidations.length === 0,
+      "Changed files must pass patch validation.",
+      {
+        passed: successfulValidations.map(call => call.args?.file),
+        failed: failedValidations.map(call => call.args?.file)
+      }
+    );
+  }
 
   const placeholders = (criteria.forbiddenPlaceholders || [])
     .filter(placeholder => combinedText.includes(placeholder.toLowerCase()));
