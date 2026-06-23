@@ -537,7 +537,7 @@ export default function AgentHub() {
                                 <p>Error: {run.errorMessage}</p>
                               </div>
                             )}
-                            {(run.changedFiles?.length > 0 || run.toolCalls?.length > 0) && (
+                            {(run.changedFiles?.length > 0) && (
                               <div className="run-output">
                                 <p><strong>Changed files:</strong> {run.changedFiles?.length || 0}</p>
                                 {run.changedFiles?.length > 0 && (
@@ -545,9 +545,11 @@ export default function AgentHub() {
                                     {run.changedFiles.map(file => <li key={file}><code>{file}</code></li>)}
                                   </ul>
                                 )}
-                                <p><strong>Tool calls:</strong> {run.toolCalls?.length || 0}</p>
                                 {run.diffSummary?.stat && <pre>{run.diffSummary.stat}</pre>}
                               </div>
+                            )}
+                            {(run.toolCalls?.length > 0) && (
+                              <p><strong>Tool calls:</strong> {run.toolCalls?.length || 0}</p>
                             )}
                           </div>
                         ))}
