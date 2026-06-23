@@ -42,7 +42,7 @@ export class GeminiProviderAdapter extends AiProviderAdapter {
       const { modelName, messages, temperature = 0.7, maxTokens = 2000 } = params;
 
       const model = this.client.getGenerativeModel({
-        model: modelName || "gemini-1.5-pro"
+        model: modelName || process.env.GEMINI_DEFAULT_MODEL || "gemini-2.0-flash"
       });
 
       const systemInstruction = messages

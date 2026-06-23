@@ -61,10 +61,10 @@ export async function evaluateQualityGate({
   finalText = ""
 }) {
   const criteria = acceptanceCriteria || {};
-  const taskType = (criteria.taskType || "coding").toLowerCase();
+  const taskType = criteria.taskType || "CODING";
 
   // ── CHAT: always passes ──────────────────────────────
-  if (taskType === "chat") {
+  if (taskType === "CHAT") {
     return {
       passed: true,
       evaluatedAt: new Date(),
@@ -73,6 +73,27 @@ export async function evaluateQualityGate({
       failures: [],
       feedback: "Quality gate passed.",
       evidence: { filesChanged: [], filesRead: [], layers: [] }
+    };
+  }
+
+  // ── SEARCH / ANALYSIS: pass if final answer exists and no files changed ──
+  if ((taskType === "SEARCH" || taskType === "ANALYSIS") && changedFiles.length === 0 && finalText) {
+    const successfulReads = toolCalls.filter(call => call.tool === "READ_FILE" && call.success);
+    return {
+      passed: true,
+      evaluatedAt: new Date(),
+      score: 100,
+      checks: [
+        { id: "task_type", passed: true, message: `${taskType} task — pass if no files changed and answer exists.` },
+        { id: "no_file_changes", passed: true, message: "No files were modified." }
+      ],
+      failures: [],
+      feedback: "Quality gate passed.",
+      evidence: {
+        filesRead: unique(successfulReads.map(call => call.result?.file || call.args?.path)),
+        filesChanged: [],
+        layers: []
+      }
     };
   }
 
@@ -109,7 +130,7 @@ export async function evaluateQualityGate({
   }
 
   // ── SEARCH: require at least one successful read/list ──
-  if (taskType === "search") {
+  if (taskType === "SEARCH") {
     check(
       "files_read",
       successfulToolCalls.length > 0,
@@ -119,7 +140,7 @@ export async function evaluateQualityGate({
   }
 
   // ── ANALYSIS: require at least one READ_FILE ──────────
-  if (taskType === "analysis") {
+  if (taskType === "ANALYSIS") {
     check(
       "files_read",
       successfulReads.length >= 1,
@@ -129,7 +150,7 @@ export async function evaluateQualityGate({
   }
 
   // ── CODING: existing strict checks ────────────────────
-  if (taskType === "coding" || taskType === "product_build") {
+  if (taskType === "CODING" || taskType === "product_build") {
     check(
       "workspace_changes",
       meaningfulFiles.length > 0,

@@ -42,7 +42,7 @@ export class OpenAIProviderAdapter extends AiProviderAdapter {
       const { modelName, messages, temperature = 0.7, maxTokens = 2000 } = params;
 
       const response = await this.client.chat.completions.create({
-        model: modelName || "gpt-4-turbo",
+        model: modelName || process.env.OPENAI_DEFAULT_MODEL || "gpt-4o-mini",
         messages,
         temperature,
         max_tokens: maxTokens

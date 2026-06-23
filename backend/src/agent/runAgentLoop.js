@@ -15,6 +15,8 @@ const DEBUG = () => process.env.DEBUG_AGENT === "true";
 
 const WRITE_TOOLS = new Set(["WRITE_FILE", "APPLY_PATCH"]);
 
+const READ_ONLY_TASK_TYPES = new Set(["CHAT", "SEARCH", "ANALYSIS"]);
+
 function parseAgentResponse(response) {
   const raw = String(response ?? "").trim();
   const candidates = [raw];
@@ -249,14 +251,17 @@ function summarizeToolResult(result, toolName) {
   return summary;
 }
 
-function isReadOnlyTask(objective) {
+function isReadOnlyTask(objective, criteria) {
+  if (!objective) return false;
+  const taskType = (criteria?.taskType || "CODING").toUpperCase();
+  if (READ_ONLY_TASK_TYPES.has(taskType)) return true;
   const lower = objective.toLowerCase();
   const readKeywords = [
     "read", "summarize", "list", "show", "what", "describe",
     "tell", "explain", "do not modify", "without modifying",
     "do not change", "do not edit", "do not write", "do not create",
     "just tell", "just show", "only read", "output the",
-    "catalog", "enumerate"
+    "catalog", "enumerate", "do not run"
   ];
   return readKeywords.some(kw => lower.includes(kw));
 }
@@ -264,12 +269,53 @@ function isReadOnlyTask(objective) {
 function buildReadOnlySummary(toolCalls, readFileCache) {
   const parts = [];
   for (const [filePath, content] of readFileCache) {
+    // Extract key info from package.json instead of dumping full content
+    if (/package\.json$/i.test(filePath)) {
+      try {
+        const pkg = JSON.parse(content);
+        const summaryLines = [];
+        if (pkg.name) summaryLines.push(`Project name: ${pkg.name}`);
+        if (pkg.version) summaryLines.push(`Version: ${pkg.version}`);
+        if (pkg.description) summaryLines.push(`Description: ${pkg.description}`);
+        if (Object.keys(pkg.scripts || {}).length > 0) {
+          summaryLines.push("Scripts: " + Object.keys(pkg.scripts).join(", "));
+        }
+        if (summaryLines.length > 0) {
+          parts.push(`--- ${filePath} ---\n${summaryLines.join("\n")}`);
+          continue;
+        }
+      } catch {
+        // fall through to full content
+      }
+    }
+    // For non-package.json or if parse failed, provide excerpt
     const excerpt = content.length > 2000 ? content.slice(0, 2000) + "\n..." : content;
     parts.push(`--- ${filePath} ---\n${excerpt}`);
   }
   return parts.length
-    ? `Read files:\n\n${parts.join("\n\n")}`
+    ? parts.join("\n\n")
     : "Read files summary not available.";
+}
+
+function isGoalSatisfied(taskType, toolCalls, changedFiles) {
+  if (!READ_ONLY_TASK_TYPES.has(taskType)) return false;
+  if (changedFiles.size > 0) return false;
+  if (toolCalls.length === 0) return false;
+  const hasReadTool = toolCalls.some(c =>
+    ["READ_FILE", "LIST_FILES", "SEARCH_CODE", "SEARCH_SYMBOL"].includes(c.tool) &&
+    c.success !== false
+  );
+  return hasReadTool;
+}
+
+function isCodingComplete(taskType, changedFiles, toolCalls, validationFailed) {
+  if (taskType !== "CODING") return false;
+  if (changedFiles.size === 0) return false;
+  if (validationFailed) return false;
+  const hasSuccessfulTerminal = toolCalls.some(c =>
+    c.tool === "RUN_TERMINAL" && c.success !== false
+  );
+  return hasSuccessfulTerminal;
 }
 
 async function defaultGenerateResponse({ messages, plan }) {
@@ -389,8 +435,11 @@ RULES:
     content: acceptanceCriteriaToPrompt(criteria)
   });
 
-  const isReadOnly = isReadOnlyTask(objective);
-  if (isReadOnly) {
+  const isReadOnly = isReadOnlyTask(objective, criteria);
+  const taskType = (criteria.taskType || "CODING").toUpperCase();
+  const isNonCodingTask = READ_ONLY_TASK_TYPES.has(taskType);
+  if (isReadOnly || isNonCodingTask) {
+    console.log("[AgentLoop] %s task detected", isNonCodingTask ? taskType.toUpperCase() : "read-only");
     conversation.push({
       role: "system",
       content: `READ-ONLY MODE: This task only requires reading files and producing a summary. Do NOT call WRITE_FILE or APPLY_PATCH. After reading the required file(s), return { "done": true, "final": "your summary here" } with a complete summary.`
@@ -443,6 +492,10 @@ RULES:
         step,
         objective
       });
+	  console.log("\n==============================");
+console.log("[AgentLoop] RAW RESPONSE length=%d", String(rawResponse).length);
+console.log("==============================\n");
+	  
     } catch (error) {
       recordEvent("error", {
         step,
@@ -470,6 +523,11 @@ RULES:
 
     try {
       parsed = parseAgentResponse(rawResponse);
+	  console.log("[AgentLoop] parsed response: tool=%s done=%s final=%s",
+  parsed.tool || "(none)",
+  parsed.done ? "true" : "false",
+  parsed.final ? `"${String(parsed.final).slice(0, 80)}..."` : "null"
+);
     } catch (firstParseError) {
       console.error("Coding Agent invalid JSON response:", rawResponse);
       recordEvent("json_parse_retry", {
@@ -556,29 +614,21 @@ RULES:
     }
 
     if (parsed.done) {
-      if (changedFiles.size === 0) {
-        const isReadOnly = isReadOnlyTask(objective);
-        const taskType = (criteria.taskType || "coding").toLowerCase();
-        const isNonCoding = taskType === "chat" || taskType === "search" || taskType === "analysis";
-        if (!isReadOnly && !isNonCoding) {
-          const message = "Completion rejected: no persisted file changes were detected.";
-          recordEvent("completion_rejected", { step, message });
-          conversation.push({
-            role: "assistant",
-            content: JSON.stringify(parsed)
-          });
-          conversation.push({
-            role: "system",
-            content: `${message} Continue by inspecting and editing the workspace with tools.`
-          });
-          continue;
-        }
-        // Read-only or non-coding task: allow completion without file changes
+      const proposedFinal = parsed.final || (isReadOnly || isNonCodingTask
+        ? `${taskType.toUpperCase()} task completed.`
+        : "Coding task completed with persisted file changes.");
+
+      // For CHAT/SEARCH/ANALYSIS: accept immediately
+      if (isNonCodingTask || isReadOnly) {
+        finalText = proposedFinal;
+        qualityGate = { passed: true, score: 100, failures: [], feedback: "Quality gate passed." };
+        recordEvent("quality_gate", { step, passed: true, score: 100, failures: [] });
+        recordEvent("completion", { step, message: "Task completed.", finalText });
+        console.log("[AgentLoop] %s done=true — stopping immediately", taskType);
+        break;
       }
 
-      const proposedFinal = parsed.final || (isReadOnly
-        ? "Read-only task completed."
-        : "Coding task completed with persisted file changes.");
+      // For CODING: evaluate quality gate, then decide
       qualityGate = await evaluateQualityGate({
         acceptanceCriteria: criteria,
         changedFiles: [...changedFiles],
@@ -594,7 +644,15 @@ RULES:
         failures: qualityGate.failures
       });
 
-      if (!qualityGate.passed) {
+      if (qualityGate.passed) {
+        finalText = proposedFinal;
+        console.log("[AgentLoop] CODING done=true — quality gate passed, stopping");
+        break;
+      }
+
+      // Quality gate failed — continue with feedback
+      if (changedFiles.size > 0) {
+        // If there were file changes, allow continuing
         conversation.push({ role: "assistant", content: JSON.stringify(parsed) });
         conversation.push({
           role: "system",
@@ -603,17 +661,50 @@ RULES:
         continue;
       }
 
+      // No file changes and quality gate failed — this is a dead end
       finalText = proposedFinal;
+      console.log("[AgentLoop] CODING done=true — no changes, accepting as-is");
       break;
     }
 
     const toolName = String(parsed.tool || "").toUpperCase();
+	console.log(
+  "[AgentLoop] tool=%s args=%s",
+  toolName,
+  JSON.stringify(parsed.args || {})
+);
     if (!toolName) {
-      conversation.push({
-        role: "system",
-        content: "Your response must contain either a tool call or done=true."
-      });
-      continue;
+      console.log("[AgentLoop] no tool and not done — checking completion criteria");
+      if (isCodingComplete(taskType, changedFiles, toolCalls, validationFailed)) {
+        console.log("[AgentLoop] CODING complete — criteria satisfied, no tool returned");
+        if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
+        qualityGate = await evaluateQualityGate({
+          acceptanceCriteria: criteria,
+          changedFiles: [...changedFiles],
+          toolCalls,
+          workspaceRoot: resolvedWorkspaceRoot,
+          finalText
+        });
+        recordEvent("quality_gate", {
+          step,
+          passed: qualityGate.passed,
+          score: qualityGate.score,
+          failures: qualityGate.failures
+        });
+        if (qualityGate.passed) {
+          console.log("[AgentLoop] CODING quality gate passed — stopping");
+          break;
+        }
+      }
+      if (!finalText) finalText = "Model returned no tool and not done.";
+      qualityGate = {
+        passed: false,
+        score: 0,
+        failures: ["Model returned no tool and not done."],
+        feedback: "Model returned no tool and not done."
+      };
+      console.log("[AgentLoop] Model returned no tool and not done — returning NEEDS_REVISION");
+      break;
     }
 
     if (WRITE_TOOLS.has(toolName) && inspectedFiles.size === 0) {
@@ -632,17 +723,21 @@ RULES:
     toolCallCounts.set(callKey, duplicateCount + 1);
 
     if (duplicateCount >= MAX_DUPLICATE_TOOL_CALLS) {
+      console.log("[AgentLoop] repeated tool call detected: %s %j", toolName, args);
       const message = `Duplicate tool call prevented. You already called ${toolName} with these arguments ${duplicateCount + 1} times. Use the existing result.`;
       recordEvent("validation", { step, tool: toolName, args, message });
-      if (isReadOnly && inspectedFiles.size > 0 && changedFiles.size === 0 && duplicateCount >= MAX_DUPLICATE_TOOL_CALLS + 1) {
-        // Force final — model is stuck in a loop
+      if ((isNonCodingTask || isReadOnly) && inspectedFiles.size > 0 && changedFiles.size === 0) {
         const summary = buildReadOnlySummary(toolCalls, readFileCache);
         finalText = parsed.final || `Task completed. ${summary}`;
         recordEvent("completion", { step, message: "Forced final after repeated duplicate tool calls.", finalText });
+        console.log("[AgentLoop] %s goal satisfied — stopping without validation", taskType.toUpperCase());
         break;
       }
-      conversation.push({ role: "system", content: message });
-      continue;
+      // For CODING: return NEEDS_REVISION immediately
+      finalText = parsed.final || `Task failed due to repeated identical tool call: ${toolName} ${JSON.stringify(args)}`;
+      qualityGate = { passed: false, score: 0, failures: [`Repeated identical tool call detected: ${toolName} ${JSON.stringify(args)}`], feedback: `Repeated identical tool call detected: ${toolName} ${JSON.stringify(args)}` };
+      console.log("[AgentLoop] CODING repeated tool — returning NEEDS_REVISION");
+      break;
     }
 
     const readFilePath = toolName === "READ_FILE" && args.path
@@ -650,12 +745,11 @@ RULES:
     if (readFilePath && readFileCache.has(readFilePath)) {
       const cachedContent = readFileCache.get(readFilePath);
       const message = `You already read "${readFilePath}". Here is its content again:\n\n${cachedContent.slice(0, 12000)}\n\nUse this content. Do not call READ_FILE on this path again.`;
-      const cacheHitCount = toolCallCounts.get(`${toolName}:${JSON.stringify(args)}`) || 0;
-      if (isReadOnly && inspectedFiles.size > 0 && changedFiles.size === 0 && cacheHitCount >= MAX_DUPLICATE_TOOL_CALLS + 1) {
-        // Force final — model is stuck requesting the same file
+      if ((isNonCodingTask || isReadOnly) && inspectedFiles.size > 0 && changedFiles.size === 0) {
         const summary = buildReadOnlySummary(toolCalls, readFileCache);
         finalText = parsed.final || `Task completed. ${summary}`;
         recordEvent("completion", { step, message: "Forced final after repeated READ_FILE of same path.", finalText });
+        console.log("[AgentLoop] %s goal satisfied — stopping without validation", taskType.toUpperCase());
         break;
       }
       conversation.push({ role: "system", content: message });
@@ -663,9 +757,18 @@ RULES:
     }
 
     recordEvent("tool_started", { step, tool: toolName, args });
+    console.log("[AgentLoop] tool=%s args=%s", toolName, JSON.stringify(args || {}));
     if (DEBUG()) console.log("[runAgentLoop] step %d tool=%s args=%j", step, toolName, args);
     const startedAt = new Date();
     const result = await executeTool(toolName, args, toolContext);
+    const duration = (new Date() - startedAt);
+    console.log("[AgentLoop] tool result success=%s file=%s contentLength=%s error=%s duration=%dms",
+      result?.success !== false,
+      result?.file || "(none)",
+      (result?.content || "").length || (result?.outputText || "").length || 0,
+      result?.error || "(none)",
+      duration
+    );
     if (DEBUG()) {
       const ms = (new Date() - startedAt);
       console.log("[runAgentLoop] step %d tool=%s done success=%s duration=%dms",
@@ -696,6 +799,7 @@ RULES:
       if (result.content) {
         const normalized = String(result.file).replace(/\\/g, "/");
         readFileCache.set(normalized, result.content);
+        console.log("[AgentLoop] READ_FILE %s completed", normalized);
       }
     }
 
@@ -731,6 +835,52 @@ RULES:
       }
     }
 
+    // If WRITE_FILE produced no content change, guide the agent to use APPLY_PATCH
+    if (toolName === "WRITE_FILE" && (!result?.success || !result?.changed)) {
+      const errorMsg = String(result?.error || result?.message || "WRITE_FILE produced no content change");
+      if (errorMsg.toLowerCase().includes("no content change")) {
+        console.log("[AgentLoop] WRITE_FILE produced no content change — guiding to use APPLY_PATCH");
+        conversation.push({
+          role: "system",
+          content: `WRITE_FILE produced no content change (${errorMsg}). The file likely already contains the requested content. Use APPLY_PATCH if you need to make a focused change, or proceed directly if the goal is already satisfied.`
+        });
+        continue;
+      }
+    }
+
+    // Check if goal is satisfied for read-only tasks after each tool execution
+    if (isGoalSatisfied(taskType, toolCalls, changedFiles)) {
+      console.log("[AgentLoop] %s goal satisfied — stopping without validation", taskType);
+      if (!finalText) {
+        const summary = buildReadOnlySummary(toolCalls, readFileCache);
+        finalText = parsed.final || summary;
+      }
+      break;
+    }
+
+    // Check if CODING task is complete after every successful tool execution
+    if (isCodingComplete(taskType, changedFiles, toolCalls, validationFailed)) {
+      console.log("[AgentLoop] CODING complete — changed files, successful terminal, no validation failures");
+      if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
+      qualityGate = await evaluateQualityGate({
+        acceptanceCriteria: criteria,
+        changedFiles: [...changedFiles],
+        toolCalls,
+        workspaceRoot: resolvedWorkspaceRoot,
+        finalText
+      });
+      recordEvent("quality_gate", {
+        step,
+        passed: qualityGate.passed,
+        score: qualityGate.score,
+        failures: qualityGate.failures
+      });
+      if (qualityGate.passed) {
+        console.log("[AgentLoop] CODING quality gate passed — stopping");
+        break;
+      }
+    }
+
     conversation.push({
       role: "assistant",
       content: JSON.stringify(parsed)
@@ -742,7 +892,7 @@ RULES:
   }
 
   // Graceful completion when maxSteps exhausted but useful observations exist
-  if (isReadOnly && !finalText && inspectedFiles.size > 0 && changedFiles.size === 0) {
+  if ((isReadOnly || isNonCodingTask) && !finalText && inspectedFiles.size > 0 && changedFiles.size === 0) {
     const summary = buildReadOnlySummary(toolCalls, readFileCache);
     finalText = `Read-only task completed. ${summary}`;
     if (DEBUG()) console.log("[runAgentLoop] graceful read-only completion at max steps");
@@ -757,10 +907,12 @@ RULES:
   }
 
   const changedFileList = [...changedFiles].sort();
-  const diffSummary = resolvedWorkspaceRoot
+  // For non-CODING tasks, diffSummary must be empty even if git reports changes
+  const isCodingTask = taskType === "CODING" && !isReadOnly && !isNonCodingTask;
+  const diffSummary = isCodingTask && resolvedWorkspaceRoot
     ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList)
     : {
-        stat: changedFileList.length ? `${changedFileList.length} uploaded file(s) changed` : "",
+        stat: changedFileList.length && isCodingTask ? `${changedFileList.length} uploaded file(s) changed` : "",
         numstat: ""
       };
 
@@ -772,9 +924,13 @@ RULES:
       workspaceRoot: resolvedWorkspaceRoot,
       finalText
     });
+    // Non-coding tasks: override quality gate to passed (no file changes expected)
+    if ((isNonCodingTask || isReadOnly) && changedFiles.size === 0 && finalText) {
+      qualityGate.passed = true;
+    }
   }
 
-  const hasReadOnlyCompleted = isReadOnly && inspectedFiles.size > 0 && changedFiles.size === 0 && finalText;
+  const hasReadOnlyCompleted = (isNonCodingTask || isReadOnly) && (inspectedFiles.size > 0 || finalText) && changedFiles.size === 0;
   const success = hasReadOnlyCompleted || (qualityGate.passed === true && !validationFailed);
   const status = success ? "completed" : "needs_revision";
   if (!finalText) {

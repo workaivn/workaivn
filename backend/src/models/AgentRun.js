@@ -75,6 +75,10 @@ const AgentRunSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {}
     },
+    autoFailover: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null
+    },
     status: {
       type: String,
       enum: ["pending", "running", "completed", "needs_revision", "error", "cancelled"],

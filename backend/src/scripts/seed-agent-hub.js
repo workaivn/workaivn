@@ -169,8 +169,8 @@ async function seedAgents(providerMap) {
       providerId: providerMap.get("openai"),
       name: "GPT Coding Agent",
       code: "gpt_coding",
-      description: "Advanced coding with GPT-4 Turbo",
-      modelName: "gpt-4-turbo",
+      description: "Advanced coding with GPT-4o Mini",
+      modelName: process.env.OPENAI_DEFAULT_MODEL || "gpt-4o-mini",
       agentType: "coding",
       priority: 20,
       capabilityTags: ["code", "refactor", "debugging", "testing"],
@@ -186,20 +186,15 @@ async function seedAgents(providerMap) {
     },
     {
       providerId: providerMap.get("gemini"),
-      name: "Gemini Large Context Agent",
-      code: "gemini_large",
-      description: "Large context analysis with Gemini 1.5 Pro",
-      modelName: "gemini-1.5-pro",
+      name: "Gemini Coding Agent",
+      code: "gemini_coding",
+      description: "Coding with Gemini 2.0 Flash",
+      modelName: process.env.GEMINI_DEFAULT_MODEL || "gemini-2.0-flash",
       agentType: "coding",
       priority: 30,
-      capabilityTags: ["large_context", "analysis", "documentation"],
-      systemPrompt: `You are a senior technical architect. Your specialties are:
-1. Analyzing large codebases
-2. Designing system architecture
-3. Identifying patterns and anti-patterns
-4. Providing comprehensive documentation
-5. Breaking down complex problems`,
-      temperature: 0.4,
+      capabilityTags: ["coding", "analysis"],
+      systemPrompt: `You are an expert software engineer. Analyze, modify, and improve code using available tools (READ_FILE, WRITE_FILE, APPLY_PATCH, LIST_FILES, RUN_TERMINAL). Always return valid JSON.`,
+      temperature: 0.5,
       maxTokens: 8000,
       isActive: true
     },
@@ -443,11 +438,20 @@ async function seedAgents(providerMap) {
   for (const agent of agents) {
     await AiAgent.findOneAndUpdate(
       { code: agent.code },
-      { $setOnInsert: agent },
+      { $set: agent },
       { upsert: true, new: true }
     );
     upsertedCount++;
   }
+  // Migrate old agent codes to new model names
+  await AiAgent.findOneAndUpdate(
+    { code: "gemini_large" },
+    { $set: { modelName: process.env.GEMINI_DEFAULT_MODEL || "gemini-2.0-flash", name: "Gemini Coding Agent", description: "Coding with Gemini 2.0 Flash" } }
+  );
+  await AiAgent.findOneAndUpdate(
+    { code: "gpt_coding", modelName: "gpt-4-turbo" },
+    { $set: { modelName: process.env.OPENAI_DEFAULT_MODEL || "gpt-4o-mini" } }
+  );
   const allAgents = await AiAgent.find({});
   console.log(`✅ Upserted ${upsertedCount} agents (${allAgents.length} total)`);
 }

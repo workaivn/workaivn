@@ -15,14 +15,38 @@ const activeRuns = new Map();
 
 const FALLBACK_ERROR_KEYWORDS = [
   "network", "timeout", "timed out", "etimedout", "econnrefused", "econnreset",
-  "quota", "rate limit", "rate_limit", "429", "401", "403", "500", "502", "503",
-  "unauthorized", "forbidden", "authentication", "api key", "not configured"
+  "quota", "rate limit", "rate_limit", "429", "401", "403", "404", "408", "409",
+  "400", "500", "502", "503", "504",
+  "unauthorized", "forbidden", "authentication", "api key", "api_key",
+  "not configured", "not set", "model", "does not exist", "no access",
+  "access denied", "empty response", "empty", "no response",
+  "invalid model", "model not found", "not found", "conflict",
+  "server error", "internal server error", "bad request"
 ];
 
 function isFallbackError(message) {
   const lower = String(message ?? "").toLowerCase();
   return FALLBACK_ERROR_KEYWORDS.some(kw => lower.includes(kw));
 }
+
+const FATAL_ERROR_CODES = new Set(["NO_CREDIT", "MODEL_NOT_FOUND"]);
+
+function classifyProviderError(message) {
+  const lower = String(message ?? "").toLowerCase();
+  if (lower.includes("402") || /insufficient.*credit|no.*credit|payment.*required/i.test(lower)) return "NO_CREDIT";
+  if (lower.includes("404") || /model.*not found|does not exist|not found for/i.test(lower)) return "MODEL_NOT_FOUND";
+  if (lower.includes("401") || lower.includes("403") || /unauthorized|forbidden|api.key|api_key|invalid.*key/i.test(lower)) return "BAD_KEY_OR_NO_ACCESS";
+  if (lower.includes("429") || /rate.?limit/i.test(lower)) return "RATE_LIMIT";
+  return "UNKNOWN";
+}
+
+function normalizeTaskType(value) {
+  const upper = String(value || "CODING").toUpperCase();
+  if (["CODING", "ANALYSIS", "SEARCH", "CHAT"].includes(upper)) return upper;
+  return "CODING";
+}
+
+export { isFallbackError, autoGenerateResponse };
 
 async function getAutoFallbackAgents() {
   const agents = await AiAgent.find({
@@ -36,35 +60,74 @@ async function getAutoFallbackAgents() {
 
 const MAX_INVALID_JSON_RETRIES = 2;
 
-async function autoGenerateResponse(messages, fallbackAgents) {
+async function autoGenerateResponse(messages, fallbackAgents, attemptsRef) {
   let invalidJsonCount = 0;
 
   while (fallbackAgents.length > 0) {
     const current = fallbackAgents[0];
     const currentAdapter = providerRegistry.getAdapter(current.providerId.code);
 
+    // Skip unconfigured providers
+    if (!(await currentAdapter.isConfigured())) {
+      const configError = currentAdapter.getConfigError();
+      console.log("[AutoAgent] %s not configured: %s", current.name, configError);
+      attemptsRef.push({
+        provider: current.name,
+        model: current.modelName,
+        status: "skipped",
+        error: configError,
+        timestamp: new Date()
+      });
+      fallbackAgents.shift();
+      invalidJsonCount = 0;
+      console.log("[AutoAgent] fallback to %s", fallbackAgents[0]?.name ?? "(none)");
+      continue;
+    }
+
     try {
       console.log("[AutoAgent] trying %s (%s)", current.name, current.modelName);
       const response = await currentAdapter.run({
         modelName: current.modelName,
         messages,
-        temperature: current.temperature,
+        temperature: 0,
         maxTokens: current.maxTokens
       });
 
       if (!response.success) {
         const errMsg = response.error || "Unknown provider error";
-        console.log("[AutoAgent] failed: %s - %s", current.name, errMsg);
-        if (isFallbackError(errMsg)) {
-          fallbackAgents.shift();
-          invalidJsonCount = 0;
-          console.log("[AutoAgent] fallback to %s", fallbackAgents[0]?.name ?? "(none)");
-          continue;
-        }
-        throw new Error(errMsg);
+        const health = classifyProviderError(errMsg);
+        console.log("[AutoAgent] failed: %s - %s [%s]", current.name, errMsg, health);
+        attemptsRef.push({
+          provider: current.name,
+          model: current.modelName,
+          status: "failed",
+          error: `${errMsg} [${health}]`,
+          timestamp: new Date()
+        });
+        fallbackAgents.shift();
+        invalidJsonCount = 0;
+        console.log("[AutoAgent] fallback to %s", fallbackAgents[0]?.name ?? "(none)");
+        continue;
       }
 
       const text = response.outputText || "";
+
+      // Empty response check
+      if (!text.trim()) {
+        const errMsg = "Empty response from provider";
+        console.log("[AutoAgent] failed: %s - %s", current.name, errMsg);
+        attemptsRef.push({
+          provider: current.name,
+          model: current.modelName,
+          status: "failed",
+          error: errMsg,
+          timestamp: new Date()
+        });
+        fallbackAgents.shift();
+        invalidJsonCount = 0;
+        console.log("[AutoAgent] fallback to %s", fallbackAgents[0]?.name ?? "(none)");
+        continue;
+      }
 
       // Lenient JSON check — if it contains {…} try strict parse; if malformed, switch provider
       const hasObject = text.includes("{") && text.includes("}");
@@ -76,6 +139,13 @@ async function autoGenerateResponse(messages, fallbackAgents) {
             JSON.parse(text.slice(start, end + 1));
           } catch {
             console.log("[AutoAgent] failed: %s - malformed JSON", current.name);
+            attemptsRef.push({
+              provider: current.name,
+              model: current.modelName,
+              status: "failed",
+              error: "Malformed JSON response",
+              timestamp: new Date()
+            });
             fallbackAgents.shift();
             invalidJsonCount = 0;
             console.log("[AutoAgent] fallback to %s", fallbackAgents[0]?.name ?? "(none)");
@@ -83,12 +153,34 @@ async function autoGenerateResponse(messages, fallbackAgents) {
           }
         }
       } else {
-        // No JSON object at all — retry same provider or fallback
+        // No JSON object at all — check for fatal errors before retrying
+        const health = classifyProviderError(text);
+        if (FATAL_ERROR_CODES.has(health)) {
+          console.log("[AutoAgent] failed: %s - fatal error [%s] — skipping immediately", current.name, health);
+          attemptsRef.push({
+            provider: current.name,
+            model: current.modelName,
+            status: "failed",
+            error: `${health}: Non-JSON response with fatal error pattern`,
+            timestamp: new Date()
+          });
+          fallbackAgents.shift();
+          invalidJsonCount = 0;
+          console.log("[AutoAgent] fallback to %s", fallbackAgents[0]?.name ?? "(none)");
+          continue;
+        }
         invalidJsonCount++;
         console.log("[AutoAgent] %s returned non-JSON (attempt %d/%d)",
           current.name, invalidJsonCount, MAX_INVALID_JSON_RETRIES);
         if (invalidJsonCount >= MAX_INVALID_JSON_RETRIES) {
           console.log("[AutoAgent] failed: %s - no JSON after %d attempts", current.name, MAX_INVALID_JSON_RETRIES);
+          attemptsRef.push({
+            provider: current.name,
+            model: current.modelName,
+            status: "failed",
+            error: "No valid JSON after retries",
+            timestamp: new Date()
+          });
           fallbackAgents.shift();
           invalidJsonCount = 0;
           console.log("[AutoAgent] fallback to %s", fallbackAgents[0]?.name ?? "(none)");
@@ -98,21 +190,36 @@ async function autoGenerateResponse(messages, fallbackAgents) {
         continue;
       }
 
+      attemptsRef.push({
+        provider: current.name,
+        model: current.modelName,
+        status: "success",
+        timestamp: new Date()
+      });
       return text;
     } catch (error) {
       const errMsg = error.message || "Unknown error";
       console.log("[AutoAgent] failed: %s - %s", current.name, errMsg);
-      if (isFallbackError(errMsg)) {
-        fallbackAgents.shift();
-        invalidJsonCount = 0;
-        console.log("[AutoAgent] fallback to %s", fallbackAgents[0]?.name ?? "(none)");
-        continue;
-      }
-      throw error;
+      attemptsRef.push({
+        provider: current.name,
+        model: current.modelName,
+        status: "failed",
+        error: errMsg,
+        timestamp: new Date()
+      });
+      fallbackAgents.shift();
+      invalidJsonCount = 0;
+      console.log("[AutoAgent] fallback to %s", fallbackAgents[0]?.name ?? "(none)");
     }
   }
 
-  throw new Error("All AI providers failed");
+  // All providers exhausted — build detailed error
+  const summary = attemptsRef.map(a =>
+    `  ${a.status === "success" ? "✓" : a.status === "skipped" ? "-" : "✗"} ${a.provider} (${a.model}): ${a.status}${a.error ? " - " + a.error : ""}`
+  ).join("\n");
+  const detailed = `All AI providers failed:\n${summary}`;
+  console.log("[AutoAgent] %s", detailed);
+  throw new Error(detailed);
 }
 
 async function executeAgentRun({
@@ -175,6 +282,8 @@ async function executeAgentRun({
   run.workspaceRoot = workspace.rootPath;
   await run.save();
 
+  const autoAttempts = [];
+
   const result = await runAgentLoop({
     messages: [
       { role: "system", content: agent.systemPrompt },
@@ -198,7 +307,7 @@ async function executeAgentRun({
     },
     generateResponse: async ({ messages }) => {
       if (isAutoMode) {
-        return autoGenerateResponse(messages, fallbackAgents);
+        return autoGenerateResponse(messages, fallbackAgents, autoAttempts);
       }
       if (DEBUG()) {
         console.log("[AgentRun] calling provider adapter.run provider=%s model=%s messages=%d",
@@ -207,7 +316,7 @@ async function executeAgentRun({
       const response = await adapter.run({
         modelName: effectiveAgent.modelName,
         messages,
-        temperature: effectiveAgent.temperature,
+        temperature: 0,
         maxTokens: effectiveAgent.maxTokens
       });
 
@@ -254,6 +363,9 @@ async function executeAgentRun({
     final: result.final || "",
     qualityScore: result.qualityGate?.score || 0
   };
+  if (isAutoMode && autoAttempts.length > 0) {
+    run.autoFailover = { attempts: autoAttempts };
+  }
   run.completedAt = new Date();
   await run.save();
 
@@ -430,7 +542,7 @@ export async function createTask(req, res) {
       title,
       inputPrompt,
       normalizedPrompt: normalizedPrompt || inputPrompt,
-      taskType,
+      taskType: normalizeTaskType(taskType),
       status: "draft"
     });
 
@@ -800,7 +912,7 @@ export async function runAgentPrompt(req, res) {
     }
 
     const criteria = buildAcceptanceCriteria(normalizedPrompt);
-    const taskType = criteria.taskType || "coding";
+    const taskType = normalizeTaskType(criteria.taskType || "CODING");
 
     const task = await AgentTask.create({
       title: normalizedPrompt.slice(0, 100),
@@ -987,7 +1099,8 @@ export async function getAgentRun(req, res) {
         errors,
         qualityGate: run.qualityGate || {},
         outputText: run.outputText || "",
-        diffSummary: run.diffSummary || {}
+        diffSummary: run.diffSummary || {},
+        autoFailover: run.autoFailover || null
       }
     });
   } catch (error) {
@@ -1106,7 +1219,7 @@ export async function updateTask(req, res) {
     // Update fields if provided
     if (title) task.title = title;
     if (inputPrompt) task.inputPrompt = inputPrompt;
-    if (taskType) task.taskType = taskType;
+    if (taskType) task.taskType = normalizeTaskType(taskType);
     if (normalizedPrompt) task.normalizedPrompt = normalizedPrompt;
 
     await task.save();
