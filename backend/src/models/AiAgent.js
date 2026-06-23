@@ -54,6 +54,10 @@ const AiAgentSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
       index: true
+    },
+    priority: {
+      type: Number,
+      default: 0
     }
   },
   {

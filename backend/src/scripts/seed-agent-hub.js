@@ -94,6 +94,7 @@ async function seedAgents(providerMap) {
       description: "Advanced coding with GPT-4 Turbo",
       modelName: "gpt-4-turbo",
       agentType: "coding",
+      priority: 20,
       capabilityTags: ["code", "refactor", "debugging", "testing"],
       systemPrompt: `You are an expert software engineer. Your task is to help write, refactor, debug, and test code. Always:
 1. Analyze the problem carefully
@@ -112,6 +113,7 @@ async function seedAgents(providerMap) {
       description: "Large context analysis with Gemini 1.5 Pro",
       modelName: "gemini-1.5-pro",
       agentType: "coding",
+      priority: 30,
       capabilityTags: ["large_context", "analysis", "documentation"],
       systemPrompt: `You are a senior technical architect. Your specialties are:
 1. Analyzing large codebases
@@ -148,6 +150,7 @@ async function seedAgents(providerMap) {
       description: "Cost-effective analysis with OpenRouter",
       modelName: "gpt-3.5-turbo",
       agentType: "coding",
+      priority: 10,
       capabilityTags: ["cost_effective", "quick_analysis"],
       systemPrompt: `You are a practical software developer. Your goal is to:
 1. Provide quick, actionable solutions
@@ -204,6 +207,7 @@ async function seedAgents(providerMap) {
       description: "Local coding with Ollama (qwen2.5-coder:7b)",
       modelName: "qwen2.5-coder:7b",
       agentType: "coding",
+      priority: 40,
       capabilityTags: ["local", "coding", "offline"],
       systemPrompt: `You are an expert software engineer running locally via Ollama.
 1. Analyze the problem carefully
@@ -213,6 +217,20 @@ async function seedAgents(providerMap) {
 5. Always return valid JSON when using agent tools`,
       temperature: 0.5,
       maxTokens: 4096,
+      isActive: true
+    },
+    {
+      providerId: providerMap.get("openai"),
+      name: "Auto Coding Agent",
+      code: "auto_coding",
+      description: "Automatically tries coding agents in priority order with fallback",
+      modelName: "auto",
+      agentType: "coding",
+      priority: 0,
+      capabilityTags: ["auto", "fallback", "coding"],
+      systemPrompt: `You are an expert software engineer. Analyze, modify, and improve code using available tools (READ_FILE, WRITE_FILE, APPLY_PATCH, LIST_FILES, RUN_TERMINAL). Always return valid JSON.`,
+      temperature: 0.5,
+      maxTokens: 4000,
       isActive: true
     }
   ];

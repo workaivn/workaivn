@@ -12,6 +12,108 @@ const DEBUG = () => process.env.DEBUG_AGENT === "true";
 
 const activeRuns = new Map();
 
+const FALLBACK_ERROR_KEYWORDS = [
+  "network", "timeout", "timed out", "etimedout", "econnrefused", "econnreset",
+  "quota", "rate limit", "rate_limit", "429", "401", "403", "500", "502", "503",
+  "unauthorized", "forbidden", "authentication", "api key", "not configured"
+];
+
+function isFallbackError(message) {
+  const lower = String(message ?? "").toLowerCase();
+  return FALLBACK_ERROR_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+async function getAutoFallbackAgents() {
+  const agents = await AiAgent.find({
+    isActive: true,
+    agentType: "coding",
+    code: { $ne: "auto_coding" }
+  }).populate("providerId").sort({ priority: 1 });
+
+  return agents.filter(a => a.providerId && a.providerId.code !== "manual_external");
+}
+
+const MAX_INVALID_JSON_RETRIES = 2;
+
+async function autoGenerateResponse(messages, fallbackAgents) {
+  let invalidJsonCount = 0;
+
+  while (fallbackAgents.length > 0) {
+    const current = fallbackAgents[0];
+    const currentAdapter = providerRegistry.getAdapter(current.providerId.code);
+
+    try {
+      console.log("[AutoAgent] trying %s (%s)", current.name, current.modelName);
+      const response = await currentAdapter.run({
+        modelName: current.modelName,
+        messages,
+        temperature: current.temperature,
+        maxTokens: current.maxTokens
+      });
+
+      if (!response.success) {
+        const errMsg = response.error || "Unknown provider error";
+        console.log("[AutoAgent] failed: %s - %s", current.name, errMsg);
+        if (isFallbackError(errMsg)) {
+          fallbackAgents.shift();
+          invalidJsonCount = 0;
+          console.log("[AutoAgent] fallback to %s", fallbackAgents[0]?.name ?? "(none)");
+          continue;
+        }
+        throw new Error(errMsg);
+      }
+
+      const text = response.outputText || "";
+
+      // Lenient JSON check — if it contains {…} try strict parse; if malformed, switch provider
+      const hasObject = text.includes("{") && text.includes("}");
+      if (hasObject) {
+        const start = text.indexOf("{");
+        const end = text.lastIndexOf("}");
+        if (start !== -1 && end > start) {
+          try {
+            JSON.parse(text.slice(start, end + 1));
+          } catch {
+            console.log("[AutoAgent] failed: %s - malformed JSON", current.name);
+            fallbackAgents.shift();
+            invalidJsonCount = 0;
+            console.log("[AutoAgent] fallback to %s", fallbackAgents[0]?.name ?? "(none)");
+            continue;
+          }
+        }
+      } else {
+        // No JSON object at all — retry same provider or fallback
+        invalidJsonCount++;
+        console.log("[AutoAgent] %s returned non-JSON (attempt %d/%d)",
+          current.name, invalidJsonCount, MAX_INVALID_JSON_RETRIES);
+        if (invalidJsonCount >= MAX_INVALID_JSON_RETRIES) {
+          console.log("[AutoAgent] failed: %s - no JSON after %d attempts", current.name, MAX_INVALID_JSON_RETRIES);
+          fallbackAgents.shift();
+          invalidJsonCount = 0;
+          console.log("[AutoAgent] fallback to %s", fallbackAgents[0]?.name ?? "(none)");
+          continue;
+        }
+        // Retry same provider (messages unchanged)
+        continue;
+      }
+
+      return text;
+    } catch (error) {
+      const errMsg = error.message || "Unknown error";
+      console.log("[AutoAgent] failed: %s - %s", current.name, errMsg);
+      if (isFallbackError(errMsg)) {
+        fallbackAgents.shift();
+        invalidJsonCount = 0;
+        console.log("[AutoAgent] fallback to %s", fallbackAgents[0]?.name ?? "(none)");
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw new Error("All AI providers failed");
+}
+
 async function executeAgentRun({
   task,
   agent,
@@ -20,20 +122,28 @@ async function executeAgentRun({
   continueRun = false,
   continuationFeedback = "",
   abortSignal = null,
-  onEvent = () => {}
+  onEvent = () => {},
+  fallbackAgents = null
 }) {
-  const adapter = providerRegistry.getAdapter(agent.providerId.code);
+  const isAutoMode = Array.isArray(fallbackAgents) && fallbackAgents.length > 0;
+  let effectiveAgent = agent;
+
+  if (isAutoMode) {
+    effectiveAgent = fallbackAgents[0];
+  }
+
+  const adapter = providerRegistry.getAdapter(effectiveAgent.providerId.code);
 
   if (DEBUG()) {
     console.log("[AgentRun] executeAgentRun agent=%s (%s) provider=%s model=%s",
-      agent.name, agent.code, agent.providerId.code, agent.modelName);
+      effectiveAgent.name, effectiveAgent.code, effectiveAgent.providerId.code, effectiveAgent.modelName);
     console.log("[AgentRun] workspace id=%s rootPath=%s sourceType=%s",
       workspace.id, workspace.rootPath, workspace.sourceType);
-    console.log("[AgentRun] run=%s task=%s continue=%s",
-      run._id, task._id, continueRun);
+    console.log("[AgentRun] run=%s task=%s continue=%s autoMode=%s",
+      run._id, task._id, continueRun, isAutoMode);
   }
 
-  if (agent.providerId.type === "manual" || agent.providerId.code === "manual_external") {
+  if (!isAutoMode && (effectiveAgent.providerId.type === "manual" || effectiveAgent.providerId.code === "manual_external")) {
     const error = "Manual external agents cannot execute Coding Agent tools or persist workspace changes";
     run.status = "error";
     run.errorMessage = error;
@@ -47,7 +157,7 @@ async function executeAgentRun({
     return { success: false, error, run };
   }
 
-  const isConfigured = await adapter.isConfigured();
+  const isConfigured = isAutoMode ? true : await adapter.isConfigured();
 
   if (!isConfigured) {
     const error = adapter.getConfigError();
@@ -86,15 +196,18 @@ async function executeAgentRun({
       onEvent(event);
     },
     generateResponse: async ({ messages }) => {
+      if (isAutoMode) {
+        return autoGenerateResponse(messages, fallbackAgents);
+      }
       if (DEBUG()) {
         console.log("[AgentRun] calling provider adapter.run provider=%s model=%s messages=%d",
-          agent.providerId.code, agent.modelName, messages.length);
+          effectiveAgent.providerId.code, effectiveAgent.modelName, messages.length);
       }
       const response = await adapter.run({
-        modelName: agent.modelName,
+        modelName: effectiveAgent.modelName,
         messages,
-        temperature: agent.temperature,
-        maxTokens: agent.maxTokens
+        temperature: effectiveAgent.temperature,
+        maxTokens: effectiveAgent.maxTokens
       });
 
       if (!response.success) {
@@ -672,6 +785,19 @@ export async function runAgentPrompt(req, res) {
       });
     }
 
+    const isAutoMode = agent.code === "auto_coding";
+    let fallbackAgents = null;
+
+    if (isAutoMode) {
+      fallbackAgents = await getAutoFallbackAgents();
+      if (fallbackAgents.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "No fallback coding agents available for Auto mode"
+        });
+      }
+    }
+
     const task = await AgentTask.create({
       title: normalizedPrompt.slice(0, 100),
       inputPrompt: normalizedPrompt,
@@ -685,8 +811,8 @@ export async function runAgentPrompt(req, res) {
     const run = await AgentRun.create({
       taskId: task._id,
       agentId: agent._id,
-      providerCode: agent.providerId.code,
-      modelName: agent.modelName,
+      providerCode: isAutoMode ? "auto" : agent.providerId.code,
+      modelName: isAutoMode ? "auto" : agent.modelName,
       inputPrompt: normalizedPrompt,
       workspaceId: workspace.id,
       workspaceRoot: workspace.rootPath,
@@ -710,6 +836,7 @@ export async function runAgentPrompt(req, res) {
         await executeAgentRun({
           task, agent, run, workspace,
           abortSignal: abortController.signal,
+          fallbackAgents: isAutoMode ? [...fallbackAgents] : null,
           onEvent: (event) => {
             if (abortController.signal.aborted) return;
             const update = { $push: { executionEvents: event }, $set: {} };
