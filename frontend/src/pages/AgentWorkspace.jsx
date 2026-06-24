@@ -68,6 +68,8 @@ function ExecutionSummary({ run, onCancel }) {
   ].filter(Boolean);
 
   const isCancellable = isRunning && !isTerminal;
+  const debugEvents = (run.executionEvents || []).filter(ev => ev.type === "debug");
+  const [debugOpen, setDebugOpen] = React.useState(false);
 
   return (
     <section className="execution-summary">
@@ -119,9 +121,26 @@ function ExecutionSummary({ run, onCancel }) {
         <div>
           <h4>Terminal commands</h4>
           {terminalCommands.length
-            ? terminalCommands.map((call, index) => (
-                <code key={`${call.step}-${index}`}>{call.args?.command}</code>
-              ))
+            ? terminalCommands.map((call, index) => {
+                const cmd = call.args?.command || "(unknown)";
+                const ok = !!call.success;
+                const exitCode = call.result?.exitCode;
+                const status = ok ? "OK" : "FAILED";
+                const exitText = (exitCode !== undefined && exitCode !== null) ? ` exit ${exitCode}` : "";
+                const out = String(call.result?.stdout || "").replace(/\s+/g, " ").slice(0, 120);
+                const err = String(call.result?.stderr || "").replace(/\s+/g, " ").slice(0, 120);
+                return (
+                  <div key={`${call.step}-${index}`} className="terminal-call">
+                    <code>{cmd} · {status}{exitText}</code>
+                    {(out || err) && (
+                      <pre className="terminal-preview">
+                        {out ? `STDOUT: ${out}` : ""}
+                        {err ? `${out ? "\n" : ""}STDERR: ${err}` : ""}
+                      </pre>
+                    )}
+                  </div>
+                );
+              })
             : <span className="muted">{isRunning ? "Waiting..." : "None"}</span>}
         </div>
       </div>
@@ -141,6 +160,26 @@ function ExecutionSummary({ run, onCancel }) {
                 <div key={`${failure}-${index}`}>{failure}</div>
               ))
             : <div>All acceptance criteria passed.</div>}
+        </div>
+      )}
+
+      {debugEvents.length > 0 && (
+        <div className="summary-final">
+          <h4>
+            <button type="button" className="btn btn-secondary" onClick={() => setDebugOpen(v => !v)}>
+              {debugOpen ? "Hide" : "Show"} Debug Trace
+            </button>
+          </h4>
+          {debugOpen && (
+            <div className="debug-trace">
+              <div><strong>runId:</strong> {String(run._id || run.id || "")}</div>
+              <div><strong>taskType:</strong> {run.acceptanceCriteria?.taskMode || run.acceptanceCriteria?.taskType || "unknown"}</div>
+              <div><strong>requestedFiles:</strong> {(run.acceptanceCriteria?.requestedFiles || []).join(", ") || "(none)"}</div>
+              {debugEvents.slice(0, 50).map((ev, idx) => (
+                <pre key={idx}>{JSON.stringify(ev, null, 2)}</pre>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
