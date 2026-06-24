@@ -147,12 +147,13 @@ export class OpenAICompatibleProviderAdapter extends AiProviderAdapter {
             ? { model, messages, temperature }
             : { model, messages, temperature, max_tokens: maxTokens };
 
+          const modelTimeout = Number(params?.modelCallTimeout || process.env.WORKAI_MODEL_CALL_TIMEOUT_MS || 90000);
           const response = await axios.post(`${this.baseUrl}/chat/completions`, payload, {
             headers: Object.assign(
               { "Content-Type": "application/json" },
               this.apiKey ? { "Authorization": `Bearer ${this.apiKey}` } : {}
             ),
-            timeout: 180000,
+            timeout: modelTimeout,
             validateStatus: () => true
           });
 

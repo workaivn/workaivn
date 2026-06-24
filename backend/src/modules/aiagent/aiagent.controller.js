@@ -339,15 +339,15 @@ async function executeAgentRun({
     console.log("[AgentRun] selected provider=%s model=%s", agent.providerId.code, agent.modelName);
   }
 
-  // Emergency QA/CHAT fast-path: do not run Coding Agent loop or auto fallback
-  if (taskType === "CHAT") {
+  // Final-only answer mode for QA and CHAT: do not run Coding Agent loop or auto fallback
+  if (criteria.taskMode === "qa" || taskType === "CHAT") {
     // Deterministic one-liner extraction: Reply with exactly one line: X
     const directMatch = /reply\s+with\s+exactly\s+one\s+line\s*:\s*([\s\S]+)/i.exec(run.inputPrompt || "");
     let finalText = "";
     if (directMatch && directMatch[1]) {
       finalText = String(directMatch[1]).split(/\r?\n/)[0].trim();
     } else {
-      // Single provider call (no auto fallback storm), plain chat
+      // Single provider call (no auto fallback storm), plain answer mode
       const response = await adapter.run({
         modelName: effectiveAgent.modelName,
         messages: [{ role: "user", content: run.inputPrompt }],
@@ -416,6 +416,20 @@ async function executeAgentRun({
     return { success: true, error: null, run };
   }
 
+  // Per-intent policy
+  function buildRunPolicy(criteria, providerCode) {
+    const mode = criteria.taskMode || (criteria.taskType === "CHAT" ? "qa" : (criteria.taskType === "CODING" ? "coding" : "read_only"));
+    const isProject = criteria.taskClass === "product_build";
+    if (mode === "qa") return { maxSteps: 1, runTimeoutMs: 60000, modelCallTimeoutMs: 60000, toolTimeoutMs: 120000 };
+    if (isProject) return { maxSteps: 50, runTimeoutMs: 3600000, modelCallTimeoutMs: 180000, toolTimeoutMs: 300000 };
+    if (mode === "coding") return { maxSteps: 30, runTimeoutMs: 3600000, modelCallTimeoutMs: 180000, toolTimeoutMs: 300000 };
+    return { maxSteps: 4, runTimeoutMs: 180000, modelCallTimeoutMs: 90000, toolTimeoutMs: 120000 };
+  }
+  const policy = buildRunPolicy(criteria, agent.providerId.code);
+  // Flag local model mode for simplified single-action prompts
+  policy.localModelMode = ["koboldcpp", "llamacpp", "ollama"].includes(String(agent.providerId.code));
+  run.maxSteps = policy.maxSteps;
+
   const result = await runAgentLoop({
     messages: [
       { role: "system", content: agent.systemPrompt },
@@ -426,12 +440,13 @@ async function executeAgentRun({
     ],
     workspaceId: workspace.id,
     workspaceRoot: run.workspaceRoot,
-    maxSteps: 20,
+    maxSteps: policy.maxSteps,
     acceptanceCriteria: criteria?.objective ? criteria : null,
     initialChangedFiles: continueRun ? run.changedFiles || [] : [],
     initialToolCalls: continueRun ? run.toolCalls || [] : [],
     initialEvents: continueRun ? run.executionEvents || [] : [],
     abortSignal,
+    policy,
     onEvent: (event) => {
       onEvent(event);
     },
@@ -450,7 +465,8 @@ async function executeAgentRun({
           modelName: effectiveAgent.modelName,
           messages,
           temperature: 0,
-          maxTokens: effectiveAgent.maxTokens
+          maxTokens: effectiveAgent.maxTokens,
+          modelCallTimeout: policy.modelCallTimeoutMs
         });
         console.error("[ADAPTER_RESULT]", response);
       } catch (err) {
@@ -499,12 +515,16 @@ async function executeAgentRun({
     sanitizedDiff = await getDiffSummary(workspace.rootPath, sanitizedChanged);
   }
 
+  // Respect needs_continue status for timeouts/continuations
   run.status = result.status === "error"
     ? "error"
-    : result.qualityGate?.passed === true
-      ? "completed"
-      : "needs_revision";
+    : (result.status === "needs_continue"
+      ? "needs_continue"
+      : result.qualityGate?.passed === true
+        ? "completed"
+        : "needs_revision");
   run.outputText = result.final || "";
+  run.stopReason = result.stopReason || run.stopReason || null;
   run.rawResponse = {
     success: result.success,
     error: result.error || null
@@ -1123,6 +1143,17 @@ export async function runAgentPrompt(req, res) {
             const update = { $push: { executionEvents: event }, $set: {} };
             if (event.step !== undefined) update.$set.currentStep = event.step;
             if (event.tool) update.$set.currentTool = event.tool;
+            // Persist snapshots for UI between steps
+            if (event.type === "debug" && event.section === "RUN_STATE") {
+              if (Array.isArray(event.filesRead)) update.$set.filesRead = event.filesRead;
+              if (Array.isArray(event.filesChanged)) update.$set.changedFiles = event.filesChanged;
+              update.$set.patchesApplied = event.patchesApplied ?? undefined;
+              update.$set.terminalCommands = event.terminalCommands ?? undefined;
+              update.$set.outputText = event.finalTextPreview ? String(event.finalTextPreview) : undefined;
+            }
+            if (event.type === "debug" && event.section === "MODEL_RAW_RESPONSE" && event.preview) {
+              update.$set.lastModelResponsePreview = event.preview;
+            }
             if (Object.keys(update.$set).length === 0) delete update.$set;
             AgentRun.findByIdAndUpdate(run._id, update).catch(() => {});
           }
@@ -1170,10 +1201,10 @@ export async function continueAgentRun(req, res) {
       return res.status(404).json({ success: false, message: "Agent run not found" });
     }
 
-    if (!["needs_revision", "error"].includes(run.status)) {
+    if (!["needs_revision", "error", "needs_continue"].includes(run.status)) {
       return res.status(400).json({
         success: false,
-        message: "Only failed or needs_revision runs can be continued"
+        message: "Only failed, needs_revision, or needs_continue runs can be continued"
       });
     }
 
@@ -1242,6 +1273,48 @@ export async function getAgentRun(req, res) {
         .filter(Boolean)
     )];
 
+    const writeOrPatch = (call) => call && call.success !== false && (call.tool === "WRITE_FILE" || call.tool === "APPLY_PATCH");
+    const derivedChanged = [...new Set(
+      toolCalls
+        .filter(writeOrPatch)
+        .map(call => call.result?.file || call.args?.file || call.args?.path)
+        .filter(Boolean)
+    )];
+    const filesChanged = (Array.isArray(run.changedFiles) && run.changedFiles.length) ? run.changedFiles : derivedChanged;
+    const patchesApplied = toolCalls
+      .filter(writeOrPatch)
+      .filter(call => !(call?.result?.blocked === true)) // exclude blocked attempts from applied patches
+      .map(call => {
+        const file = call.result?.file || call.args?.file || call.args?.path;
+        const ok = call.success !== false;
+        const blocked = !!call.result?.blocked;
+        const blockedByPolicy = !!call.result?.blockedByPolicy;
+        const reason = call.result?.reason || call.result?.error || null;
+        // Emit patch UI source diagnostics for each included patch
+        try {
+          console.log("[PATCH_UI_SOURCE]", { source: "api_get_run:patchesApplied", file: file || null, iteration: (call.step ?? null) });
+        } catch {}
+        return { file, ok, blocked, blockedByPolicy, reason, tool: call.tool };
+      })
+      .filter(item => !!item.file);
+
+    // Blocked tool attempts (including blocked write/patch) for separate UI rendering
+    const blockedTools = toolCalls
+      .filter(call => call?.result?.blocked === true)
+      .map(call => {
+        const file = call.result?.file || call.args?.file || call.args?.path || null;
+        const reason = call.result?.reason || call.result?.error || "Blocked";
+        const intentMode = call.result?.intentMode || null;
+        const forbiddenTool = call.result?.forbiddenTool || call.tool;
+        try {
+          console.log("[PATCH_UI_SOURCE]", { source: "api_get_run:blockedTools", file, iteration: (call.step ?? null) });
+        } catch {}
+        return { tool: call.tool, file, reason, intentMode, forbiddenTool };
+      });
+    const terminalCommands = toolCalls
+      .filter(call => call.tool === "RUN_TERMINAL")
+      .map(call => ({ command: call.args?.command || "", ok: call.success !== false }));
+
     const errors = [
       run.errorMessage,
       ...executionEvents
@@ -1256,15 +1329,24 @@ export async function getAgentRun(req, res) {
         status: run.status,
         currentStep: run.currentStep || 0,
         currentTool: run.currentTool || "",
+        maxSteps: run.maxSteps || null,
+        startedAt: run.startedAt || null,
+        completedAt: run.completedAt || null,
+        stopReason: run.stopReason || null,
         filesRead,
-        changedFiles: run.changedFiles || [],
+        changedFiles: filesChanged,
+        filesChanged, // alias for frontend convenience
+        patchesApplied,
+        terminalCommands,
         toolCalls,
         executionEvents,
         errors,
         qualityGate: run.qualityGate || {},
         outputText: run.outputText || "",
         diffSummary: run.diffSummary || {},
-        autoFailover: run.autoFailover || null
+        autoFailover: run.autoFailover || null,
+        patchesApplied,
+        blockedTools
       }
     });
   } catch (error) {

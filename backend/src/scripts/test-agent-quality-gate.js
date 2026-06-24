@@ -82,6 +82,45 @@ async function runTests() {
     expectPass: true
   });
 
+  // A) Read-only analysis pass: question requires analysis, finalText concise
+  tests.push({
+    name: "Read-only analysis pass",
+    input: {
+      acceptanceCriteria: { taskMode: "read_only", requestedFiles: ["qualityGate.js"], objective: "Read qualityGate.js. What is the name of the first function in this file? Do not modify files." },
+      changedFiles: [],
+      toolCalls: [makeReadCall("src/agent/qualityGate.js")],
+      workspaceRoot: ".",
+      finalText: "evaluateQualityGate"
+    },
+    expectPass: true
+  });
+
+  // B) Read-only analysis fail: raw dump
+  tests.push({
+    name: "Read-only analysis fail raw dump",
+    input: {
+      acceptanceCriteria: { taskMode: "read_only", requestedFiles: ["qualityGate.js"], objective: "Read qualityGate.js. What is the name of the first function in this file? Do not modify files." },
+      changedFiles: [],
+      toolCalls: [makeReadCall("src/agent/qualityGate.js")],
+      workspaceRoot: ".",
+      finalText: "--- src/agent/qualityGate.js ---\nfunction foo() { }\n..."
+    },
+    expectPass: false
+  });
+
+  // C) Read-only summary of package name
+  tests.push({
+    name: "Read package.json summary",
+    input: {
+      acceptanceCriteria: { taskMode: "read_only", requestedFiles: ["package.json"], objective: "Read package.json. Show package name. Do not modify files." },
+      changedFiles: [],
+      toolCalls: [makeReadCall("package.json")],
+      workspaceRoot: ".",
+      finalText: "name: ai-saas-backend"
+    },
+    expectPass: true
+  });
+
   let failures = 0;
   for (const t of tests) {
     const out = await evaluateQualityGate(t.input);

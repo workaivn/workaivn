@@ -11,7 +11,8 @@
     "seed:settings": "node src/scripts/seed-settings.js",
     "seed:all": "npm run seed:settings && npm run seed:agents",
     "workai:validate": "node src/scripts/workai-acceptance.js",
-    "test:agent-quality": "node src/scripts/test-agent-quality-gate.js"
+    "test:agent-quality": "node src/scripts/test-agent-quality-gate.js",
+    "test:local-json": "node src/scripts/test-local-agent-json.js"
   },
   "dependencies": {
     "@babel/parser": "^7.27.5",

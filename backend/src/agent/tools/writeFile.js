@@ -36,11 +36,14 @@ export async function writeFileTool({ path, content, activeFiles = [], workspace
       }
 
       if (previousContent === nextContent) {
+        // Idempotent success: already up to date
         return {
-          success: false,
-          error: "WRITE_FILE produced no content change",
+          success: true,
           file: resolved.relativePath,
-          changed: false
+          changed: false,
+          alreadyUpToDate: true,
+          created: false,
+          bytesWritten: Buffer.byteLength(nextContent)
         };
       }
 
@@ -72,7 +75,7 @@ export async function writeFileTool({ path, content, activeFiles = [], workspace
   }
 
   if (String(found.content || "") === nextContent) {
-    return { success: false, error: "WRITE_FILE produced no content change", changed: false };
+    return { success: true, file: found.path || found.name, content: found.content, changed: false, alreadyUpToDate: true };
   }
 
   found.content = nextContent;

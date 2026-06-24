@@ -43,7 +43,7 @@ export function runTerminalTool({ command, workspaceRoot }) {
       normalizedCommand,
       {
         cwd: getWorkspaceRoot(workspaceRoot),
-        timeout: 60000,
+        timeout: Number(process.env.WORKAI_TOOL_TIMEOUT_MS || 120000),
         windowsHide: true,
         maxBuffer: 5 * 1024 * 1024
       },

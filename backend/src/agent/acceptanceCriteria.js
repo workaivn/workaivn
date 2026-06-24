@@ -119,14 +119,16 @@ export function buildAcceptanceCriteria(prompt = "") {
     /\bjust\s+(?:say|answer|reply)\b/i
   ];
   const saysDoNotModify = /\bdo\s+not\s+(?:modify|change|edit|write|create)\b|\bkhông\s+(?:sửa|thay\s*đổi|viết|tạo)\b/i.test(objective);
-  const asksToReadOrExplain = /(\bread\b|\bopen\b|\binspect\b|\bshow\b|\bfind\b|\bexplain\b)/i.test(objective);
-  let taskMode = "coding";
-  if (qaSignals.some(rx => rx.test(objective)) || taskType === "CHAT") {
+  let taskMode;
+  if (taskType === "CODING") {
+    taskMode = "coding";
+  } else if (qaSignals.some(rx => rx.test(objective)) || taskType === "CHAT") {
     taskMode = "qa";
-  } else if (saysDoNotModify && (asksToReadOrExplain || requestedFiles.length > 0 || taskType === "ANALYSIS" || taskType === "SEARCH")) {
+  } else if (saysDoNotModify || taskType === "ANALYSIS" || taskType === "SEARCH") {
     taskMode = "read_only";
   } else {
-    taskMode = taskType === "CODING" ? "coding" : "read_only";
+    // Default to coding to avoid misclassifying write intents that include file names
+    taskMode = "coding";
   }
 
   return {

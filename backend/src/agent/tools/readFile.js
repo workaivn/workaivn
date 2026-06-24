@@ -1,5 +1,6 @@
 import fs from "fs/promises";
-import { resolveWorkspacePathSafe } from "../workspace.js";
+import path from "path";
+import { resolveWorkspacePathSafe, listWorkspaceFiles } from "../workspace.js";
 const DEBUG = () => process.env.DEBUG_AGENT === "true" || process.env.WORKAI_AGENT_DEBUG === "true";
 
 export async function readFileTool({ path, activeFiles = [], workspaceRoot }) {
@@ -14,6 +15,41 @@ export async function readFileTool({ path, activeFiles = [], workspaceRoot }) {
         content
       };
     } catch (error) {
+      // Attempt basename resolution on ENOENT
+      if (error && error.code === "ENOENT") {
+        try {
+          const requestedPath = String(path || "");
+          const base = pathModuleBasename(requestedPath);
+          if (base) {
+            const files = await listWorkspaceFiles(workspaceRoot, { limit: 5000 });
+            const matches = files.filter(fp => fp.split("/").pop().toLowerCase() === base.toLowerCase());
+            if (matches.length === 1) {
+              const resolvedFile = matches[0];
+              const resolved = await resolveWorkspacePathSafe(workspaceRoot, resolvedFile);
+              const content = await fs.readFile(resolved.absolutePath, "utf8");
+              if (DEBUG()) console.log("[READ_FILE][RESOLVED]", { from: requestedPath, to: resolvedFile, length: content.length });
+              return {
+                success: true,
+                file: resolved.relativePath,
+                content,
+                resolved: true,
+                requestedPath: requestedPath,
+                resolvedPath: resolved.relativePath
+              };
+            }
+            if (matches.length > 1) {
+              if (DEBUG()) console.log("[READ_FILE][AMBIGUOUS]", { base, choices: matches.slice(0, 10) });
+              return {
+                success: false,
+                error: `Ambiguous file: ${base} matches ${matches.length} files`,
+                choices: matches
+              };
+            }
+          }
+        } catch (resolveErr) {
+          if (DEBUG()) console.log("[READ_FILE][RESOLVE_ERROR]", { path, error: resolveErr.message });
+        }
+      }
       if (DEBUG()) console.log("[READ_FILE][ERROR]", { path, error: error.message });
       return { success: false, error: error.message };
     }
@@ -36,4 +72,12 @@ export async function readFileTool({ path, activeFiles = [], workspaceRoot }) {
     file: found.path || found.name,
     content: found.content || found.chunks?.map(chunk => chunk.content).join("\n\n") || ""
   };
+}
+
+function pathModuleBasename(p) {
+  try {
+    return path.basename(String(p || "")).replace(/\\/g, "/");
+  } catch {
+    return "";
+  }
 }

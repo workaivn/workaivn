@@ -29,26 +29,50 @@ function classifyLayer(file) {
   return "core";
 }
 
-function isValidationCommand(command) {
-  const cmd = String(command || "");
-  const patterns = [
-    /\b(?:npm|pnpm|yarn)\s+test\b/i,
-    /\b(?:npm|pnpm|yarn)\s+run\s+[A-Za-z0-9:_\-]+\b/i, // accept any script name like check_test
-    // npm run with common silent flags before or after 'run'
-    /\bnpm\s+(?:--silent|-s)\s+run\s+[A-Za-z0-9:_\-]+\b/i,
-    /\bnpm\s+run\s+(?:--silent|-s)\s*[A-Za-z0-9:_\-]+\b/i,
-    // yarn/pnpm allow running scripts without 'run'
-    /\b(?:yarn|pnpm)\s+(?:--silent|-s\s+)?[A-Za-z0-9:_\-]+\b/i,
-    /\bnode\s+--check\b/i,
-    /\bpytest\b/i,
-    /\bpython\s+-m\s+(?:pytest|compileall)\b/i,
-    /\bcargo\s+(?:test|check)\b/i,
-    /\bgo\s+test\b/i,
-    /\bdotnet\s+(?:test|build)\b/i,
-    /\bmvn\s+test\b/i,
-    /\bgradle\w*\s+(?:test|build)\b/i
+function getValidationMatch(command) {
+  const cmd = String(command || "").trim();
+  const rules = [
+    { rule: "npm-test", rx: /^npm\s+(?:--silent|-s\s+)?test\b/i },
+    { rule: "npm-run", rx: /^npm\s+(?:--silent|-s\s+)?run\s+[A-Za-z0-9:_\-]+\b/i },
+    { rule: "npm-build", rx: /^npm\s+(?:--silent|-s\s+)?run\s+build\b/i },
+
+    { rule: "pnpm-test", rx: /^pnpm\s+(?:--silent|-s\s+)?test\b/i },
+    { rule: "pnpm-run", rx: /^pnpm\s+(?:--silent|-s\s+)?run\s+[A-Za-z0-9:_\-]+\b/i },
+    { rule: "pnpm-build", rx: /^pnpm\s+(?:--silent|-s\s+)?build\b/i },
+
+    { rule: "yarn-test", rx: /^yarn\s+(?:--silent|-s\s+)?test\b/i },
+    { rule: "yarn-run", rx: /^yarn\s+(?:--silent|-s\s+)?run\s+[A-Za-z0-9:_\-]+\b/i },
+    { rule: "yarn-build", rx: /^yarn\s+(?:--silent|-s\s+)?build\b/i },
+
+    { rule: "node-check", rx: /\bnode\s+--check\b/i },
+    { rule: "node-file", rx: /^node\s+[^\s]+\.m?js\b/i },
+
+    { rule: "python-script", rx: /^python\s+[^-\s][^\n]*\.py\b/i },
+    { rule: "python3-script", rx: /^python3\s+[^-\s][^\n]*\.py\b/i },
+    { rule: "pytest", rx: /\bpytest\b/i },
+    { rule: "python-m-pytest", rx: /^python\s+-m\s+pytest\b/i },
+
+    { rule: "cargo-test", rx: /\bcargo\s+test\b/i },
+    { rule: "cargo-check", rx: /\bcargo\s+check\b/i },
+    { rule: "go-test", rx: /\bgo\s+test\b/i },
+    { rule: "dotnet-test", rx: /\bdotnet\s+test\b/i },
+    { rule: "dotnet-build", rx: /\bdotnet\s+build\b/i },
+    { rule: "mvn-test", rx: /\bmvn\s+test\b/i },
+    { rule: "gradle-test", rx: /\bgradle\w*\s+test\b/i },
+    { rule: "gradle-build", rx: /\bgradle\w*\s+build\b/i },
+
+    { rule: "flutter-test", rx: /^flutter\s+test\b/i },
+    { rule: "flutter-analyze", rx: /^flutter\s+analy[sz]e\b/i },
+    { rule: "dart-test", rx: /^dart\s+test\b/i }
   ];
-  return patterns.some(rx => rx.test(cmd));
+  for (const { rule, rx } of rules) {
+    if (rx.test(cmd)) return { matched: true, rule };
+  }
+  return { matched: false, rule: "" };
+}
+
+function isValidationCommand(command) {
+  return getValidationMatch(command).matched;
 }
 
 async function readChangedFileEvidence(workspaceRoot, changedFiles) {
@@ -80,7 +104,11 @@ export async function evaluateQualityGate({
 }) {
   const criteria = acceptanceCriteria || {};
   const taskType = criteria.taskType || "CODING";
-  const mode = criteria.taskMode || (taskType === "CHAT" ? "qa" : (taskType === "CODING" ? "coding" : "read_only"));
+  // Intent-aware mode override
+  let mode = criteria.taskMode || (taskType === "CHAT" ? "qa" : (taskType === "CODING" ? "coding" : "read_only"));
+  const intentMode = String(criteria.intentMode || "");
+  if (intentMode === "READ_ONLY") mode = "read_only";
+  if (intentMode === "WRITE" || intentMode === "WRITE_AND_RUN") mode = "coding";
   if (DEBUG()) {
     const filesRead = toolCalls.filter(call => call.tool === "READ_FILE" && call.success).map(call => call.result?.file || call.args?.path);
     const terminals = toolCalls.filter(call => call.tool === "RUN_TERMINAL");
@@ -112,13 +140,49 @@ export async function evaluateQualityGate({
   // Build successful read set once
   const successfulReads = toolCalls.filter(call => call.tool === "READ_FILE" && call.success);
   const successfulReadPaths = unique(successfulReads.map(call => String(call.result?.file || call.args?.path || "").replace(/\\/g, "/").toLowerCase())).filter(Boolean);
+  const successfulReadBasenames = successfulReadPaths.map(p => p.split("/").pop());
 
   // ── READ_ONLY mode: require requested files were read and final text exists ──
   if (mode === "read_only") {
     const required = (criteria.requestedFiles || []).map(f => String(f || "").replace(/\\/g, "/").toLowerCase()).filter(Boolean);
-    const missing = required.filter(f => !successfulReadPaths.includes(f));
+    const missing = required.filter(f => {
+      // If requester provided a path with slashes, require exact path read
+      if (f.includes("/")) return !successfulReadPaths.includes(f);
+      // Otherwise, accept by basename match
+      return !successfulReadBasenames.includes(f);
+    });
     const nonEmptyFinal = !!String(finalText || "").trim();
-    const passed = missing.length === 0 && nonEmptyFinal;
+    // Detect raw dump: starts with --- <file> --- and includes code-like content
+    const normalizedFinal = String(finalText || "");
+    const startsWithDumpHeader = /^---\s+[^\n]+\s+---/i.test(normalizedFinal.trim());
+    const looksLikeCode = /\b(function\b|class\b|import\b|\{[\s\S]*\}|=>)/.test(normalizedFinal);
+    const isRawDump = startsWithDumpHeader && looksLikeCode;
+    const objectiveText = String(criteria.objective || "");
+    const questionWords = /\b(what|why|how|find|explain|identify|name|count)\b/i.test(objectiveText);
+    let answersObjective = true;
+    // Specific validator: package name questions must include the actual package name from package.json
+    const asksPackageName = /\b(package\s+name|show\s+package\s+name|what\s+is\s+the\s+package\s+name)\b/i.test(objectiveText);
+    if (asksPackageName) {
+      // Find a read package.json and parse name
+      let pkgName = "";
+      for (const call of successfulReads) {
+        const p = String(call.result?.file || call.args?.path || "").replace(/\\/g, "/").toLowerCase();
+        if (/(^|\/)package\.json$/.test(p)) {
+          try {
+            const content = call.result?.content || call.result?.contentPreview || "";
+            const json = JSON.parse(content || "{}");
+            if (typeof json?.name === 'string' && json.name.trim()) {
+              pkgName = json.name.trim();
+            }
+          } catch {}
+          break;
+        }
+      }
+      if (pkgName) {
+        answersObjective = String(finalText || "").toLowerCase().includes(pkgName.toLowerCase());
+      }
+    }
+    const passed = missing.length === 0 && nonEmptyFinal && (!questionWords || !isRawDump) && answersObjective;
     const out = {
       passed,
       evaluatedAt: new Date(),
@@ -126,12 +190,16 @@ export async function evaluateQualityGate({
       checks: [
         { id: "requested_files_read", passed: missing.length === 0, message: missing.length ? `Missing reads: ${missing.join(", ")}` : "All requested files were read." },
         { id: "final_present", passed: nonEmptyFinal, message: "Final answer must be present." },
-        { id: "no_file_changes", passed: changedFiles.length === 0, message: changedFiles.length ? "No file modifications allowed for read-only tasks." : "No files were modified." }
+        { id: "no_file_changes", passed: changedFiles.length === 0, message: changedFiles.length ? "No file modifications allowed for read-only tasks." : "No files were modified." },
+        { id: "not_raw_dump", passed: !isRawDump, message: isRawDump ? "Final answer is raw file dump, not analysis." : "Final is not a raw dump." },
+        { id: "answers_objective", passed: answersObjective, message: answersObjective ? "Final answers the requested question." : "Final does not answer the question (e.g., missing package name)." }
       ],
       failures: passed ? [] : [
         ...(missing.length ? [`Requested files not read: ${missing.join(", ")}`] : []),
         ...(nonEmptyFinal ? [] : ["No final text"]),
-        ...(changedFiles.length ? ["Files changed in read-only task"] : [])
+        ...(changedFiles.length ? ["Files changed in read-only task"] : []),
+        ...(isRawDump ? ["Final answer is raw file dump, not analysis."] : []),
+        ...(!answersObjective ? ["Final does not answer the requested question."] : [])
       ],
       feedback: passed ? "Quality gate passed." : "Quality gate failed: ensure requested files are read and provide a final answer.",
       evidence: {
@@ -200,18 +268,31 @@ export async function evaluateQualityGate({
     // Determine if objective explicitly requests terminal validation
     const objective = String(criteria.objective || "");
     const objectiveRequiresTerminal = /\b(?:npm|pnpm|yarn|node|pytest|go\s+test|cargo\s+(?:test|check)|dotnet|mvn|gradle|build|test|run)\b/i.test(objective);
-
+    // Stricter rule: if meaningful files changed in coding mode, require a successful validation command
+    // Read-only/analysis are handled above and never reach this branch
     const meaningfulChanged = meaningfulFiles.length > 0;
+    const mustValidate = meaningfulChanged || intentMode === "WRITE_AND_RUN" || objectiveRequiresTerminal;
+
+    // Accept idempotent write success
+    const hasAlreadyUpToDate = toolCalls.some(call => call.tool === "WRITE_FILE" && call.success && call.result && call.result.alreadyUpToDate === true);
+
     check(
       "workspace_changes",
-      meaningfulChanged,
+      meaningfulChanged || hasAlreadyUpToDate,
       "No meaningful source files were changed.",
       meaningfulFiles
     );
 
+    // Emit VALIDATION_MATCH debug for each terminal command
+    const validationMatches = terminalCalls.map(c => {
+      const cmd = c.args?.command || "";
+      const m = getValidationMatch(cmd);
+      console.log("[VALIDATION_MATCH]", { command: cmd, matched: m.matched, rule: m.rule });
+      return { command: cmd, matched: m.matched, rule: m.rule };
+    });
+
     let validationMessage = "Run at least one successful validation command from the workspace root.";
-    // Enforce validation for all CODING tasks regardless of criteria flag
-    if (successfulCommands.length === 0) {
+    if (mustValidate && successfulCommands.length === 0) {
       const recognized = terminalCalls.filter(c => isValidationCommand(c.args?.command));
       const preview = (s) => String(s || "").replace(/\s+/g, " ").slice(0, 120);
       if (terminalCalls.length > 0) {
@@ -233,12 +314,14 @@ export async function evaluateQualityGate({
         validationMessage = `${validationMessage}\n${lines.join("\n")}`;
       }
     }
-    check(
-      "validation_command",
-      successfulCommands.length > 0,
-      validationMessage,
-      successfulCommands.map(call => call.args?.command)
-    );
+    if (mustValidate) {
+      check(
+        "validation_command",
+        successfulCommands.length > 0,
+        validationMessage,
+        successfulCommands.map(call => call.args?.command)
+      );
+    }
 
     check(
       "patch_validation",
@@ -251,6 +334,17 @@ export async function evaluateQualityGate({
         failed: failedValidations.map(call => call.args?.file)
       }
     );
+
+    // Guard: claimed change in final text without evidence
+    const claimsChange = /\b(changed|modified|updated|patched|added)\b/i.test(String(finalText || ""));
+    check(
+      "claimed_change_without_evidence",
+      !claimsChange || meaningfulFiles.length > 0,
+      "Final claims a change but no changed files were detected.",
+    );
+    if (claimsChange && meaningfulFiles.length === 0 && DEBUG()) {
+      console.warn("[CLAIMED_CHANGE_WITHOUT_EVIDENCE]");
+    }
   }
 
   const placeholders = (criteria.forbiddenPlaceholders || [])
@@ -330,6 +424,26 @@ export async function evaluateQualityGate({
       layers
     }
   };
+  // Print QUALITY_GATE_REASONING for diagnostics
+  try {
+    const filesRead = unique(successfulReads.map(call => call.result?.file || call.args?.path));
+    const terminalCommands = terminalCalls.map(call => call.args?.command).filter(Boolean);
+    const matchedValidationCommands = terminalCommands.filter(cmd => getValidationMatch(cmd).matched);
+    const reasoning = {
+      taskType,
+      taskClass: criteria.taskClass || null,
+      taskMode: mode,
+      requiresWorkspaceChange: !!criteria.requiresWorkspaceChange,
+      requiresValidationCommand: !!criteria.requiresValidationCommand,
+      requiresFileRead: !!criteria.requiresFileRead,
+      changedFiles,
+      filesRead,
+      terminalCommands,
+      matchedValidationCommands,
+      finalTextLength: String(finalText || "").length
+    };
+    console.log("[QUALITY_GATE_REASONING]", reasoning);
+  } catch {}
   if (DEBUG()) console.log("[QUALITY_GATE][OUTPUT]", { passed: out.passed, score: out.score, failures: out.failures });
   return out;
 }

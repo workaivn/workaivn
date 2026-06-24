@@ -25,6 +25,10 @@ function applyExactPatch(original, find, replace) {
 }
 
 export async function applyPatchTool({ file, find, replace, activeFiles = [], workspaceRoot }) {
+  // Validate arguments early to avoid EISDIR or cryptic errors
+  if (!String(file || "").trim() || !String(find || "").trim() || !String(replace || "").trim()) {
+    return { success: false, error: "INVALID_PATCH_ARGUMENTS", changed: false };
+  }
   if (workspaceRoot) {
     try {
       const resolved = await resolveWorkspacePathSafe(workspaceRoot, file);

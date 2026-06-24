@@ -36,6 +36,10 @@ const tools = {
   
   APPLY_PATCH: applyPatchTool,
 
+  CREATE_FILE: createFileTool,
+
+  DELETE_FILE: deleteFileTool,
+
 	SEARCH_SYMBOL:
 	  searchSymbolTool,
 
@@ -86,3 +90,8 @@ export async function executeTool(
   }
 
 }
+import { createFileTool }
+  from "./tools/createFile.js";
+
+import { deleteFileTool }
+  from "./tools/deleteFile.js";
