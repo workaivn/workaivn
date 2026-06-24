@@ -49,7 +49,7 @@ function ExecutionSummary({ run, onCancel }) {
   if (!run) return null;
 
   const isRunning = run.status === "running" || run.status === "queued" || run.status === "pending";
-  const isTerminal = ["completed", "error", "needs_revision", "cancelled"].includes(run.status);
+  const isTerminal = ["completed", "error", "needs_revision", "cancelled", "needs_continue"].includes(run.status);
   const toolCalls = run.toolCalls || [];
   const executionEvents = run.executionEvents || [];
   const filesRead = [...new Set(
@@ -58,7 +58,29 @@ function ExecutionSummary({ run, onCancel }) {
       .map(call => call.args?.path || call.result?.file)
       .filter(Boolean)
   )];
-  const patches = toolCalls.filter(call => call.tool === "APPLY_PATCH");
+  // Prefer backend-provided patchesApplied; fallback to derive from toolCalls
+  const patches = Array.isArray(run.patchesApplied) && run.patchesApplied.length
+    ? run.patchesApplied
+    : toolCalls
+        .filter(call => (call.tool === "APPLY_PATCH" || call.tool === "WRITE_FILE") && !(call?.result?.blocked))
+        .map(call => ({
+          file: call.result?.file || call.args?.file || call.args?.path || "(unknown)",
+          ok: call.success !== false,
+          blocked: !!call?.result?.blocked,
+          blockedByPolicy: !!call?.result?.blockedByPolicy,
+          reason: call?.result?.reason || call?.result?.error || null,
+          tool: call.tool
+        }));
+  const blockedTools = Array.isArray(run.blockedTools)
+    ? run.blockedTools
+    : toolCalls
+        .filter(call => call?.result?.blocked)
+        .map(call => ({
+          tool: call.tool,
+          file: call.result?.file || call.args?.file || call.args?.path || "",
+          reason: call?.result?.reason || call?.result?.error || "Blocked",
+          intentMode: call?.result?.intentMode || null
+        }));
   const terminalCommands = toolCalls.filter(call => call.tool === "RUN_TERMINAL");
   const errors = [
     run.errorMessage,
@@ -68,22 +90,30 @@ function ExecutionSummary({ run, onCancel }) {
   ].filter(Boolean);
 
   const isCancellable = isRunning && !isTerminal;
+  const canContinue = ["needs_continue", "needs_revision", "error"].includes(run.status);
   const debugEvents = (run.executionEvents || []).filter(ev => ev.type === "debug");
   const [debugOpen, setDebugOpen] = React.useState(false);
+  const taskMode = run.acceptanceCriteria?.taskMode || run.acceptanceCriteria?.taskType || "";
+  const isCodingTask = String(taskMode).toLowerCase() === "coding" || String(taskMode).toUpperCase() === "CODING";
 
   return (
     <section className="execution-summary">
-      <div className="summary-heading">
-        <h3>Agent result</h3>
-        <div className="summary-heading-actions">
-          <span className={`run-badge status-${run.status}`}>{run.status}</span>
-          {isCancellable && (
-            <button type="button" className="btn btn-cancel" onClick={onCancel}>
-              Cancel
-            </button>
-          )}
+        <div className="summary-heading">
+          <h3>Agent result</h3>
+          <div className="summary-heading-actions">
+            <span className={`run-badge status-${run.status}`}>{run.status}</span>
+            {isCancellable && (
+              <button type="button" className="btn btn-cancel" onClick={onCancel}>
+                Cancel
+              </button>
+            )}
+            {!isRunning && canContinue && (
+              <button type="button" className="btn" onClick={() => onCancel && window.dispatchEvent(new CustomEvent("WORKAI_CONTINUE_RUN"))}>
+                Continue run
+              </button>
+            )}
+          </div>
         </div>
-      </div>
 
       {isRunning && (
         <div className="running-indicator">
@@ -104,20 +134,34 @@ function ExecutionSummary({ run, onCancel }) {
         </div>
         <div>
           <h4>Files changed</h4>
-          {run.changedFiles?.length
-            ? run.changedFiles.map(file => <code key={file}>{file}</code>)
+          {(run.filesChanged && run.filesChanged.length ? run.filesChanged : run.changedFiles || []).length
+            ? (run.filesChanged && run.filesChanged.length ? run.filesChanged : run.changedFiles).map(file => <code key={file}>{file}</code>)
             : <span className="muted">{isRunning ? "No changes yet" : "None"}</span>}
         </div>
         <div>
           <h4>Patches applied</h4>
           {patches.length
-            ? patches.map((call, index) => (
-                <code key={`${call.step}-${index}`}>
-                  {call.args?.file} · {call.success ? "OK" : "Failed"}
-                </code>
-              ))
+            ? patches.map((patch, index) => {
+                const file = patch.file || "(unknown)";
+                const label = patch.blocked ? "Blocked by policy" : (patch.ok ? "OK" : "Failed");
+                return (
+                  <code key={`${file}-${index}`}>
+                    {file} · {label}
+                  </code>
+                );
+              })
             : <span className="muted">{isRunning ? "Waiting..." : "None"}</span>}
         </div>
+        {blockedTools.length > 0 && (
+          <div>
+            <h4>Blocked tool attempts</h4>
+            {blockedTools.map((blk, idx) => (
+              <code key={`${blk.tool}-${blk.file}-${idx}`}>
+                {blk.tool} {blk.file ? blk.file + " · " : ""}blocked by {blk.intentMode || "policy"}
+              </code>
+            ))}
+          </div>
+        )}
         <div>
           <h4>Terminal commands</h4>
           {terminalCommands.length
@@ -187,7 +231,7 @@ function ExecutionSummary({ run, onCancel }) {
         <div className="summary-final">
           <h4>Final summary</h4>
           <pre>{run.outputText || run.executionSummary?.final || "No summary."}</pre>
-          {run.diffSummary?.stat && <pre className="diff-stat">{run.diffSummary.stat}</pre>}
+          {isCodingTask && run.diffSummary?.stat && <pre className="diff-stat">{run.diffSummary.stat}</pre>}
         </div>
       )}
     </section>
@@ -460,6 +504,26 @@ export default function AgentWorkspace() {
       setError(err.response?.data?.message || err.message);
     }
   }
+
+  useEffect(() => {
+    async function handleContinue() {
+      const runId = pollingRunIdRef.current || (run && (run.id || run._id));
+      if (!runId) return;
+      try {
+        setLoading(true);
+        await axios.post(`${API_URL}/api/ai/runs/${runId}/continue`);
+        setError("");
+        // Resume polling immediately
+        startPolling(runId);
+      } catch (err) {
+        setLoading(false);
+        setError(err.response?.data?.message || err.message);
+      }
+    }
+    function onEvt() { handleContinue(); }
+    window.addEventListener("WORKAI_CONTINUE_RUN", onEvt);
+    return () => window.removeEventListener("WORKAI_CONTINUE_RUN", onEvt);
+  }, [run]);
 
   async function runAgent() {
     if (!selectedWorkspaceId) {
