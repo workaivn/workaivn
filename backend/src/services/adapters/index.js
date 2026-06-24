@@ -36,7 +36,7 @@ class ProviderRegistry {
     // OpenAI-compatible providers (all share the same adapter class)
     const openaiCompatibleCodes = [
       "groq", "deepseek", "together", "fireworks", "mistral",
-      "cerebras", "perplexity", "xai", "openai_compatible"
+      "cerebras", "perplexity", "xai", "koboldcpp", "llamacpp", "openai_compatible"
     ];
     for (const code of openaiCompatibleCodes) {
       this.adapters.set(code, new OpenAICompatibleProviderAdapter(code));

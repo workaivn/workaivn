@@ -112,7 +112,7 @@ async function autoGenerateResponse(messages, fallbackAgents, attemptsRef) {
         continue;
       }
 
-      const text = response.outputText || "";
+      const text = response.output || response.content || response.text || response.outputText || "";
 
       // Empty response check
       if (!text.trim()) {
@@ -282,7 +282,26 @@ async function executeAgentRun({
   run.completedAt = null;
   run.workspaceId = workspace.id;
   run.workspaceRoot = workspace.rootPath;
+  // Reset fields to prevent stale data from previous runs
+  run.outputText = "";
+  run.errorMessage = null;
+  run.changedFiles = [];
+  run.toolCalls = [];
+  run.executionEvents = [];
+  run.diffSummary = { stat: "", numstat: "" };
   await run.save();
+
+  if (process.env.DEBUG_AGENT === "true" || process.env.WORKAI_AGENT_DEBUG === "true") {
+    console.log("[RUN START]", {
+      runId: String(run._id),
+      provider: effectiveAgent.providerId.code,
+      model: effectiveAgent.modelName,
+      workspaceRoot: workspace.rootPath,
+      originalPrompt: run.inputPrompt,
+      promptLength: (run.inputPrompt || "").length,
+      timestamp: new Date().toISOString()
+    });
+  }
 
   const autoAttempts = [];
 
@@ -320,7 +339,7 @@ async function executeAgentRun({
     console.log("[AgentRun] selected provider=%s model=%s", agent.providerId.code, agent.modelName);
   }
 
-  // Emergency CHAT fast-path: do not run Coding Agent loop or auto fallback
+  // Emergency QA/CHAT fast-path: do not run Coding Agent loop or auto fallback
   if (taskType === "CHAT") {
     // Deterministic one-liner extraction: Reply with exactly one line: X
     const directMatch = /reply\s+with\s+exactly\s+one\s+line\s*:\s*([\s\S]+)/i.exec(run.inputPrompt || "");
@@ -350,7 +369,7 @@ async function executeAgentRun({
         await run.save();
         return { success: false, error: run.errorMessage, run };
       }
-      finalText = String(response.outputText || "").trim();
+      finalText = String(response.output || response.content || response.text || response.outputText || "").trim();
     }
 
     run.status = "completed";
@@ -376,6 +395,24 @@ async function executeAgentRun({
     };
     run.completedAt = new Date();
     await run.save();
+    if (process.env.DEBUG_AGENT === "true" || process.env.WORKAI_AGENT_DEBUG === "true") {
+      const toolCalls = run.toolCalls || [];
+      const filesRead = [...new Set(
+        toolCalls.filter(c => c.tool === "READ_FILE" && c.success !== false).map(c => c.args?.path || c.result?.file).filter(Boolean)
+      )];
+      const patches = toolCalls.filter(c => c.tool === "APPLY_PATCH");
+      const terminals = toolCalls.filter(c => c.tool === "RUN_TERMINAL");
+      console.log("[RESPONSE TO FRONTEND]", {
+        runId: String(run._id),
+        status: run.status,
+        filesRead: filesRead.length,
+        filesChanged: (run.changedFiles || []).length,
+        patchesApplied: patches.length,
+        terminalCommands: terminals.length,
+        finalPreview: String(run.outputText || "").slice(0, 1000),
+        qualityGate: { score: run.qualityGate?.score || 0, failures: run.qualityGate?.failures || [] }
+      });
+    }
     return { success: true, error: null, run };
   }
 
@@ -407,20 +444,32 @@ async function executeAgentRun({
         console.log("[AgentRun] calling provider adapter.run provider=%s model=%s messages=%d",
           effectiveAgent.providerId.code, effectiveAgent.modelName, messages.length);
       }
-      const response = await adapter.run({
-        modelName: effectiveAgent.modelName,
-        messages,
-        temperature: 0,
-        maxTokens: effectiveAgent.maxTokens
-      });
+      let response;
+      try {
+        response = await adapter.run({
+          modelName: effectiveAgent.modelName,
+          messages,
+          temperature: 0,
+          maxTokens: effectiveAgent.maxTokens
+        });
+        console.error("[ADAPTER_RESULT]", response);
+      } catch (err) {
+        console.error("[AgentRun] provider error:", err?.response?.data || err?.response?.status || err?.message || err);
+        throw err;
+      }
 
       if (!response.success) {
-        if (DEBUG()) console.log("[AgentRun] provider error: %s", response.error);
+        const error = response?.errorDetails || response;
+        console.error(
+          "[AgentRun] provider error:",
+          error?.response?.data || error?.response?.status || error?.message || error
+        );
         throw new Error(response.error || "AI provider execution failed");
       }
 
-      if (DEBUG()) console.log("[AgentRun] provider OK outputLength=%d", response.outputText?.length ?? 0);
-      return response.outputText;
+      const text = response.output || response.content || response.text || response.outputText || "";
+      if (DEBUG()) console.log("[AgentRun] provider OK outputLength=%d", text.length);
+      return text;
     }
   });
 

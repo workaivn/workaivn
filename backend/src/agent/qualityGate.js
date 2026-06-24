@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { resolveWorkspacePathSafe } from "./workspace.js";
+const DEBUG = () => process.env.DEBUG_AGENT === "true" || process.env.WORKAI_AGENT_DEBUG === "true";
 
 const MEANINGFUL_EXTENSIONS = new Set([
   ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
@@ -79,78 +80,79 @@ export async function evaluateQualityGate({
 }) {
   const criteria = acceptanceCriteria || {};
   const taskType = criteria.taskType || "CODING";
-
-  // ── CHAT: always passes ──────────────────────────────
-  if (taskType === "CHAT") {
-    return {
-      passed: true,
-      evaluatedAt: new Date(),
-      score: 100,
-      checks: [{ id: "task_type", passed: true, message: "Chat task — no quality gate required." }],
-      failures: [],
-      feedback: "Quality gate passed.",
-      evidence: { filesChanged: [], filesRead: [], layers: [] }
-    };
+  const mode = criteria.taskMode || (taskType === "CHAT" ? "qa" : (taskType === "CODING" ? "coding" : "read_only"));
+  if (DEBUG()) {
+    const filesRead = toolCalls.filter(call => call.tool === "READ_FILE" && call.success).map(call => call.result?.file || call.args?.path);
+    const terminals = toolCalls.filter(call => call.tool === "RUN_TERMINAL");
+    console.log("[QUALITY_GATE][INPUT]", {
+      mode,
+      taskType,
+      requestedFiles: criteria.requestedFiles || [],
+      filesRead,
+      changedFiles,
+      terminalCommands: terminals.map(c => ({ cmd: c.args?.command, success: c.success }))
+    });
   }
 
-  // ── SEARCH / ANALYSIS: pass if final answer exists and no files changed ──
-  if ((taskType === "SEARCH" || taskType === "ANALYSIS") && changedFiles.length === 0 && finalText) {
-    const successfulReads = toolCalls.filter(call => call.tool === "READ_FILE" && call.success);
-    return {
-      passed: true,
+  // ── QA mode: final text required only ────────────────
+  if (mode === "qa") {
+    const out = {
+      passed: !!String(finalText || "").trim(),
       evaluatedAt: new Date(),
-      score: 100,
+      score: String(finalText || "").trim() ? 100 : 0,
+      checks: [{ id: "qa_final", passed: !!String(finalText || "").trim(), message: "Final answer must be present." }],
+      failures: String(finalText || "").trim() ? [] : ["No final text"],
+      feedback: String(finalText || "").trim() ? "Quality gate passed." : "No final text",
+      evidence: { filesChanged: [], filesRead: [], layers: [] }
+    };
+    if (DEBUG()) console.log("[QUALITY_GATE][OUTPUT]", { passed: out.passed, score: out.score, failures: out.failures });
+    return out;
+  }
+
+  // Build successful read set once
+  const successfulReads = toolCalls.filter(call => call.tool === "READ_FILE" && call.success);
+  const successfulReadPaths = unique(successfulReads.map(call => String(call.result?.file || call.args?.path || "").replace(/\\/g, "/").toLowerCase())).filter(Boolean);
+
+  // ── READ_ONLY mode: require requested files were read and final text exists ──
+  if (mode === "read_only") {
+    const required = (criteria.requestedFiles || []).map(f => String(f || "").replace(/\\/g, "/").toLowerCase()).filter(Boolean);
+    const missing = required.filter(f => !successfulReadPaths.includes(f));
+    const nonEmptyFinal = !!String(finalText || "").trim();
+    const passed = missing.length === 0 && nonEmptyFinal;
+    const out = {
+      passed,
+      evaluatedAt: new Date(),
+      score: passed ? 100 : 0,
       checks: [
-        { id: "task_type", passed: true, message: `${taskType} task — pass if no files changed and answer exists.` },
-        { id: "no_file_changes", passed: true, message: "No files were modified." }
+        { id: "requested_files_read", passed: missing.length === 0, message: missing.length ? `Missing reads: ${missing.join(", ")}` : "All requested files were read." },
+        { id: "final_present", passed: nonEmptyFinal, message: "Final answer must be present." },
+        { id: "no_file_changes", passed: changedFiles.length === 0, message: changedFiles.length ? "No file modifications allowed for read-only tasks." : "No files were modified." }
       ],
-      failures: [],
-      feedback: "Quality gate passed.",
+      failures: passed ? [] : [
+        ...(missing.length ? [`Requested files not read: ${missing.join(", ")}`] : []),
+        ...(nonEmptyFinal ? [] : ["No final text"]),
+        ...(changedFiles.length ? ["Files changed in read-only task"] : [])
+      ],
+      feedback: passed ? "Quality gate passed." : "Quality gate failed: ensure requested files are read and provide a final answer.",
       evidence: {
         filesRead: unique(successfulReads.map(call => call.result?.file || call.args?.path)),
         filesChanged: [],
         layers: []
       }
     };
+    if (DEBUG()) console.log("[QUALITY_GATE][OUTPUT]", { passed: out.passed, score: out.score, failures: out.failures });
+    return out;
   }
 
-  // ── Behavior-based read-only pass for CODING prompts that only read ──
-  // If the run performed only reads (no write/patch tools), produced a final answer,
-  // and changedFiles is empty, treat it as a read-only task and pass.
-  {
-    const successfulReads = toolCalls.filter(call => call.tool === "READ_FILE" && call.success);
-    const writeToolUsed = toolCalls.some(call => call && (call.tool === "WRITE_FILE" || call.tool === "APPLY_PATCH"));
-    const isReadOnlyBehavior = !writeToolUsed && successfulReads.length > 0 && changedFiles.length === 0 && !!String(finalText || "").trim();
-    if (isReadOnlyBehavior) {
-      return {
-        passed: true,
-        evaluatedAt: new Date(),
-        score: 100,
-        checks: [
-          { id: "behavior_read_only", passed: true, message: "Read-only behavior detected: successful READ_FILE, no writes, non-empty final." },
-          { id: "no_file_changes", passed: true, message: "No files were modified." }
-        ],
-        failures: [],
-        feedback: "Quality gate passed.",
-        evidence: {
-          filesRead: unique(successfulReads.map(call => call.result?.file || call.args?.path)),
-          filesChanged: [],
-          layers: []
-        }
-      };
-    }
-  }
+  // Remove behavior-based pass: explicit modes now handle read-only logic
 
   const meaningfulFiles = unique(changedFiles).filter(isMeaningfulFile);
-  const successfulReads = toolCalls.filter(call => call.tool === "READ_FILE" && call.success);
+  // successfulReads already computed above
   const successfulToolCalls = toolCalls.filter(call =>
     call.success && ["READ_FILE", "LIST_FILES", "SEARCH_FILES"].includes(call.tool)
   );
-  const successfulCommands = toolCalls.filter(call =>
-    call.tool === "RUN_TERMINAL" &&
-    call.success &&
-    isValidationCommand(call.args?.command)
-  );
+  const terminalCalls = toolCalls.filter(call => call.tool === "RUN_TERMINAL");
+  const successfulCommands = terminalCalls.filter(call => call.success && isValidationCommand(call.args?.command));
   const successfulValidations = toolCalls.filter(call => call.tool === "VALIDATE_PATCH" && call.success);
   const failedValidations = toolCalls.filter(call => call.tool === "VALIDATE_PATCH" && !call.success);
   const packageJsonInspected = successfulReads.some(call =>
@@ -194,33 +196,47 @@ export async function evaluateQualityGate({
   }
 
   // ── CODING: existing strict checks ────────────────────
-  if (taskType === "CODING" || taskType === "product_build") {
+  if (mode === "coding" || taskType === "product_build") {
     // Determine if objective explicitly requests terminal validation
     const objective = String(criteria.objective || "");
     const objectiveRequiresTerminal = /\b(?:npm|pnpm|yarn|node|pytest|go\s+test|cargo\s+(?:test|check)|dotnet|mvn|gradle|build|test|run)\b/i.test(objective);
 
-    // Determine if write+read verification is satisfied (changed + write + read of changed file + no failed validations + non-empty final)
-    const changedSet = new Set(unique(changedFiles).map(f => String(f || "").replace(/\\/g, "/").toLowerCase()));
-    const writeSucceeded = toolCalls.some(c => c.tool === "WRITE_FILE" && c.success);
-    const readOfChanged = successfulReads.some(r => {
-      const p = String(r.result?.file || r.args?.path || "").replace(/\\/g, "/").toLowerCase();
-      return changedSet.has(p);
-    });
-    const patchOk = failedValidations.length === 0; // if validations exist, none failed
-    const hasChanges = changedSet.size > 0;
-    const nonEmptyFinal = !!String(finalText || "").trim();
-    const allowWriteReadPass = hasChanges && writeSucceeded && readOfChanged && patchOk && nonEmptyFinal && !objectiveRequiresTerminal;
+    const meaningfulChanged = meaningfulFiles.length > 0;
     check(
       "workspace_changes",
-      meaningfulFiles.length > 0 || allowWriteReadPass,
+      meaningfulChanged,
       "No meaningful source files were changed.",
       meaningfulFiles
     );
 
+    let validationMessage = "Run at least one successful validation command from the workspace root.";
+    // Enforce validation for all CODING tasks regardless of criteria flag
+    if (successfulCommands.length === 0) {
+      const recognized = terminalCalls.filter(c => isValidationCommand(c.args?.command));
+      const preview = (s) => String(s || "").replace(/\s+/g, " ").slice(0, 120);
+      if (terminalCalls.length > 0) {
+        const lines = [];
+        if (recognized.length === 0) {
+          for (const c of terminalCalls) {
+            lines.push(`- Not recognized as validation: "${c.args?.command || "(unknown)"}"`);
+          }
+        } else {
+          for (const c of recognized) {
+            const status = c.success ? "OK" : "FAILED";
+            const exit = (c.result?.exitCode !== undefined && c.result?.exitCode !== null) ? ` exit ${c.result.exitCode}` : "";
+            const err = preview(c.result?.stderr);
+            const out = preview(c.result?.stdout);
+            const details = [out ? `STDOUT: ${out}` : "", err ? `STDERR: ${err}` : ""].filter(Boolean).join(" | ");
+            lines.push(`- ${status}${exit}: "${c.args?.command || "(unknown)"}"${details ? ` — ${details}` : ""}`);
+          }
+        }
+        validationMessage = `${validationMessage}\n${lines.join("\n")}`;
+      }
+    }
     check(
       "validation_command",
-      !criteria.requiresValidationCommand || successfulCommands.length > 0 || allowWriteReadPass,
-      "Run at least one successful validation command from the workspace root.",
+      successfulCommands.length > 0,
+      validationMessage,
       successfulCommands.map(call => call.args?.command)
     );
 
@@ -228,7 +244,7 @@ export async function evaluateQualityGate({
       "patch_validation",
       (meaningfulFiles.length > 0 &&
         successfulValidations.length > 0 &&
-        failedValidations.length === 0) || (allowWriteReadPass && failedValidations.length === 0),
+        failedValidations.length === 0),
       "Changed files must pass patch validation.",
       {
         passed: successfulValidations.map(call => call.args?.file),
@@ -295,7 +311,7 @@ export async function evaluateQualityGate({
     );
   }
 
-  return {
+  const out = {
     passed: failures.length === 0,
     evaluatedAt: new Date(),
     score: checks.length
@@ -314,4 +330,6 @@ export async function evaluateQualityGate({
       layers
     }
   };
+  if (DEBUG()) console.log("[QUALITY_GATE][OUTPUT]", { passed: out.passed, score: out.score, failures: out.failures });
+  return out;
 }

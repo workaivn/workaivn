@@ -1,5 +1,6 @@
 import { exec } from "child_process";
 import { getWorkspaceRoot } from "../workspace.js";
+const DEBUG = () => process.env.DEBUG_AGENT === "true" || process.env.WORKAI_AGENT_DEBUG === "true";
 
 export function runTerminalTool({ command, workspaceRoot }) {
   return new Promise(resolve => {
@@ -25,12 +26,15 @@ export function runTerminalTool({ command, workspaceRoot }) {
       blocked.some(pattern => pattern.test(normalizedCommand)) ||
       extraBlocked.some(pattern => pattern.test(normalizedCommand))
     ) {
+      if (DEBUG()) console.log("[RUN_TERMINAL] blocked", { command: normalizedCommand });
       resolve({
         success: false,
         stdout: "",
         stderr: "",
         exitCode: null,
-        error: "Terminal command was blocked by the Coding Agent safety policy"
+        error: "Terminal command was blocked by the Coding Agent safety policy",
+        command: normalizedCommand,
+        cwd: getWorkspaceRoot(workspaceRoot)
       });
       return;
     }
@@ -44,13 +48,17 @@ export function runTerminalTool({ command, workspaceRoot }) {
         maxBuffer: 5 * 1024 * 1024
       },
       (error, stdout, stderr) => {
-        resolve({
+        const result = {
           success: !error,
           stdout: stdout || "",
           stderr: stderr || "",
           exitCode: error?.code ?? 0,
-          error: error?.message || null
-        });
+          error: error?.message || null,
+          command: normalizedCommand,
+          cwd: getWorkspaceRoot(workspaceRoot)
+        };
+        if (DEBUG()) console.log("[RUN_TERMINAL] result", { command: result.command, cwd: result.cwd, exitCode: result.exitCode });
+        resolve(result);
       }
     );
   });

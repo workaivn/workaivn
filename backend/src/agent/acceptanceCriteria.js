@@ -95,10 +95,46 @@ export function buildAcceptanceCriteria(prompt = "") {
   const requiresFileRead = taskType === "ANALYSIS" || taskType === "SEARCH";
   const requiresSearchResult = taskType === "SEARCH";
 
+  // New: Extract explicitly requested files from prompt
+  const requestedFiles = (() => {
+    const files = new Set();
+    const text = objective;
+    const FILE_RX = /\b([A-Za-z0-9_./\\-]+\.(?:json|js|jsx|mjs|cjs|ts|tsx|css|scss|html|md|txt|yml|yaml))\b/gi;
+    let m;
+    while ((m = FILE_RX.exec(text)) !== null) {
+      const fp = m[1]
+        .replace(/\\\\/g, "/")
+        .replace(/\\/g, "/")
+        .replace(/^\.\//, "");
+      files.add(fp);
+    }
+    return [...files];
+  })();
+
+  // New: taskMode classification (qa | read_only | coding)
+  const qaSignals = [
+    /\breply\s+only\b/i,
+    /\bexactly\s+one\s+line\b/i,
+    /\bonly\s+the\s+number\b/i,
+    /\bjust\s+(?:say|answer|reply)\b/i
+  ];
+  const saysDoNotModify = /\bdo\s+not\s+(?:modify|change|edit|write|create)\b|\bkhông\s+(?:sửa|thay\s*đổi|viết|tạo)\b/i.test(objective);
+  const asksToReadOrExplain = /(\bread\b|\bopen\b|\binspect\b|\bshow\b|\bfind\b|\bexplain\b)/i.test(objective);
+  let taskMode = "coding";
+  if (qaSignals.some(rx => rx.test(objective)) || taskType === "CHAT") {
+    taskMode = "qa";
+  } else if (saysDoNotModify && (asksToReadOrExplain || requestedFiles.length > 0 || taskType === "ANALYSIS" || taskType === "SEARCH")) {
+    taskMode = "read_only";
+  } else {
+    taskMode = taskType === "CODING" ? "coding" : "read_only";
+  }
+
   return {
     objective,
     taskType,
     taskClass: taskType === "CODING" && isProductBuild ? "product_build" : taskType,
+    taskMode,
+    requestedFiles,
     requestedFeatures,
     requiresWorkspaceChange,
     requiresValidationCommand,

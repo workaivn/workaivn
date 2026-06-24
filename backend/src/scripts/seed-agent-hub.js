@@ -68,7 +68,7 @@ async function seedProviders() {
       type: "api",
       baseUrl: "http://localhost:11434/v1",
       apiKeyEnv: "OLLAMA_API_KEY",
-      isActive: true
+      isActive: false
     },
     {
       name: "Groq",
@@ -140,6 +140,22 @@ async function seedProviders() {
       type: "api",
       baseUrl: "",
       apiKeyEnv: "CUSTOM_OPENAI_API_KEY",
+      isActive: true
+    },
+    {
+      name: "KoboldCPP",
+      code: "koboldcpp",
+      type: "api",
+      baseUrl: process.env.KOBOLDCPP_BASE_URL || "http://127.0.0.1:5001",
+      apiKeyEnv: null,
+      isActive: true
+    },
+    {
+      name: "llama.cpp",
+      code: "llamacpp",
+      type: "api",
+      baseUrl: process.env.LLAMACPP_BASE_URL || "http://127.0.0.1:8080",
+      apiKeyEnv: null,
       isActive: true
     }
   ];
@@ -290,7 +306,7 @@ async function seedAgents(providerMap) {
 5. Always return valid JSON when using agent tools`,
       temperature: 0.5,
       maxTokens: 4096,
-      isActive: true
+      isActive: false
     },
     {
       providerId: providerMap.get("openai"),
@@ -318,6 +334,34 @@ async function seedAgents(providerMap) {
       systemPrompt: `You are an expert software engineer. Analyze, modify, and improve code using available tools (READ_FILE, WRITE_FILE, APPLY_PATCH, LIST_FILES, RUN_TERMINAL). Always return valid JSON.`,
       temperature: 0.5,
       maxTokens: 4000,
+      isActive: true
+    },
+    {
+      providerId: providerMap.get("koboldcpp"),
+      name: "KoboldCPP Coding Agent",
+      code: "koboldcpp_coding",
+      description: "Local coding with KoboldCPP (OpenAI-compatible)",
+      modelName: process.env.KOBOLDCPP_MODEL || "koboldcpp/qwen2.5-coder-7b-instruct-q5_k_m",
+      agentType: "coding",
+      priority: 60,
+      capabilityTags: ["local", "coding", "openai_compatible"],
+      systemPrompt: `You are an expert software engineer. Analyze, modify, and improve code using available tools (READ_FILE, WRITE_FILE, APPLY_PATCH, LIST_FILES, RUN_TERMINAL). Always return valid JSON.`,
+      temperature: 0.5,
+      maxTokens: 4096,
+      isActive: true
+    },
+    {
+      providerId: providerMap.get("llamacpp"),
+      name: "llama.cpp Coding Agent",
+      code: "llamacpp_coding",
+      description: "Local coding with llama.cpp (OpenAI-compatible)",
+      modelName: process.env.LLAMACPP_MODEL || "qwen2.5-coder",
+      agentType: "coding",
+      priority: 70,
+      capabilityTags: ["local", "coding", "openai_compatible"],
+      systemPrompt: `You are an expert software engineer. Analyze, modify, and improve code using available tools (READ_FILE, WRITE_FILE, APPLY_PATCH, LIST_FILES, RUN_TERMINAL). Always return valid JSON.`,
+      temperature: 0.5,
+      maxTokens: 4096,
       isActive: true
     },
     {
