@@ -13,6 +13,19 @@ import {
   buildAcceptanceCriteria
 } from "./acceptanceCriteria.js";
 import { evaluateQualityGate } from "./qualityGate.js";
+import { Planner } from "./planner/planner.js";
+import { TaskStatus } from "./planner/plannerTypes.js";
+import { buildPlan, extractCommands } from "./planner/planBuilder.js";
+import {
+  notifyToolExecution,
+  canExecuteTool,
+  validatePackageJsonAfterWrite,
+  logPlannerStatus,
+  isPlannerRecovering,
+  hasReadyRecoveryTask,
+  getNextRecoveryTask,
+  checkRecoveryCompletion
+} from "./planner/executionController.js";
 
 const DEBUG = () => process.env.DEBUG_AGENT === "true";
 
@@ -389,12 +402,20 @@ export function applyScriptInstructionToPackage(pkgObj, instr) {
 
 function extractRequestedValidationCommand(objective) {
   const text = String(objective || "");
-  // Prefer explicit Run: lines
-  const label = text.match(/(?:^|\n)\s*Run:\s*([^\n]+)/i);
-  if (label && label[1]) return label[1].trim();
-  // Fallback: detect common package manager scripts or tests
-  const pkgScript = text.match(/\b(?:npm|pnpm|yarn)\s+(?:run\s+)?[A-Za-z0-9:_\-]+\b/i);
-  if (pkgScript) return pkgScript[0].trim();
+  // Extract from explicit run markers only
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const markerMatch = lines[i].match(/^\s*(?:Then\s+)?(?:Run|Execute):\s*(.*)$/i);
+    if (markerMatch) {
+      let cmd = markerMatch[1].trim();
+      if (!cmd && i + 1 < lines.length) {
+        cmd = lines[i + 1].trim();
+      }
+      if (cmd && !/^(npm|npm\s+run|npm\s+script|pnpm|yarn)$/i.test(cmd)) {
+        return cmd;
+      }
+    }
+  }
   const nodeCheck = text.match(/\bnode\s+--check\b[^\n]*/i);
   if (nodeCheck) return nodeCheck[0].trim();
   return null;
@@ -451,6 +472,30 @@ function buildReadOnlySummary(toolCalls, readFileCache) {
   return parts.length
     ? parts.join("\n\n")
     : "Read files summary not available.";
+}
+
+function buildPlannerFinalText({ planner, toolCalls, readFileCache, readOnly = false }) {
+  const allTasks = planner?.graph?.allNodes?.() || [];
+  const failedTasks = allTasks.filter(t => t.status === TaskStatus.FAILED || t.status === TaskStatus.RECOVERY_FAILED);
+  if (failedTasks.length > 0) {
+    const failedCalls = toolCalls.filter(call => call.tool === "RUN_TERMINAL" && call.success === false);
+    const failedCmd = failedTasks[0].toolArgs?.command || failedCalls[failedCalls.length - 1]?.args?.command || failedCalls[failedCalls.length - 1]?.result?.command || "";
+    const exitCode = failedCalls.length > 0 ? (failedCalls[failedCalls.length - 1].result?.exitCode ?? 1) : 1;
+    return failedCmd
+      ? `Planner execution completed with failures. Validation command "${failedCmd}" failed with exit code ${exitCode}.`
+      : `Planner execution completed with ${failedTasks.length} failed task(s).`;
+  }
+
+  const succeeded = allTasks.filter(t => t.status === TaskStatus.SUCCESS || t.status === TaskStatus.RECOVERED).length;
+  const skipped = allTasks.filter(t => t.status === TaskStatus.SKIPPED).length;
+
+  if (readOnly && readFileCache?.size > 0) {
+    return `${buildReadOnlySummary(toolCalls, readFileCache)}\n\nPlanner execution completed successfully. (${succeeded} succeeded, ${skipped} skipped)`;
+  }
+
+  return allTasks.length
+    ? `Planner execution completed successfully. (${succeeded} succeeded, ${skipped} skipped)`
+    : "Planner execution completed successfully.";
 }
 
 function isGoalSatisfied(taskType, toolCalls, changedFiles) {
@@ -589,14 +634,159 @@ export async function runAgentLoop({
   const toolCalls = [...initialToolCalls];
   const changedFiles = new Set(initialChangedFiles);
   let hasWorkspaceMutation = changedFiles.size > 0;
+  // Read-only optimization: once all requested files are read, require FINAL
+  let readOnlyAllRequiredRead = false;
+
+  // Helpers to normalize and check write satisfaction for WRITE/WRITE_AND_RUN
+  const normPath = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
+  function writeSatisfactionForPath(targetPath) {
+    try {
+      const target = normPath(targetPath);
+      if (!target) return { satisfied: false };
+      // Changed via git set
+      const changed = [...changedFiles].some(f => normPath(f) === target);
+      if (changed) {
+        const info = { satisfied: true, by: "changed", changed: true, path: targetPath };
+        console.log("[WRITE_SATISFIED]", info);
+        const dbg = createEvent("debug", { section: "WRITE_SATISFIED", ...info });
+        events.push(dbg); history.push(dbg);
+        return info;
+      }
+      // Any WRITE_FILE success for this path (including alreadyUpToDate)
+      for (const call of toolCalls) {
+        if (call.tool !== "WRITE_FILE" || call.success === false) continue;
+        const p = normPath(call.result?.file || call.args?.path || "");
+        if (p && p === target) {
+          const info = { satisfied: true, by: "write_success_idempotent", changed: !!call.result?.changed, path: targetPath };
+          console.log("[WRITE_SATISFIED]", info);
+          const dbg = createEvent("debug", { section: "WRITE_SATISFIED", ...info });
+          events.push(dbg); history.push(dbg);
+          return info;
+        }
+      }
+      // Read confirmation (file exists) — treat as weak confirmation only
+      for (const call of toolCalls) {
+        if (call.tool !== "READ_FILE" || call.success === false) continue;
+        const p = normPath(call.result?.file || call.args?.path || "");
+        if (p && p === target) {
+          const info = { satisfied: true, by: "read_confirmed", changed: false, path: targetPath };
+          console.log("[WRITE_SATISFIED]", info);
+          const dbg = createEvent("debug", { section: "WRITE_SATISFIED", ...info });
+          events.push(dbg); history.push(dbg);
+          return info;
+        }
+      }
+      return { satisfied: false };
+    } catch {
+      return { satisfied: false };
+    }
+  }
+  function allRequiredFilesSatisfied() {
+    const req = (criteria?.requestedFiles || []).map(normPath);
+    if (req.length === 0) return false;
+    return req.every(fp => writeSatisfactionForPath(fp).satisfied);
+  }
+  // Helpers for handling multiple required commands
+  function getSuccessfulTerminalCommands() {
+    const set = new Set();
+    for (const call of toolCalls) {
+      if (call.tool !== "RUN_TERMINAL" || call.success === false) continue;
+      const c = String(call.args?.command || call.result?.command || "").trim();
+      if (c) set.add(c);
+    }
+    return set;
+  }
+  function getPendingRequiredCommands() {
+    const cmds = Array.isArray(originalRequiredCommands) ? originalRequiredCommands : [];
+    if (!cmds.length) return [];
+    const done = getSuccessfulTerminalCommands();
+    return cmds.filter(c => !done.has(c));
+  }
+  function hasAllSuccessfulRequiredCommands() {
+    const cmds = Array.isArray(originalRequiredCommands) ? originalRequiredCommands : [];
+    if (!cmds.length) return true;
+    for (const cmd of cmds) {
+      const good = toolCalls.some(call =>
+        call.tool === "RUN_TERMINAL" &&
+        call.success === true &&
+        String(call.args?.command || call.result?.command || "").trim() === cmd &&
+        (call.result?.exitCode === 0 || call.result?.exitCode === undefined)
+      );
+      if (!good) return false;
+    }
+    return true;
+  }
+  function computeRequestedChangeStatus() {
+    // Actual file changes detected via git or write with changed=true
+    if (changedFiles.size > 0) {
+      const dbg = createEvent("debug", { section: "REQUESTED_CHANGE_STATUS", status: "changed", filesChanged: [...changedFiles] });
+      events.push(dbg); history.push(dbg);
+      return "changed";
+    }
+    const writeAttempts = toolCalls.filter(c => c.tool === "WRITE_FILE" || c.tool === "APPLY_PATCH");
+    const failedAttempts = writeAttempts.filter(c => c.success === false);
+    if (writeAttempts.length > 0 && failedAttempts.length === writeAttempts.length) {
+      const dbg = createEvent("debug", { section: "REQUESTED_CHANGE_STATUS", status: "failed", failedTools: writeAttempts.map(c => c.tool) });
+      events.push(dbg); history.push(dbg);
+      return "failed";
+    }
+    if (writeAttempts.length > 0 && failedAttempts.length === 0) {
+      const dbg = createEvent("debug", { section: "REQUESTED_CHANGE_STATUS", status: "already_satisfied", info: "writes succeeded idempotently (no content change)" });
+      events.push(dbg); history.push(dbg);
+      return "already_satisfied";
+    }
+    // No write attempts — check if reads confirmed the expected content
+    const reqFiles = criteria?.requestedFiles || [];
+    if (reqFiles.length > 0 && reqFiles.every(f => writeSatisfactionForPath(f).satisfied)) {
+      const dbg = createEvent("debug", { section: "REQUESTED_CHANGE_STATUS", status: "already_satisfied", info: "reads confirmed requested files" });
+      events.push(dbg); history.push(dbg);
+      return "already_satisfied";
+    }
+    const dbg = createEvent("debug", { section: "REQUESTED_CHANGE_STATUS", status: "unknown", changedFilesSize: changedFiles.size, writeAttempts: writeAttempts.length });
+    events.push(dbg); history.push(dbg);
+    return "unknown";
+  }
+  function updateRequestedChangeStatus(status, source, file, reason) {
+    if (requestedChangeStatus === status) return;
+    requestedChangeStatus = status;
+    console.log("[REQUESTED_CHANGE_STATUS]", { status, source, file, reason });
+    const dbg = createEvent("debug", { section: "REQUESTED_CHANGE_STATUS", status, source, file, reason });
+    events.push(dbg); history.push(dbg);
+  }
+  function extractRequestedScript(objective) {
+    const text = String(objective || "");
+    const addScriptRx = /add\s+(?:npm\s+)?script\s+["']?([A-Za-z0-9:_\-]+)["']?\s*(?:with\s+value\s*:|\=\s*["']?|:)\s*["']?([^"'\n]+)["']?/i;
+    const m = addScriptRx.exec(text);
+    if (m) return { name: m[1], value: m[2].trim() };
+    return null;
+  }
+  function packageJsonHasScript(pkgContent, scriptName, expectedValue) {
+    try {
+      const pkg = JSON.parse(pkgContent);
+      const scripts = pkg?.scripts || {};
+      if (scripts[scriptName] !== undefined) {
+        return String(scripts[scriptName]).trim() === String(expectedValue || "").trim();
+      }
+      return false;
+    } catch { return false; }
+  }
+  function lastTerminalOutput() {
+    for (let i = toolCalls.length - 1; i >= 0; i--) {
+      const c = toolCalls[i];
+      if (c.tool === "RUN_TERMINAL" && c.success) {
+        return String(c.result?.stdout || "").trim();
+      }
+    }
+    return "";
+  }
   // Pre-classify tool policy based on objective
   function preClassifyToolPolicy(objectiveText) {
     const text = String(objectiveText || "");
     const lower = text.toLowerCase();
     const doNotModify = /(do\s+not\s+(modify|change|edit|write|create))|\bkhông\s+(sửa|thay\s*đổi|viết|tạo)\b/i.test(text);
     const doNotRun = /(do\s+not\s+run(\s+(terminal|npm))?)|\bkhông\s+chạy\b/i.test(text);
-    const writeIntent = /(create|write|add|modify|update|edit|patch|change|rename|delete|remove|refactor)/i.test(text);
-    const hasRunLabel = /(?:^|\n)\s*Run:\s*[^\n]+/i.test(text);
+    const writeIntent = /(create|write|add|modify|update|edit|patch|change|rename|delete|remove|refactor|build|implement|make|develop)/i.test(text);
+    const hasRunLabel = /(?:^|\n)\s*(?:Then\s+)?(?:Run|Execute):\s*[^\n]*/i.test(text);
     const hasRunCommand = /(npm\s+(run\s+)?[a-z0-9:_\-]+|node\s+[^\s]+\.(?:m?js)|yarn\s+[a-z0-9:_\-]+)/i.test(text);
     const runRequested = hasRunLabel || hasRunCommand;
     let mode = "UNKNOWN";
@@ -612,6 +802,12 @@ export async function runAgentLoop({
       mode = "WRITE_AND_RUN";
     } else {
       mode = "WRITE";
+    }
+    // Respect criteria.taskMode for qa and read_only tasks
+    if (criteria?.taskMode === "qa" || criteria?.taskMode === "read_only") {
+      if (!(writeIntent && runRequested)) {
+        mode = "READ_ONLY";
+      }
     }
     const allow = new Set();
     const forbid = new Set();
@@ -631,18 +827,22 @@ export async function runAgentLoop({
       allow.delete("RUN_TERMINAL");
       forbid.add("RUN_TERMINAL");
     }
-    const requiredCommands = [];
-    const rc1 = text.match(/(?:^|\n)\s*Run:\s*([^\n]+)/i);
-    if (rc1 && rc1[1]) requiredCommands.push(rc1[1].trim());
-    if (!rc1 && hasRunCommand) {
-      const m = text.match(/(npm\s+(?:run\s+)?[A-Za-z0-9:_\-]+|node\s+[^\s]+\.(?:m?js))/i);
-      if (m) requiredCommands.push(m[1]);
+    // For pure QA / chat tasks, forbid ALL tools — no investigation needed
+    const taskTypeStr = String(criteria?.taskType || "").toUpperCase();
+    if (taskTypeStr === "CHAT") {
+      ["READ_FILE", "LIST_FILES", "SEARCH_CODE", "SEARCH_SYMBOL", "VALIDATE_PATCH"].forEach(t => {
+        allow.delete(t);
+        forbid.add(t);
+      });
     }
+    const requiredCommands = extractCommands(text);
+    console.log("[REQUIRED_COMMANDS_EXTRACTED]", { source: "preClassifyToolPolicy", commands: requiredCommands });
     return { mode, allow, forbid, doNotModify, doNotRun, requiredCommands };
   }
   const toolPolicy = preClassifyToolPolicy(objective);
   // Attach to criteria for quality gate use, and override fields for READ_ONLY intent
-  const criteriaWithIntent = { ...criteria, intentMode: toolPolicy.mode };
+  const originalRequiredCommands = [...(toolPolicy.requiredCommands || [])];
+  const criteriaWithIntent = { ...criteria, intentMode: toolPolicy.mode, doNotModify: toolPolicy.doNotModify };
   const criteriaEffective = (() => {
     if (toolPolicy.mode === "READ_ONLY") {
       return {
@@ -652,17 +852,23 @@ export async function runAgentLoop({
         taskMode: "read_only",
         requiresWorkspaceChange: false,
         requiresValidationCommand: false,
-        requiresFileRead: true
+        requiresFileRead: true,
+        requestedFiles: criteria.requestedFiles || [],
+        requiredCommands: originalRequiredCommands
       };
     }
-    return criteriaWithIntent;
+    return {
+      ...criteriaWithIntent,
+      requestedFiles: criteria.requestedFiles || [],
+      requiredCommands: originalRequiredCommands
+    };
   })();
   const classifierDbg = createEvent("debug", { section: "CLASSIFIER_RESULT", result: {
     taskMode: criteria.taskMode || criteria.taskType,
     intentMode: toolPolicy.mode,
     forbiddenTools: [...toolPolicy.forbid],
     requiredFiles: criteria.requestedFiles || [],
-    requiredCommands: toolPolicy.requiredCommands
+    requiredCommands: originalRequiredCommands
   }});
   events.push(classifierDbg); history.push(classifierDbg);
   console.log("[CLASSIFIER_RESULT]", {
@@ -670,8 +876,14 @@ export async function runAgentLoop({
     intentMode: toolPolicy.mode,
     forbiddenTools: [...toolPolicy.forbid],
     requiredFiles: criteria.requestedFiles || [],
-    requiredCommands: toolPolicy.requiredCommands
+    requiredCommands: originalRequiredCommands
   });
+  let planner = null;
+  if (toolPolicy.mode !== "UNKNOWN") {
+    const plan = buildPlan(objective, criteriaEffective);
+    planner = new Planner(plan.tasks);
+    planner.getNextTask();
+  }
   if (DEBUG()) {
     const ev = createEvent("debug", {
       section: "RUN_START",
@@ -740,6 +952,17 @@ export async function runAgentLoop({
   let finalText = "";
   let validationFailed = false;
   let qualityGate = null;
+  let requestedChangeStatus = "unknown";
+  let packageJsonValid = true;
+  let plannerFatalBlock = false;
+  // Local wrapper that always passes required commands and package.json validity to quality gate
+  const runQualityGate = async (input) => {
+    return evaluateQualityGate({
+      ...input,
+      requiredCommands: toolPolicy.requiredCommands,
+      packageJsonValid
+    });
+  };
 
   if (DEBUG()) {
     console.log("[runAgentLoop] start workspaceRoot=%s maxSteps=%d plan=%s criteria=%s",
@@ -756,7 +979,7 @@ export async function runAgentLoop({
       const raw = await generateResponse({ messages: chatMessages, plan, step: 0, objective });
       const text = extractChatText(raw);
       finalText = text || "";
-      qualityGate = await evaluateQualityGate({
+      qualityGate = await runQualityGate({
         acceptanceCriteria: criteriaEffective,
         changedFiles: [],
         toolCalls: [],
@@ -859,10 +1082,16 @@ RULES:
   const isNonCodingTask = READ_ONLY_TASK_TYPES.has(taskType);
   if (isReadOnly || isNonCodingTask) {
     console.log("[AgentLoop] %s task detected", isNonCodingTask ? taskType.toUpperCase() : "read-only");
-    conversation.push({
-      role: "system",
-      content: `READ-ONLY MODE: This task only requires reading files and producing a summary. Do NOT call WRITE_FILE or APPLY_PATCH. After reading the required file(s), return { "done": true, "final": "your summary here" } with a complete summary.`
-    });
+    const hasFilesToRead = criteria?.requestedFiles && criteria.requestedFiles.length > 0;
+    let instruction;
+    if (hasFilesToRead) {
+      instruction = `READ-ONLY MODE: Read the required file(s) and produce a summary. Do NOT call WRITE_FILE, APPLY_PATCH, or RUN_TERMINAL. After reading, return { "done": true, "final": "your summary here" }.`;
+    } else if (taskType === "CHAT") {
+      instruction = `NO-TOOLS MODE: Answer directly without calling any tools. Return { "done": true, "final": "your answer here" } immediately.`;
+    } else {
+      instruction = `READ-ONLY MODE: You may use READ_FILE and LIST_FILES to investigate. Do NOT call WRITE_FILE, APPLY_PATCH, or RUN_TERMINAL. After investigating, return { "done": true, "final": "your answer here" }.`;
+    }
+    conversation.push({ role: "system", content: instruction });
   }
 
   function recordEvent(type, details = {}) {
@@ -947,6 +1176,334 @@ RULES:
     if (DEBUG()) {
       console.log("[runAgentLoop] step %d/%d conversation=%d toolCalls=%d",
         step + 1, maxSteps, conversation.length, toolCalls.length);
+    }
+
+    // Phase 4.6: Dispatch recovery tasks automatically without model involvement
+    if (isPlannerRecovering(planner)) {
+      const recoveryTask = getNextRecoveryTask(planner);
+      if (recoveryTask) {
+        const toolName = recoveryTask.tool;
+        const args = recoveryTask.toolArgs || {};
+        console.log('[PLANNER_RECOVERY_DISPATCH]', { step, recoveryTaskId: recoveryTask.id, tool: toolName, args });
+        recordEvent('planner_recovery_dispatch', { step, recoveryTaskId: recoveryTask.id, tool: toolName, args });
+        // Execute the recovery tool directly
+        const toolContext = { workspaceRoot: resolvedWorkspaceRoot };
+        const startedAt = new Date();
+        const toolResult = await executeTool(toolName, args, toolContext);
+        const completedAt = new Date();
+        const toolCall = {
+          step,
+          tool: toolName,
+          args,
+          success: toolResult?.success !== false,
+          result: toolResult,
+          startedAt,
+          completedAt
+        };
+        toolCalls.push(toolCall);
+        // Populate readFileCache for successful READ_FILE in recovery
+        if (toolName === "READ_FILE" && toolResult?.success && toolResult.file && toolResult.content) {
+          const normalized = String(toolResult.file).replace(/\\/g, "/");
+          readFileCache.set(normalized, toolResult.content);
+          inspectedFiles.add(toolResult.file);
+        }
+        // Track file changes for WRITE tools dispatched by recovery
+        if (WRITE_TOOLS.has(toolName) && toolResult?.success && toolResult?.changed && toolResult.file) {
+          changedFiles.add(toolResult.file);
+        }
+        // Notify planner of recovery task result
+        const notifyResult = notifyToolExecution(planner, toolName, args, toolResult);
+        logPlannerStatus(planner);
+        // Check if recovery completed (all recovery tasks succeeded)
+        const completion = checkRecoveryCompletion(planner);
+        if (completion.recoveryComplete) {
+          console.log('[PLANNER_RECOVERY_SUCCESS]', { recoveredTaskId: completion.recoveredTaskId });
+          recordEvent('planner_recovery_success', { recoveredTaskId: completion.recoveredTaskId });
+        }
+        continue;
+      }
+    }
+
+    // Phase 4.6/4.8: Dispatch planner tasks — parallel group or single task
+    if (planner && !isPlannerRecovering(planner)) {
+      // Phase 4.8: Try to get the next parallel group
+      let parallelGroup = null;
+      if (planner.parallelMode) {
+        if (planner.isParallelGroupComplete()) {
+          planner.mergeParallelGroup();
+        }
+        parallelGroup = planner.nextParallelGroup();
+      } else {
+        const readyTasks = planner.graph.allNodes().filter(n => n.status === TaskStatus.READY);
+        if (readyTasks.length > 1) {
+          planner.findParallelReadyTasks();
+          parallelGroup = planner.nextParallelGroup();
+        }
+      }
+
+      if (parallelGroup && parallelGroup.length > 0) {
+        // Execute all tasks in the group concurrently
+        const taskResults = await Promise.all(parallelGroup.map(async (task) => {
+          const toolName = task.tool;
+          const args = task.toolArgs || {};
+          console.log('[PLANNER_DISPATCH]', { step, taskId: task.id, tool: toolName, args, parallel: true });
+          recordEvent('planner_dispatch', { step, taskId: task.id, tool: toolName, args });
+
+          const toolCtx = { workspaceRoot: resolvedWorkspaceRoot };
+          const startedAt = new Date();
+          const toolResult = await executeTool(toolName, args, toolCtx);
+          const completedAt = new Date();
+
+          const toolCall = {
+            step,
+            tool: toolName,
+            args,
+            success: toolResult?.success !== false,
+            result: toolResult,
+            startedAt,
+            completedAt
+          };
+          toolCalls.push(toolCall);
+
+          // Populate readFileCache for successful READ_FILE
+          if (toolName === "READ_FILE" && toolResult?.success && toolResult.file && toolResult.content) {
+            const normalized = String(toolResult.file).replace(/\\/g, "/");
+            readFileCache.set(normalized, toolResult.content);
+            inspectedFiles.add(toolResult.file);
+          }
+          // Track file changes for WRITE tools dispatched in parallel group
+          if (WRITE_TOOLS.has(toolName) && toolResult?.success && toolResult?.changed && toolResult.file) {
+            changedFiles.add(toolResult.file);
+          }
+
+          // Notify planner of the result (triggers recovery on failure)
+          const plannerResult = notifyToolExecution(planner, toolName, args, toolResult);
+          logPlannerStatus(planner);
+
+          return { toolName, plannerResult };
+        }));
+
+        for (const { toolName, plannerResult } of taskResults) {
+          if (plannerResult?.recoveryStarted) {
+            console.log('[PLANNER_RECOVERY_START]', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
+            recordEvent('planner_recovery_start', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
+          }
+        }
+
+        planner.waitParallelGroup();
+        planner.mergeParallelGroup();
+        continue;
+      }
+
+      // Fallback to single task dispatch (existing behavior)
+      const nextTask = planner.getNextTask();
+      if (nextTask && nextTask.tool) {
+        const toolName = nextTask.tool;
+        const args = nextTask.toolArgs || {};
+        console.log('[PLANNER_DISPATCH]', { step, taskId: nextTask.id, tool: toolName, args });
+        recordEvent('planner_dispatch', { step, taskId: nextTask.id, tool: toolName, args });
+
+        const toolCtx = { workspaceRoot: resolvedWorkspaceRoot };
+        const startedAt = new Date();
+        const toolResult = await executeTool(toolName, args, toolCtx);
+        const completedAt = new Date();
+
+        const toolCall = {
+          step,
+          tool: toolName,
+          args,
+          success: toolResult?.success !== false,
+          result: toolResult,
+          startedAt,
+          completedAt
+        };
+        toolCalls.push(toolCall);
+
+        // Populate readFileCache for successful READ_FILE
+        if (toolName === "READ_FILE" && toolResult?.success && toolResult.file && toolResult.content) {
+          const normalized = String(toolResult.file).replace(/\\/g, "/");
+          readFileCache.set(normalized, toolResult.content);
+          inspectedFiles.add(toolResult.file);
+          // For read-only tasks: after reading all requested files, guide model to produce FINAL
+          const reqFiles = criteria?.requestedFiles || [];
+          if (toolPolicy.mode === "READ_ONLY" && reqFiles.length > 0) {
+            const allRead = reqFiles.every(f => {
+              const norm = String(f).replace(/\\/g, "/").toLowerCase();
+              return readFileCache.has(norm);
+            });
+            if (allRead) {
+              let strict = null;
+              if (reqFiles.some(r => /(^|\/)package\.json$/i.test(r))) {
+                strict = buildStrictAnswerInstruction(objective, "package.json");
+              }
+              const lines = [
+                "READ-ONLY MODE: The required file(s) have been read successfully.",
+                "Answer the user's exact question now.",
+                "Do not modify files.",
+                "Do not run commands."
+              ];
+              if (strict) lines.push(strict);
+              conversation.push({ role: "system", content: lines.join(" \n") });
+              readOnlyAllRequiredRead = true;
+              console.log('[READ_ONLY_GUIDED_FINAL]', { files: reqFiles });
+            }
+          }
+        }
+        // Track file changes for WRITE tools dispatched by single task dispatch
+        if (WRITE_TOOLS.has(toolName) && toolResult?.success && toolResult?.changed && toolResult.file) {
+          changedFiles.add(toolResult.file);
+        }
+
+        // Notify planner of the result (triggers recovery on failure)
+        const plannerResult = notifyToolExecution(planner, toolName, args, toolResult);
+        logPlannerStatus(planner);
+
+        if (plannerResult?.recoveryStarted) {
+          console.log('[PLANNER_RECOVERY_START]', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
+          recordEvent('planner_recovery_start', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
+        }
+
+        continue;
+      }
+    }
+
+    // Phase 4.6 Bugfix 2: When planner has FAILED/BLOCKED tasks and no READY/PENDING remain,
+    // never call the model again. Stop execution immediately.
+    if (planner) {
+      const allTasks = planner.graph.allNodes();
+      const hasReadyOrPending = allTasks.some(t => t.status === 'READY' || t.status === 'PENDING');
+      const hasFailedOrBlocked = allTasks.some(t => t.status === 'FAILED' || t.status === 'BLOCKED');
+      const hasRecoveryFailed = allTasks.some(t => t.status === 'RECOVERY_FAILED');
+
+      if (hasRecoveryFailed) {
+        const reason = 'Recovery has FAILED. Stopping execution.';
+        console.log('[PLANNER_RECOVERY_STOP]', { reason });
+        finalText = buildPlannerFinalText({
+          planner,
+          toolCalls,
+          readFileCache,
+          readOnly: isReadOnly || isNonCodingTask
+        }) || reason;
+        qualityGate = await runQualityGate({
+          acceptanceCriteria: criteriaEffective,
+          changedFiles: [...changedFiles],
+          toolCalls,
+          workspaceRoot: resolvedWorkspaceRoot,
+          finalText,
+          requiredCommands: originalRequiredCommands
+        });
+        return {
+          success: false,
+          status: "needs_revision",
+          final: finalText,
+          error: qualityGate.feedback || reason,
+          history,
+          events,
+          toolCalls,
+          changedFiles: [...changedFiles],
+          diffSummary: { stat: "", numstat: "" },
+          qualityGate,
+          acceptanceCriteria: criteriaEffective,
+          workspaceRoot: resolvedWorkspaceRoot || null,
+          workspaceId: workspaceId || null
+        };
+      }
+
+      if (hasFailedOrBlocked && !hasReadyOrPending && !isPlannerRecovering(planner)) {
+        const failedTasks = allTasks.filter(t => t.status === 'FAILED').map(t => t.id);
+        const blockedTasks = allTasks.filter(t => t.status === 'BLOCKED').map(t => t.id);
+        const reasons = [];
+        if (failedTasks.length) reasons.push('FAILED: ' + failedTasks.join(', '));
+        if (blockedTasks.length) reasons.push('BLOCKED: ' + blockedTasks.join(', '));
+        const reason = 'Planner has no ready tasks remaining: ' + reasons.join('; ') + '. Stopping execution.';
+        console.log('[PLANNER_STUCK_STOP]', { reason, failedTasks, blockedTasks });
+        finalText = buildPlannerFinalText({
+          planner,
+          toolCalls,
+          readFileCache,
+          readOnly: isReadOnly || isNonCodingTask
+        }) || 'Planner has no ready tasks remaining. Stopping execution.';
+        qualityGate = await runQualityGate({
+          acceptanceCriteria: criteriaEffective,
+          changedFiles: [...changedFiles],
+          toolCalls,
+          workspaceRoot: resolvedWorkspaceRoot,
+          finalText,
+          requiredCommands: originalRequiredCommands
+        });
+        return {
+          success: false,
+          status: "needs_revision",
+          final: finalText,
+          error: qualityGate.feedback || reason,
+          history,
+          events,
+          toolCalls,
+          changedFiles: [...changedFiles],
+          diffSummary: { stat: "", numstat: "" },
+          qualityGate,
+          acceptanceCriteria: criteriaEffective,
+          workspaceRoot: resolvedWorkspaceRoot || null,
+          workspaceId: workspaceId || null
+        };
+      }
+    }
+
+    // Phase 4.8 BUG 2: When parallel planner is complete, generate a deterministic final summary
+    // and stop without calling the model again.
+    // Only triggers when parallelMode is active (planner handled ALL work).
+    // Single-task dispatch path: model still needs to provide final answer.
+    if (planner && planner.parallelMode && planner.isComplete()) {
+      const allTasks = planner.graph.allNodes();
+    const succeeded = allTasks.filter(t => t.status === TaskStatus.SUCCESS || t.status === TaskStatus.RECOVERED).length;
+    const skipped = allTasks.filter(t => t.status === TaskStatus.SKIPPED).length;
+      const failedTasks = allTasks.filter(t => t.status === TaskStatus.FAILED || t.status === TaskStatus.RECOVERY_FAILED);
+      finalText = buildPlannerFinalText({
+        planner,
+        toolCalls,
+        readFileCache,
+        readOnly: isReadOnly || isNonCodingTask
+      });
+
+      console.log('[PLANNER_COMPLETE_SUMMARY]', { succeeded, skipped, failed: failedTasks.length });
+      recordEvent('planner_complete', { step, succeeded, skipped, failed: failedTasks.length, finalText });
+
+      qualityGate = await runQualityGate({
+        acceptanceCriteria: criteriaEffective,
+        changedFiles: [...changedFiles],
+        toolCalls,
+        workspaceRoot: resolvedWorkspaceRoot,
+        finalText
+      });
+
+      if (qualityGate?.passed && !plannerFatalBlock) {
+        recordEvent("completion", { step, message: "Planner completed.", finalText });
+        console.log('[AgentLoop] Planner completed — quality gate passed, stopping');
+        const changedFileList = [...changedFiles].sort();
+        const isCodingTask = true;
+        const diffSummary = resolvedWorkspaceRoot && isCodingTask
+          ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList)
+          : { stat: "", numstat: "" };
+        return {
+          success: true,
+          status: "completed",
+          final: finalText,
+          error: null,
+          history,
+          events,
+          toolCalls,
+          changedFiles: changedFileList,
+          diffSummary,
+          qualityGate,
+          acceptanceCriteria: criteriaEffective,
+          workspaceRoot: resolvedWorkspaceRoot || null,
+          workspaceId: workspaceId || null
+        };
+      }
+
+      // Quality gate failed — still stop, do not call model
+      console.log('[PLANNER_COMPLETE_STOP]', { reason: 'Quality gate failed after planner completion', finalText });
+      break;
     }
 
     recordEvent("thinking", { step });
@@ -1132,25 +1689,78 @@ RULES:
           ? extractChatText(rawResponse)
           : "Coding task completed with persisted file changes.");
 
+      // For WRITE_AND_RUN: if required commands are pending, block FINAL and force RUN_TERMINAL
+      // This check must come before the requiresWorkspaceChange check so that
+      // a FINAL before required commands run is always rejected, even when no file write is needed.
+      console.log("[FINAL_BRANCH_ENTERED]", { step, branch: "parsed.done", mode: toolPolicy.mode });
+      const dbgFBE = createEvent("debug", { section: "FINAL_BRANCH_ENTERED", step, branch: "parsed.done", mode: toolPolicy.mode });
+      events.push(dbgFBE); history.push(dbgFBE);
+      console.log("[FINAL_PENDING_COMMANDS_CHECK]", { mode: toolPolicy.mode, requiredCommands: toolPolicy.requiredCommands });
+      const dbgFPCC = createEvent("debug", { section: "FINAL_PENDING_COMMANDS_CHECK", mode: toolPolicy.mode, requiredCommands: toolPolicy.requiredCommands });
+      events.push(dbgFPCC); history.push(dbgFPCC);
+      if (toolPolicy.mode === "WRITE_AND_RUN" && toolPolicy.requiredCommands?.length > 0 && !hasAllSuccessfulRequiredCommands()) {
+        const pending = getPendingRequiredCommands();
+        const executed = toolCalls.filter(c => c.tool === "RUN_TERMINAL").map(c => c.args?.command || "");
+        console.log("[FINAL_BLOCKED_PENDING_COMMANDS]", { requiredCommands: toolPolicy.requiredCommands, terminalCommands: executed, pending });
+        const dbg = createEvent("debug", { section: "FINAL_BLOCKED_PENDING_COMMANDS", requiredCommands: toolPolicy.requiredCommands, terminalCommands: executed, pending });
+        events.push(dbg); history.push(dbg);
+        recordEvent("completion_rejected", { step, message: "Final blocked: required command not yet executed in WRITE_AND_RUN." });
+        if (pending.length) {
+          conversation.push({ role: "system", content: `Run the required validation command now: ${pending[0]}. Return JSON only: {"tool":"RUN_TERMINAL","args":{"command":"${pending[0]}"},"done":false}` });
+          const nextDbg = createEvent("debug", { section: "NEXT_REQUIRED_COMMAND", command: pending[0] });
+          events.push(nextDbg); history.push(nextDbg);
+        }
+        continue;
+      }
+
+      // Phase 4.4: Block FINAL if planner has FAILED tasks
+      if (planner) {
+        const gate = canExecuteTool(planner, 'final');
+        if (!gate.allowed) {
+          console.log('[FINAL_BLOCKED_BY_PLANNER]', { reason: gate.reason, failedTasks: gate.failedTasks });
+          const dbgFBP = createEvent("debug", { section: "FINAL_BLOCKED_BY_PLANNER", reason: gate.reason, failedTasks: gate.failedTasks });
+          events.push(dbgFBP); history.push(dbgFBP);
+          finalText = `Blocked by planner: ${gate.reason}`;
+          qualityGate = { passed: false, score: 0, failures: [gate.reason], feedback: `Cannot complete: ${gate.reason}` };
+          plannerFatalBlock = true;
+          break;
+        }
+      }
+
       // Enforce CODING mutation before allowing completion
       const requiresWorkspaceChange = !!criteria.requiresWorkspaceChange && String((criteria.taskType || "CODING")).toUpperCase() === "CODING";
-      if (requiresWorkspaceChange && changedFiles.size === 0) {
-        if (DEBUG()) console.log("[CODING_CONTINUE_REQUIRED]", { requiresWorkspaceChange: true, filesChanged: 0 });
-        const dbg = createEvent("debug", { section: "CODING_CONTINUE_REQUIRED", requiresWorkspaceChange: true, filesChanged: 0 });
-        events.push(dbg); history.push(dbg);
-        // Record explicit rejection for test visibility and UX
-        recordEvent("completion_rejected", { step, message: "Done=true returned with no file changes. Rejecting completion." });
-        conversation.push({
-          role: "system",
-          content: "No files have been modified yet. You must use WRITE_FILE or APPLY_PATCH to make the requested change before returning done=true."
-        });
-        // Reject this completion and continue the loop
-        continue;
+      // Do not require changed files if write has been satisfied idempotently for required files
+      const writeSatisfied = allRequiredFilesSatisfied();
+      if (requiresWorkspaceChange && changedFiles.size === 0 && !writeSatisfied) {
+        // For WRITE_AND_RUN with all required commands satisfied, allow completion without file changes
+        if (toolPolicy.mode !== "WRITE_AND_RUN") {
+          if (DEBUG()) console.log("[CODING_CONTINUE_REQUIRED]", { requiresWorkspaceChange: true, filesChanged: 0 });
+          const dbg = createEvent("debug", { section: "CODING_CONTINUE_REQUIRED", requiresWorkspaceChange: true, filesChanged: 0 });
+          events.push(dbg); history.push(dbg);
+          // Record explicit rejection for test visibility and UX
+          recordEvent("completion_rejected", { step, message: "Done=true returned with no file changes. Rejecting completion." });
+          conversation.push({
+            role: "system",
+            content: "No files have been modified yet. You must use WRITE_FILE or APPLY_PATCH to make the requested change before returning done=true."
+          });
+          // Reject this completion and continue the loop
+          continue;
+        }
       }
 
       // For non-coding (read-only/qa): run quality gate to enforce requested-file reads and final presence
       if (isNonCodingTask || isReadOnly) {
         finalText = proposedFinal;
+        // Phase 4.9: Synthesize finalText when planner completed all tasks
+        if (!finalText && planner && planner.isComplete()) {
+          finalText = buildPlannerFinalText({
+            planner,
+            toolCalls,
+            readFileCache,
+            readOnly: isReadOnly || isNonCodingTask
+          });
+          console.log('[PLANNER_FALLBACK_FINAL_TEXT]', { finalText });
+        }
         const qInputNC = {
           acceptanceCriteria: criteriaEffective,
           changedFiles: [...changedFiles],
@@ -1172,7 +1782,7 @@ RULES:
           const dbg = createEvent("debug", { section: "QUALITY_GATE_INPUT", data: qInputNC });
           events.push(dbg); history.push(dbg);
         }
-        qualityGate = await evaluateQualityGate({ ...qInputNC, acceptanceCriteria: criteriaEffective });
+        qualityGate = await runQualityGate({ ...qInputNC, acceptanceCriteria: criteriaEffective });
         if (DEBUG()) {
           console.log("[QUALITY GATE OUTPUT]", { passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures, checks: (qualityGate.checks || []).map(c => ({ id: c.id, passed: c.passed })) });
           const dbg = createEvent("debug", { section: "QUALITY_GATE_OUTPUT", data: { passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures, checks: (qualityGate.checks || []).map(c => ({ id: c.id, passed: c.passed, message: c.message })) } });
@@ -1211,7 +1821,7 @@ RULES:
         const dbg = createEvent("debug", { section: "QUALITY_GATE_INPUT", data: qInputC });
         events.push(dbg); history.push(dbg);
       }
-      qualityGate = await evaluateQualityGate({ ...qInputC, acceptanceCriteria: criteriaEffective });
+      qualityGate = await runQualityGate({ ...qInputC, acceptanceCriteria: criteriaEffective, requiredCommands: toolPolicy.requiredCommands, packageJsonValid });
       if (DEBUG()) {
         console.log("[QUALITY GATE OUTPUT]", { passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures, checks: (qualityGate.checks || []).map(c => ({ id: c.id, passed: c.passed })) });
         const dbg = createEvent("debug", { section: "QUALITY_GATE_OUTPUT", data: { passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures, checks: (qualityGate.checks || []).map(c => ({ id: c.id, passed: c.passed, message: c.message })) } });
@@ -1224,6 +1834,89 @@ RULES:
         score: qualityGate.score,
         failures: qualityGate.failures
       });
+
+      // Log requested change status for truthfulness debugging
+      const changeStatus = requestedChangeStatus;
+
+      // If quality gate failed and claimed_change_without_evidence is the issue, try deterministic final first
+      const claimsChangeFailure = (qualityGate.failures || []).some(f => /claims a change/i.test(f));
+      let deterministicFinalAttempted = false;
+      if (claimsChangeFailure && changeStatus === "already_satisfied") {
+        deterministicFinalAttempted = true;
+        const hasCommands = toolPolicy.requiredCommands && toolPolicy.requiredCommands.length > 0;
+        const cmdText = hasCommands ? toolPolicy.requiredCommands.join(", ") : "";
+        const output = lastTerminalOutput();
+        if (requestedChangeStatus === "already_satisfied") {
+          const scriptInfo = extractRequestedScript(objective);
+          if (scriptInfo && scriptInfo.name) {
+            finalText = hasCommands
+              ? `The npm script '${scriptInfo.name}' already existed with the expected value, and ${cmdText} completed successfully.${output ? ` Output: ${output}` : ""}`
+              : `The npm script '${scriptInfo.name}' already existed with the expected value.${output ? ` Output: ${output}` : ""}`;
+          } else {
+            finalText = hasCommands
+              ? `The requested content already had the expected content, and ${cmdText} executed successfully.${output ? ` Output: ${output}` : ""}`
+              : `The requested content already had the expected content.${output ? ` Output: ${output}` : ""}`;
+          }
+        } else if (requestedChangeStatus === "changed") {
+          finalText = hasCommands
+            ? `The requested change was applied and ${cmdText} completed successfully.${output ? ` Output: ${output}` : ""}`
+            : `The requested change was applied successfully.${output ? ` Output: ${output}` : ""}`;
+        }
+        if (finalText) {
+          console.log("[DETERMINISTIC_FINAL_SUMMARY]", { generated: true, requestedChangeStatus, requiredCommands: toolPolicy.requiredCommands });
+          const dbgDetFinal = createEvent("debug", { section: "DETERMINISTIC_FINAL_SUMMARY", generated: true, requestedChangeStatus, requiredCommands: toolPolicy.requiredCommands });
+          events.push(dbgDetFinal); history.push(dbgDetFinal);
+          qualityGate = await runQualityGate({
+            acceptanceCriteria: criteriaEffective,
+            changedFiles: [...changedFiles],
+            toolCalls,
+            workspaceRoot: resolvedWorkspaceRoot,
+            finalText
+          });
+          recordEvent("quality_gate", { step, passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
+          if (qualityGate.passed) {
+            recordEvent("completion", { step, message: "Task completed.", finalText });
+            console.log("[AgentLoop] Deterministic final summary — quality gate passed, returning immediately");
+            const changedFileList = [...changedFiles].sort();
+            const diffSummary = resolvedWorkspaceRoot
+              ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList)
+              : { stat: "", numstat: "" };
+            return {
+              success: true,
+              status: "completed",
+              final: finalText,
+              error: null,
+              history,
+              events,
+              toolCalls,
+              changedFiles: changedFileList,
+              diffSummary,
+              qualityGate,
+              acceptanceCriteria: criteriaEffective,
+              workspaceRoot: resolvedWorkspaceRoot || null,
+              workspaceId: workspaceId || null
+            };
+          }
+        }
+      }
+
+      // If quality gate failed and claimed_change_without_evidence is the issue (and deterministic didn't pass), add truthfulness guidance
+      if (claimsChangeFailure && !deterministicFinalAttempted) {
+        const truthfulInstr = changeStatus === "already_satisfied"
+          ? `The requested edit already existed — do not claim it was added/created/modified. Say it "already existed" or "was already in place".`
+          : `Your final summary claims a change but no files were changed. Describe what actually happened truthfully.`;
+        console.log("[FINAL_TRUTHFULNESS_GUIDANCE]", { status: changeStatus, instruction: truthfulInstr });
+        const dbgFTG = createEvent("debug", { section: "FINAL_TRUTHFULNESS_GUIDANCE", status: changeStatus, instruction: truthfulInstr });
+        events.push(dbgFTG); history.push(dbgFTG);
+      } else if (claimsChangeFailure && deterministicFinalAttempted && !qualityGate.passed) {
+        // Deterministic final was attempted but still failed
+        const truthfulInstr = changeStatus === "already_satisfied"
+          ? `The requested edit already existed — do not claim it was added/created/modified. Say it "already existed" or "was already in place".`
+          : `Your final summary claims a change but no files were changed. Describe what actually happened truthfully.`;
+        console.log("[FINAL_TRUTHFULNESS_GUIDANCE]", { status: changeStatus, instruction: truthfulInstr });
+        const dbgFTG = createEvent("debug", { section: "FINAL_TRUTHFULNESS_GUIDANCE", status: changeStatus, instruction: truthfulInstr });
+        events.push(dbgFTG); history.push(dbgFTG);
+      }
 
       if (qualityGate.passed) {
         finalText = proposedFinal;
@@ -1254,15 +1947,21 @@ RULES:
       // Quality gate failed — continue with feedback
       if (changedFiles.size > 0) {
         // If there were file changes, allow continuing
+        const truthGuidance = claimsChangeFailure
+          ? `\nBe truthful in your final summary: if the change was already in place, say "already existed" not "added/created/modified".`
+          : "";
         conversation.push({ role: "assistant", content: JSON.stringify(parsed) });
         conversation.push({
           role: "system",
-          content: `${qualityGate.feedback}\nContinue working. Do not return done until every failed check is resolved.`
+          content: `${qualityGate.feedback}${truthGuidance}\nContinue working. Do not return done until every failed check is resolved.`
         });
         continue;
       }
 
       // No file changes and quality gate failed — reject completion and continue as needs revision
+      const truthGuidance = claimsChangeFailure && changeStatus === "already_satisfied"
+        ? ` The requested edit already existed — truthfully say "already existed" or "was already in place". Do NOT claim it was added/created/modified/changed/updated.`
+        : "";
       finalText = proposedFinal;
       recordEvent("completion_rejected", { step, message: "Done=true returned with no file changes. Rejecting completion." });
       console.log("[AgentLoop] CODING done=true — no changes, returning needs_revision");
@@ -1352,6 +2051,42 @@ RULES:
 
     // If the model selected FINAL explicitly, do not execute any tool. Mark done, run the gate, and exit loop.
     if (toolName === "FINAL") {
+      console.log("[FINAL_BRANCH_ENTERED]", { step, branch: "tool:FINAL", mode: toolPolicy.mode });
+      const dbgFBE = createEvent("debug", { section: "FINAL_BRANCH_ENTERED", step, branch: "tool:FINAL", mode: toolPolicy.mode });
+      events.push(dbgFBE); history.push(dbgFBE);
+      console.log("[FINAL_PENDING_COMMANDS_CHECK]", { mode: toolPolicy.mode, requiredCommands: toolPolicy.requiredCommands });
+      const dbgFPCC = createEvent("debug", { section: "FINAL_PENDING_COMMANDS_CHECK", mode: toolPolicy.mode, requiredCommands: toolPolicy.requiredCommands });
+      events.push(dbgFPCC); history.push(dbgFPCC);
+      if (toolPolicy.mode === "WRITE_AND_RUN" && toolPolicy.requiredCommands?.length > 0 && !hasAllSuccessfulRequiredCommands()) {
+        const pending = getPendingRequiredCommands();
+        const executed = toolCalls.filter(c => c.tool === "RUN_TERMINAL").map(c => c.args?.command || "");
+        console.log("[FINAL_BLOCKED_PENDING_COMMANDS]", { requiredCommands: toolPolicy.requiredCommands, terminalCommands: executed, pending });
+        const dbgFBC = createEvent("debug", { section: "FINAL_BLOCKED_PENDING_COMMANDS", requiredCommands: toolPolicy.requiredCommands, terminalCommands: executed, pending });
+        events.push(dbgFBC); history.push(dbgFBC);
+        recordEvent("completion_rejected", { step, message: "Final blocked: required command not yet executed in WRITE_AND_RUN." });
+        if (pending.length) {
+          conversation.push({ role: "system", content: `Run the required validation command now: ${pending[0]}. Return JSON only: {"tool":"RUN_TERMINAL","args":{"command":"${pending[0]}"},"done":false}` });
+          console.log("[NEXT_REQUIRED_COMMAND]", { command: pending[0], step });
+          const dbgNRC = createEvent("debug", { section: "NEXT_REQUIRED_COMMAND", command: pending[0], step });
+          events.push(dbgNRC); history.push(dbgNRC);
+        }
+        continue;
+      }
+      // Phase 4.4: Block FINAL if planner has FAILED tasks
+      if (planner) {
+        const gate = canExecuteTool(planner, 'final');
+        if (!gate.allowed) {
+          console.log('[FINAL_BLOCKED_BY_PLANNER]', { reason: gate.reason, failedTasks: gate.failedTasks });
+          const dbgFBP = createEvent("debug", { section: "FINAL_BLOCKED_BY_PLANNER", reason: gate.reason, failedTasks: gate.failedTasks });
+          events.push(dbgFBP); history.push(dbgFBP);
+          finalText = `Blocked by planner: ${gate.reason}`;
+          qualityGate = { passed: false, score: 0, failures: [gate.reason], feedback: `Cannot complete: ${gate.reason}` };
+          plannerFatalBlock = true;
+          break;
+        }
+      }
+      // Log requested change status for truthfulness debugging
+      if (DEBUG()) console.log("[REQUESTED_CHANGE_STATUS]", { status: requestedChangeStatus, source: "tool:FINAL" });
       const proposedFinal = parsed?.final && typeof parsed.final === "string" && parsed.final.trim()
         ? parsed.final
         : (typeof parsed?.args?.final === 'string' && parsed.args.final.trim()
@@ -1359,6 +2094,16 @@ RULES:
           : null)
         || ((isNonCodingTask || isReadOnly) ? extractChatText(rawResponse) : "Coding task completed with persisted file changes.");
       finalText = proposedFinal;
+      // Phase 4.9: Synthesize finalText when planner completed all tasks
+      if (!finalText && planner && planner.isComplete()) {
+          finalText = buildPlannerFinalText({
+            planner,
+            toolCalls,
+            readFileCache,
+            readOnly: isReadOnly || isNonCodingTask
+          });
+          console.log('[PLANNER_FALLBACK_FINAL_TEXT]', { finalText });
+      }
       // Debug receipt
       if (DEBUG()) console.log("[FINAL_RECEIVED]", { length: String(finalText || '').length });
       const dbgFinalRx = createEvent("debug", { section: "FINAL_RECEIVED", length: String(finalText || '').length, preview: String(finalText || '').slice(0, 200) });
@@ -1371,7 +2116,7 @@ RULES:
           workspaceRoot: resolvedWorkspaceRoot,
           finalText
         };
-        qualityGate = await evaluateQualityGate({ ...qInputNC, acceptanceCriteria: criteriaEffective });
+        qualityGate = await runQualityGate({ ...qInputNC, acceptanceCriteria: criteriaEffective });
         recordEvent("quality_gate", { step, passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
         recordEvent("completion", { step, message: "Task completed.", finalText });
         const dbgFinalAcc = createEvent("debug", { section: "FINAL_ACCEPTED", passed: qualityGate?.passed === true });
@@ -1387,7 +2132,7 @@ RULES:
           workspaceRoot: resolvedWorkspaceRoot,
           finalText
         };
-        qualityGate = await evaluateQualityGate({ ...qInputC, acceptanceCriteria: criteriaEffective });
+        qualityGate = await runQualityGate({ ...qInputC, acceptanceCriteria: criteriaEffective, requiredCommands: toolPolicy.requiredCommands, packageJsonValid });
         recordEvent("quality_gate", { step, passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
         recordEvent("completion", { step, message: "Task completed.", finalText });
         const dbgFinalAcc = createEvent("debug", { section: "FINAL_ACCEPTED", passed: qualityGate?.passed === true });
@@ -1434,12 +2179,32 @@ RULES:
       }
       // One corrective observation then continue once; on repeat, stop with needs_revision
       if (count === 1) {
-        const allowedList = [...toolPolicy.allow];
-        if (!allowedList.includes("FINAL")) allowedList.push("FINAL");
-        conversation.push({
-          role: "system",
-          content: `The tool ${toolName} is forbidden for this task. Allowed tools are: ${allowedList.join(", ") || "NONE"}. Use READ_FILE/LIST_FILES/FINAL only when appropriate.`
-        });
+        // If read-only and all required files are already read, force FINAL with strict instruction
+        if (toolPolicy.mode === "READ_ONLY" && readOnlyAllRequiredRead) {
+          let strict = null;
+          // Prefer a strict instruction tailored to package.json when applicable
+          const req = (criteria?.requestedFiles || []).map(f => String(f || "").replace(/\\/g, "/").toLowerCase());
+          const hasPkg = req.some(r => r.endsWith("/package.json") || r === "package.json");
+          if (hasPkg) {
+            strict = buildStrictAnswerInstruction(objective, "package.json");
+          }
+          const base = [
+            "You are in READ_ONLY mode.",
+            "The file has already been read.",
+            "Answer the user's exact question now.",
+            "Do not modify files.",
+            "Do not run commands."
+          ].join(" \n");
+          const msg = strict ? `${base}\n${strict}` : base;
+          conversation.push({ role: "system", content: msg });
+        } else {
+          const allowedList = [...toolPolicy.allow];
+          if (!allowedList.includes("FINAL")) allowedList.push("FINAL");
+          conversation.push({
+            role: "system",
+            content: `The tool ${toolName} is forbidden for this task. Allowed tools are: ${allowedList.join(", ") || "NONE"}. Use READ_FILE/LIST_FILES/FINAL only when appropriate.`
+          });
+        }
         continue;
       }
       // Stop run on repeated forbidden attempt
@@ -1461,6 +2226,128 @@ RULES:
         workspaceId: workspaceId || null
       };
     }
+    // Phase 4.4 + 4.6: Planner pre-dispatch guard — block tools when planner has FAILED/BLOCKED tasks
+    if (planner && toolName && toolName !== 'FINAL') {
+      // Phase 4.6 Bugfix: RECOVERY_FAILED is terminal — block ALL tools, even LIST_FILES
+      const allTasks = planner.graph.allNodes();
+      const hasRecoveryFailed = allTasks.some(t => t.status === 'RECOVERY_FAILED');
+      if (hasRecoveryFailed) {
+        const count = (blockedAttempts.get(toolName) || 0) + 1;
+        blockedAttempts.set(toolName, count);
+        const reason = 'Recovery has FAILED. No further tools allowed.';
+        console.log('[TOOL_BLOCKED]', { iteration: step + 1, tool: toolName, args, reason });
+        recordEvent('tool_blocked', { step, tool: toolName, args, reason });
+        const startedAt = new Date();
+        const blockedCall = {
+          step,
+          tool: toolName,
+          args,
+          success: false,
+          result: {
+            success: false,
+            blocked: true,
+            blockedByPolicy: true,
+            reason,
+            intentMode: toolPolicy.mode,
+            forbiddenTool: toolName,
+            error: reason
+          },
+          startedAt,
+          completedAt: new Date()
+        };
+        toolCalls.push(blockedCall);
+        history.push(blockedCall);
+        if (count <= 1) {
+          const allowedList = [...toolPolicy.allow];
+          if (!allowedList.includes("FINAL")) allowedList.push("FINAL");
+          conversation.push({
+            role: "system",
+            content: `Tool ${toolName} blocked by planner: ${reason}. Allowed tools: ${allowedList.join(", ") || "NONE"}.`
+          });
+          continue;
+        }
+        finalText = `Agent attempted blocked tool ${toolName} repeatedly after recovery failure.`;
+        qualityGate = { passed: false, score: 0, failures: [reason], feedback: reason };
+        return {
+          success: false,
+          status: "needs_revision",
+          final: finalText,
+          error: reason,
+          history,
+          events,
+          toolCalls,
+          changedFiles: [...changedFiles],
+          diffSummary: { stat: "", numstat: "" },
+          qualityGate,
+          acceptanceCriteria: criteriaEffective,
+          workspaceRoot: resolvedWorkspaceRoot || null,
+          workspaceId: workspaceId || null
+        };
+      }
+      let toolType;
+      if (WRITE_TOOLS.has(toolName) || toolName === 'VALIDATE_PATCH') toolType = 'write';
+      else if (toolName === 'READ_FILE') toolType = 'read';
+      else if (toolName === 'RUN_TERMINAL') toolType = 'terminal';
+      if (toolType) {
+        const gate = canExecuteTool(planner, toolType);
+        if (!gate.allowed) {
+          const count = (blockedAttempts.get(toolName) || 0) + 1;
+          blockedAttempts.set(toolName, count);
+          const reason = `Planner blocked: ${gate.reason}`;
+          console.log('[TOOL_BLOCKED]', { iteration: step + 1, tool: toolName, mode: toolPolicy.mode, args, reason });
+          recordEvent('tool_blocked', { step, tool: toolName, args, reason });
+          const startedAt = new Date();
+          const blockedCall = {
+            step,
+            tool: toolName,
+            args,
+            success: false,
+            result: {
+              success: false,
+              blocked: true,
+              blockedByPolicy: true,
+              reason,
+              intentMode: toolPolicy.mode,
+              forbiddenTool: toolName,
+              error: reason
+            },
+            startedAt,
+            completedAt: new Date()
+          };
+          toolCalls.push(blockedCall);
+          history.push(blockedCall);
+          if (toolName === "APPLY_PATCH" || toolName === "WRITE_FILE") {
+            console.log("[PATCH_UI_SOURCE]", { source: "blocked_planner", file: args?.file || args?.path || null, iteration: step + 1 });
+          }
+          if (count <= 1) {
+            const allowedList = [...toolPolicy.allow];
+            if (!allowedList.includes("FINAL")) allowedList.push("FINAL");
+            conversation.push({
+              role: "system",
+              content: `Tool ${toolName} blocked by planner: ${gate.reason}. Allowed tools: ${allowedList.join(", ") || "NONE"}. Fix prior failures first.`
+            });
+            continue;
+          }
+          finalText = `Agent attempted blocked tool ${toolName} repeatedly after planner failures.`;
+          qualityGate = { passed: false, score: 0, failures: [reason], feedback: reason };
+          return {
+            success: false,
+            status: "needs_revision",
+            final: finalText,
+            error: reason,
+            history,
+            events,
+            toolCalls,
+            changedFiles: [...changedFiles],
+            diffSummary: { stat: "", numstat: "" },
+            qualityGate,
+            acceptanceCriteria: criteriaEffective,
+            workspaceRoot: resolvedWorkspaceRoot || null,
+            workspaceId: workspaceId || null
+          };
+        }
+      }
+    }
     if (DEBUG()) {
       console.log("[TOOL_NORMALIZED]", { original: parsed, normalizedArgs: args });
       console.log("[TOOL DECISION]", { iteration: step + 1, tool: toolName || null, args, reason: parsed.reasoning || parsed.reason || null });
@@ -1470,11 +2357,45 @@ RULES:
       events.push(dbg); history.push(dbg);
     }
     if (!toolName) {
+      console.log("[FINAL_BRANCH_ENTERED]", { step, branch: "no-tool", mode: toolPolicy.mode });
+      const dbgFBE = createEvent("debug", { section: "FINAL_BRANCH_ENTERED", step, branch: "no-tool", mode: toolPolicy.mode });
+      events.push(dbgFBE); history.push(dbgFBE);
+      console.log("[FINAL_PENDING_COMMANDS_CHECK]", { mode: toolPolicy.mode, requiredCommands: toolPolicy.requiredCommands });
+      const dbgFPCC = createEvent("debug", { section: "FINAL_PENDING_COMMANDS_CHECK", mode: toolPolicy.mode, requiredCommands: toolPolicy.requiredCommands });
+      events.push(dbgFPCC); history.push(dbgFPCC);
+      if (toolPolicy.mode === "WRITE_AND_RUN" && toolPolicy.requiredCommands?.length > 0 && !hasAllSuccessfulRequiredCommands()) {
+        const pending = getPendingRequiredCommands();
+        const executed = toolCalls.filter(c => c.tool === "RUN_TERMINAL").map(c => c.args?.command || "");
+        console.log("[FINAL_BLOCKED_PENDING_COMMANDS]", { requiredCommands: toolPolicy.requiredCommands, terminalCommands: executed, pending });
+        const dbgFBC = createEvent("debug", { section: "FINAL_BLOCKED_PENDING_COMMANDS", requiredCommands: toolPolicy.requiredCommands, terminalCommands: executed, pending });
+        events.push(dbgFBC); history.push(dbgFBC);
+        recordEvent("completion_rejected", { step, message: "Final blocked: required command not yet executed in WRITE_AND_RUN." });
+        if (pending.length) {
+          conversation.push({ role: "system", content: `Run the required validation command now: ${pending[0]}. Return JSON only: {"tool":"RUN_TERMINAL","args":{"command":"${pending[0]}"},"done":false}` });
+          console.log("[NEXT_REQUIRED_COMMAND]", { command: pending[0], step });
+          const dbgNRC = createEvent("debug", { section: "NEXT_REQUIRED_COMMAND", command: pending[0], step });
+          events.push(dbgNRC); history.push(dbgNRC);
+        }
+        continue;
+      }
+      // Phase 4.4: Block FINAL if planner has FAILED tasks
+      if (planner) {
+        const gate = canExecuteTool(planner, 'final');
+        if (!gate.allowed) {
+          console.log('[FINAL_BLOCKED_BY_PLANNER]', { reason: gate.reason, failedTasks: gate.failedTasks });
+          const dbgFBP = createEvent("debug", { section: "FINAL_BLOCKED_BY_PLANNER", reason: gate.reason, failedTasks: gate.failedTasks });
+          events.push(dbgFBP); history.push(dbgFBP);
+          finalText = `Blocked by planner: ${gate.reason}`;
+          qualityGate = { passed: false, score: 0, failures: [gate.reason], feedback: `Cannot complete: ${gate.reason}` };
+          plannerFatalBlock = true;
+          break;
+        }
+      }
       console.log("[AgentLoop] no tool and not done — checking completion criteria");
       if (isCodingComplete(taskType, changedFiles, toolCalls, validationFailed)) {
         console.log("[AgentLoop] CODING complete — criteria satisfied, no tool returned");
         if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
-        qualityGate = await evaluateQualityGate({
+        qualityGate = await runQualityGate({
           acceptanceCriteria: criteriaEffective,
           changedFiles: [...changedFiles],
           toolCalls,
@@ -1525,7 +2446,9 @@ RULES:
     // args already normalized above
 
     if (WRITE_TOOLS.has(toolName) && inspectedFiles.size === 0) {
-      if (LOCAL_MODEL_MODE) {
+      if (toolPolicy.mode === "WRITE_AND_RUN") {
+        console.log("[AgentLoop] WRITE_AND_RUN bypasses inspect-before-write guard for %s", toolName);
+      } else if (LOCAL_MODEL_MODE) {
         // Allow write without prior read in local single-action mode
         console.log("[AgentLoop] LOCAL_MODEL_MODE bypasses inspect-before-write guard for %s", toolName);
       } else {
@@ -1626,6 +2549,20 @@ RULES:
     }
 
     if (blockForDuplicate) {
+      // If WRITE_AND_RUN and model repeats WRITE_FILE after the file is already satisfied, force RUN_TERMINAL
+      if (toolPolicy.mode === "WRITE_AND_RUN" && toolName === "WRITE_FILE" && typeof args.path === "string" && args.path.trim()) {
+        const sat = writeSatisfactionForPath(args.path);
+        if (sat.satisfied) {
+          const requiredCommands = toolPolicy.requiredCommands || [];
+          if (requiredCommands.length) {
+            console.log("[NEXT_REQUIRED_ACTION]", { action: "RUN_TERMINAL", command: requiredCommands[0] });
+            const dbg = createEvent("debug", { section: "NEXT_REQUIRED_ACTION", action: "RUN_TERMINAL", command: requiredCommands[0] });
+            events.push(dbg); history.push(dbg);
+            conversation.push({ role: "system", content: `The write step is already satisfied for ${args.path}. Run the required validation now: ${requiredCommands[0]}. Return JSON only: {"tool":"RUN_TERMINAL","args":{"command":"${requiredCommands[0]}"},"done":false}` });
+            continue;
+          }
+        }
+      }
       console.log("[AgentLoop] repeated tool call detected without progress: %s %j", toolName, args);
       const message = toolName === "RUN_TERMINAL"
         ? `Duplicate RUN_TERMINAL prevented: "${args.command}" was already executed with no meaningful progress in between.`
@@ -1685,7 +2622,7 @@ RULES:
             recordEvent("tool_completed", { step, tool: "RUN_TERMINAL", success: termCall.success, file: null, error: termResult?.error || null });
             if (termCall.success) {
               if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
-              qualityGate = await evaluateQualityGate({ acceptanceCriteria: criteriaEffective, changedFiles: [...changedFiles], toolCalls, workspaceRoot: resolvedWorkspaceRoot, finalText });
+              qualityGate = await runQualityGate({ acceptanceCriteria: criteriaEffective, changedFiles: [...changedFiles], toolCalls, workspaceRoot: resolvedWorkspaceRoot, finalText });
               recordEvent("quality_gate", { step, passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
               if (qualityGate.passed) {
                 recordEvent("completion", { step, message: "Task completed.", finalText });
@@ -1862,6 +2799,77 @@ RULES:
       error: result?.error || null
     });
 
+    // Phase 4.4: Notify planner of tool result and validate package.json
+    // Validate package.json BEFORE notifying planner success, so invalid JSON
+    // marks the task FAILED instead of SUCCESS.
+    if (toolName !== 'VALIDATE_PATCH' && toolName !== 'FINAL' && planner) {
+      const toolFailed = result?.success === false;
+      if (toolFailed) {
+        const notifyResult = notifyToolExecution(planner, toolName, args, result);
+        logPlannerStatus(planner);
+        // Phase 4.6: Try recovery instead of stopping immediately
+        if (notifyResult?.recoveryStarted) {
+          console.log('[PLANNER_RECOVERY_START]', { step, tool: toolName, recoveryTaskIds: notifyResult.recoveryTaskIds });
+          recordEvent('planner_recovery_start', { step, tool: toolName, recoveryTaskIds: notifyResult.recoveryTaskIds });
+          // Continue the loop — recovery tasks will be executed in subsequent steps
+          continue;
+        }
+        // Phase 4.4 bugfix: STOP immediately when tool FAILS and planner marks FAILED
+        // No more tools, no more model calls, no retries.
+        const errMsg = `Tool ${toolName} failed: ${result?.error || 'Unknown error'}. Planner task marked FAILED.`;
+        console.log('[PLANNER_FAILURE_STOP]', { reason: errMsg });
+        recordEvent('planner_failure_stop', { step, tool: toolName, error: result?.error });
+        finalText = errMsg;
+        qualityGate = { passed: false, score: 0, failures: [errMsg], feedback: errMsg };
+        return {
+          success: false,
+          status: "needs_revision",
+          final: errMsg,
+          error: errMsg,
+          history,
+          events,
+          toolCalls,
+          changedFiles: [...changedFiles],
+          diffSummary: { stat: "", numstat: "" },
+          qualityGate,
+          acceptanceCriteria: criteriaEffective,
+          workspaceRoot: resolvedWorkspaceRoot || null,
+          workspaceId: workspaceId || null
+        };
+      } else if (WRITE_TOOLS.has(toolName)) {
+        const pkgValid = await validatePackageJsonAfterWrite(planner, toolName, args, result, toolContext);
+        if (pkgValid.valid) {
+          const plannerResult = notifyToolExecution(planner, toolName, args, result);
+          if (plannerResult?.recoveryStarted) {
+            console.log('[PLANNER_RECOVERY_START]', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
+            recordEvent('planner_recovery_start', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
+            continue;
+          }
+          if (plannerResult?.needsRevision) {
+            console.log('[PLANNER_TASK_ATTEMPT_LIMIT]', { step, tool: toolName, reason: 'Task exceeded max stalls/timeout' });
+            recordEvent('planner_task_attempt_limit', { step, tool: toolName });
+          }
+        } else {
+          console.log('[PACKAGE_JSON_VALIDATION_FAILED]tool blocked', { file: result?.file || args?.file || args?.path });
+        }
+        if (!pkgValid.valid) {
+          packageJsonValid = false;
+        }
+      } else {
+        const plannerResult = notifyToolExecution(planner, toolName, args, result);
+        if (plannerResult?.recoveryStarted) {
+          console.log('[PLANNER_RECOVERY_START]', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
+          recordEvent('planner_recovery_start', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
+          continue;
+        }
+        if (plannerResult?.needsRevision) {
+          console.log('[PLANNER_TASK_ATTEMPT_LIMIT]', { step, tool: toolName, reason: 'Task exceeded max stalls/timeout' });
+          recordEvent('planner_task_attempt_limit', { step, tool: toolName });
+        }
+      }
+      logPlannerStatus(planner);
+    }
+
     // Attempt package.json JSON parse recovery when a terminal command fails due to EJSONPARSE/invalid JSON
     if (toolName === "RUN_TERMINAL" && result?.success === false) {
       const stderr = String(result?.stderr || "");
@@ -1943,7 +2951,7 @@ RULES:
             toolCalls.push({ step, tool: "RUN_TERMINAL", args: { command: testCmd }, success: t2?.success !== false, result: summarizeToolResult(t2, "RUN_TERMINAL"), startedAt: new Date(), completedAt: new Date() });
             if (t2?.success) {
               if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
-               qualityGate = await evaluateQualityGate({ acceptanceCriteria: criteriaEffective, changedFiles: [...changedFiles], toolCalls, workspaceRoot: resolvedWorkspaceRoot, finalText });
+               qualityGate = await runQualityGate({ acceptanceCriteria: criteriaEffective, changedFiles: [...changedFiles], toolCalls, workspaceRoot: resolvedWorkspaceRoot, finalText });
               recordEvent("quality_gate", { step, passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
               if (qualityGate.passed) {
                 recordEvent("completion", { step, message: "Task completed.", finalText });
@@ -1978,6 +2986,15 @@ RULES:
         const normalized = String(result.file).replace(/\\/g, "/");
         readFileCache.set(normalized, result.content);
         console.log("[AgentLoop] READ_FILE %s completed", normalized);
+        // Detect package.json script already existing with expected value for idempotent WRITE_AND_RUN
+        if (/(^|\/)package\.json$/i.test(normalized) && toolPolicy.mode === "WRITE_AND_RUN") {
+          const scriptInfo = extractRequestedScript(objective);
+          if (scriptInfo && scriptInfo.name) {
+            if (packageJsonHasScript(result.content, scriptInfo.name, scriptInfo.value)) {
+              updateRequestedChangeStatus("already_satisfied", "read_confirmed", result.file, `script ${scriptInfo.name} already exists with expected value`);
+            }
+          }
+        }
         const analysisRequired = /\b(what|why|how|find|explain|identify|name|count)\b/i.test(String(objective || ""));
         if (!analysisAwaitStart && (isNonCodingTask || isReadOnly) && analysisRequired) {
           analysisAwaitStart = Date.now();
@@ -2105,7 +3122,7 @@ RULES:
               })();
               finalText = concise;
               const qInput = { acceptanceCriteria: criteriaEffective, changedFiles: [...changedFiles], toolCalls, workspaceRoot: resolvedWorkspaceRoot, finalText };
-              qualityGate = await evaluateQualityGate(qInput);
+              qualityGate = await runQualityGate(qInput);
               recordEvent("quality_gate", { step, passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
               return {
                 success: true,
@@ -2179,6 +3196,35 @@ RULES:
             ? "You have the file content. Answer the user's question succinctly. Do not dump the full file."
             : "You have the file content. Provide the requested summary without dumping the full file."
         });
+
+        // Read-only optimization: if all requested files are read, force FINAL instruction
+        if (toolPolicy.mode === "READ_ONLY") {
+          let requestedSatisfied = true;
+          if (criteria?.requestedFiles && criteria.requestedFiles.length > 0) {
+            const requested = criteria.requestedFiles.map(f => String(f || "").replace(/\\/g, "/").toLowerCase());
+            const readPaths = toolCalls
+              .filter(c => c.tool === "READ_FILE" && c.success !== false)
+              .map(c => String(c.result?.file || c.args?.path || "").replace(/\\/g, "/").toLowerCase())
+              .filter(Boolean);
+            const readBases = readPaths.map(p => p.split("/").pop());
+            requestedSatisfied = requested.every(r => r.includes("/") ? readPaths.includes(r) : readBases.includes(r));
+          }
+          if (requestedSatisfied) {
+            readOnlyAllRequiredRead = true;
+            let strict = buildStrictAnswerInstruction(objective, normalized);
+            if (!strict) {
+              strict = [
+                "You are in READ_ONLY mode.",
+                "The file has already been read.",
+                "Answer the user's exact question now.",
+                "Do not modify files.",
+                "Do not run commands.",
+                'Return JSON only: {"done":true,"final":"<your one-sentence answer>"}'
+              ].join(" \n");
+            }
+            conversation.push({ role: "system", content: strict });
+          }
+        }
       }
     }
 
@@ -2254,7 +3300,7 @@ RULES:
               });
               if (termCall.success) {
                 if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
-              qualityGate = await evaluateQualityGate({
+              qualityGate = await runQualityGate({
                 acceptanceCriteria: criteriaEffective,
                 changedFiles: [...changedFiles],
                 toolCalls,
@@ -2299,6 +3345,7 @@ RULES:
     if (WRITE_TOOLS.has(toolName) && result?.success && result?.changed && result.file) {
       changedFiles.add(result.file);
       hasWorkspaceMutation = true;
+      updateRequestedChangeStatus("changed", `${toolName.toLowerCase()}_success`, result.file, "file content changed");
       recordEvent("file_changed", { step, tool: toolName, file: result.file });
 
       const validation = await executeTool(
@@ -2328,77 +3375,83 @@ RULES:
         validationFailed = true;
       }
 
-      // Deterministic validation command execution if requested by objective
+      // Deterministic validation command execution: handle multiple required commands for WRITE_AND_RUN, else requested
       const requestedCmd = extractRequestedValidationCommand(objective);
-      if (requestedCmd) {
-        console.log("[AgentLoop] Running requested validation command: %s", requestedCmd);
-        const termStartedAt = new Date();
-        const termResult = await executeTool(
-          "RUN_TERMINAL",
-          { command: requestedCmd, timeoutMs: TOOL_TIMEOUT_MS },
-          toolContext
-        );
-        const termCall = {
-          step,
-          tool: "RUN_TERMINAL",
-          args: { command: requestedCmd },
-          success: termResult?.success !== false,
-          result: summarizeToolResult(termResult, "RUN_TERMINAL"),
-          startedAt: termStartedAt,
-          completedAt: new Date()
-        };
-        toolCalls.push(termCall);
-        history.push(termCall);
-        recordEvent("tool_completed", {
-          step,
-          tool: "RUN_TERMINAL",
-          success: termCall.success,
-          file: null,
-          error: termResult?.error || null
-        });
-
-        if (termCall.success) {
-          if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
-          qualityGate = await evaluateQualityGate({
+      const pendingRequired = toolPolicy.mode === "WRITE_AND_RUN" ? getPendingRequiredCommands() : [];
+      const commandsToRun = pendingRequired.length ? pendingRequired.slice() : (requestedCmd ? [requestedCmd] : []);
+      if (commandsToRun.length) {
+        // Phase 4.4: Gate deterministic commands on planner health
+        const termGate = canExecuteTool(planner, 'terminal');
+        if (!termGate.allowed) {
+          console.log('[REQUIRED_COMMAND_BLOCKED_BY_DEPENDENCY]', { reason: termGate.reason });
+          const dbgBC = createEvent("debug", { section: "REQUIRED_COMMAND_BLOCKED_BY_DEPENDENCY", reason: termGate.reason, failedTasks: termGate.failedTasks });
+          events.push(dbgBC); history.push(dbgBC);
+        } else {
+        const ranCommands = [];
+        for (const cmd of commandsToRun) {
+          console.log("[NEXT_REQUIRED_ACTION]", { action: "RUN_TERMINAL", command: cmd, reason: "required command pending after write satisfied" });
+          const dbgNra = createEvent("debug", { section: "NEXT_REQUIRED_ACTION", action: "RUN_TERMINAL", command: cmd, reason: "required command pending after write satisfied" });
+          events.push(dbgNra); history.push(dbgNra);
+          console.log("[AgentLoop] Running validation command: %s", cmd);
+          const termStartedAt = new Date();
+          const termResult = await executeTool(
+            "RUN_TERMINAL",
+            { command: cmd, timeoutMs: TOOL_TIMEOUT_MS },
+            toolContext
+          );
+          const termCall = {
+            step,
+            tool: "RUN_TERMINAL",
+            args: { command: cmd },
+            success: termResult?.success !== false,
+            result: summarizeToolResult(termResult, "RUN_TERMINAL"),
+            startedAt: termStartedAt,
+            completedAt: new Date()
+          };
+          toolCalls.push(termCall);
+          history.push(termCall);
+          recordEvent("tool_completed", { step, tool: "RUN_TERMINAL", success: termCall.success, file: null, error: termResult?.error || null });
+          console.log("[DIRECT_REQUIRED_COMMAND]", { command: cmd, success: termCall.success, exitCode: termResult?.exitCode });
+          const dbgDR = createEvent("debug", { section: "DIRECT_REQUIRED_COMMAND", command: cmd, success: termCall.success, exitCode: termResult?.exitCode });
+          events.push(dbgDR); history.push(dbgDR);
+          if (!termCall.success) {
+            const stdout = String(termResult?.stdout || "").slice(0, 1000);
+            const stderr = String(termResult?.stderr || "").slice(0, 1000);
+            conversation.push({ role: "system", content: `VALIDATION COMMAND FAILED: ${cmd}\nSTDOUT:\n${stdout}\n\nSTDERR:\n${stderr}` });
+            break; // stop executing further required commands on first failure
+          }
+          ranCommands.push(cmd);
+        }
+        if (ranCommands.length && (!pendingRequired.length || ranCommands.length === commandsToRun.length)) {
+          // All pending required commands executed successfully this iteration
+          if (!finalText) {
+            const f = result?.file || args?.path || "";
+            // Check if this was an idempotent write (no content change)
+            const isIdempotent = result?.success === true && result?.changed === false;
+            const changeStatus = isIdempotent ? "already_satisfied" : (changedFiles.size > 0 ? "changed" : (result?.changed === true ? "changed" : "already_satisfied"));
+            if (changeStatus === "already_satisfied") {
+              finalText = `The file ${f || "requested"} already had the expected content, and ${ranCommands.join(", ")} executed successfully.`;
+            } else {
+              finalText = `Created/verified ${f || "file"} and ran ${ranCommands.join(", ")} successfully.`;
+            }
+            console.log("[DIRECT_FINAL_SUMMARY]", { generated: true, changeStatus });
+            const dbgFS = createEvent("debug", { section: "DIRECT_FINAL_SUMMARY", generated: true, changeStatus });
+            events.push(dbgFS); history.push(dbgFS);
+          }
+          qualityGate = await runQualityGate({
             acceptanceCriteria: criteriaEffective,
             changedFiles: [...changedFiles],
             toolCalls,
             workspaceRoot: resolvedWorkspaceRoot,
             finalText
           });
-          recordEvent("quality_gate", {
-            step,
-            passed: qualityGate.passed,
-            score: qualityGate.score,
-            failures: qualityGate.failures
-          });
+          recordEvent("quality_gate", { step, passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
           if (qualityGate.passed) {
             recordEvent("completion", { step, message: "Task completed.", finalText });
             console.log("[AgentLoop] Deterministic validation passed — returning immediately");
-            return {
-              success: true,
-              status: "completed",
-              final: finalText,
-              error: null,
-              history,
-              events,
-              toolCalls,
-              changedFiles: [...changedFiles].sort(),
-              diffSummary: { stat: "", numstat: "" },
-              qualityGate,
-              acceptanceCriteria: criteriaEffective,
-              workspaceRoot: resolvedWorkspaceRoot || null,
-              workspaceId: workspaceId || null
-            };
+            return { success: true, status: "completed", final: finalText, error: null, history, events, toolCalls, changedFiles: [...changedFiles].sort(), diffSummary: { stat: "", numstat: "" }, qualityGate, acceptanceCriteria: criteriaEffective, workspaceRoot: resolvedWorkspaceRoot || null, workspaceId: workspaceId || null };
           }
-        } else {
-          // On failure, feed back limited stdout/stderr and continue for the model to inspect/patch
-          const stdout = String(termResult?.stdout || "").slice(0, 1000);
-          const stderr = String(termResult?.stderr || "").slice(0, 1000);
-          conversation.push({
-            role: "system",
-            content: `VALIDATION COMMAND FAILED: ${requestedCmd}\nSTDOUT:\n${stdout}\n\nSTDERR:\n${stderr}`
-          });
+        }
         }
       }
     }
@@ -2407,13 +3460,31 @@ RULES:
     if (toolName === "WRITE_FILE" && (!result?.success || !result?.changed)) {
       const errorMsg = String(result?.error || result?.message || "WRITE_FILE produced no content change");
       if (errorMsg.toLowerCase().includes("no content change")) {
-        console.log("[AgentLoop] WRITE_FILE produced no content change — guiding to use APPLY_PATCH");
-        conversation.push({
-          role: "system",
-          content: `WRITE_FILE produced no content change (${errorMsg}). The file likely already contains the requested content. Use APPLY_PATCH if you need to make a focused change, or proceed directly if the goal is already satisfied.`
-        });
-        continue;
+        if (toolPolicy.mode === "WRITE_AND_RUN") {
+          if (result?.success === true && result?.changed === false) {
+            updateRequestedChangeStatus("already_satisfied", "write_idempotent", result?.file || args?.path, "WRITE_FILE produced no content change - file already up to date");
+          }
+          const pending = getPendingRequiredCommands();
+          if (pending.length) {
+            console.log("[NEXT_REQUIRED_ACTION]", { action: "RUN_TERMINAL", command: pending[0], reason: "required command pending after write satisfied" });
+            const dbg = createEvent("debug", { section: "NEXT_REQUIRED_ACTION", action: "RUN_TERMINAL", command: pending[0], reason: "required command pending after write satisfied" });
+            events.push(dbg); history.push(dbg);
+            // Do not continue here; let the model propose RUN_TERMINAL or the deterministic path above handle it if this block was reached after VALIDATE_PATCH
+          }
+        } else {
+          console.log("[AgentLoop] WRITE_FILE produced no content change — guiding to use APPLY_PATCH");
+          conversation.push({
+            role: "system",
+            content: `WRITE_FILE produced no content change (${errorMsg}). The file likely already contains the requested content. Use APPLY_PATCH if you need to make a focused change, or proceed directly if the goal is already satisfied.`
+          });
+          continue;
+        }
       }
+    }
+
+    // Handle APPLY_PATCH with no content change (idempotent)
+    if (toolName === "APPLY_PATCH" && result?.success === false && String(result?.error || "").toLowerCase().includes("no content change")) {
+      updateRequestedChangeStatus("already_satisfied", "apply_patch_idempotent", args?.file || result?.file, "APPLY_PATCH produced no content change");
     }
 
     // Check if goal is satisfied for read-only tasks after each tool execution
@@ -2440,7 +3511,7 @@ RULES:
     if (isCodingComplete(taskType, changedFiles, toolCalls, validationFailed)) {
       console.log("[AgentLoop] CODING complete — changed files, successful terminal, no validation failures");
       if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
-      qualityGate = await evaluateQualityGate({
+      qualityGate = await runQualityGate({
         acceptanceCriteria: criteriaEffective,
         changedFiles: [...changedFiles],
         toolCalls,
@@ -2567,7 +3638,7 @@ RULES:
               // If terminal succeeded, try to complete immediately through the quality gate
               if (termCall.success) {
                 if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
-                qualityGate = await evaluateQualityGate({
+                qualityGate = await runQualityGate({
                   acceptanceCriteria: criteriaEffective,
                   changedFiles: [...changedFiles],
                   toolCalls,
@@ -2607,6 +3678,71 @@ RULES:
               });
             }
           }
+        }
+      }
+    }
+
+    // Deterministic final summary for WRITE_AND_RUN when status is known, all commands succeeded, and no done yet
+    if (
+      !parsed?.done &&
+      toolPolicy.mode === "WRITE_AND_RUN" &&
+      requestedChangeStatus !== "unknown" &&
+      !finalText &&
+      hasAllSuccessfulRequiredCommands()
+    ) {
+      const hasCommands = toolPolicy.requiredCommands && toolPolicy.requiredCommands.length > 0;
+      const cmdText = hasCommands ? toolPolicy.requiredCommands.join(", ") : "";
+      const output = lastTerminalOutput();
+      if (requestedChangeStatus === "already_satisfied") {
+        const scriptInfo = extractRequestedScript(objective);
+        if (scriptInfo && scriptInfo.name) {
+          finalText = hasCommands
+            ? `The npm script '${scriptInfo.name}' already existed with the expected value, and ${cmdText} completed successfully.${output ? ` Output: ${output}` : ""}`
+            : `The npm script '${scriptInfo.name}' already existed with the expected value.${output ? ` Output: ${output}` : ""}`;
+        } else {
+          finalText = hasCommands
+            ? `The requested content already had the expected content, and ${cmdText} executed successfully.${output ? ` Output: ${output}` : ""}`
+            : `The requested content already had the expected content.${output ? ` Output: ${output}` : ""}`;
+        }
+      } else if (requestedChangeStatus === "changed") {
+        finalText = hasCommands
+          ? `The requested change was applied and ${cmdText} completed successfully.${output ? ` Output: ${output}` : ""}`
+          : `The requested change was applied successfully.${output ? ` Output: ${output}` : ""}`;
+      }
+      if (finalText) {
+        console.log("[DETERMINISTIC_FINAL_SUMMARY]", { generated: true, requestedChangeStatus, requiredCommands: toolPolicy.requiredCommands });
+        const dbgDetFinal = createEvent("debug", { section: "DETERMINISTIC_FINAL_SUMMARY", generated: true, requestedChangeStatus, requiredCommands: toolPolicy.requiredCommands });
+        events.push(dbgDetFinal); history.push(dbgDetFinal);
+        qualityGate = await runQualityGate({
+          acceptanceCriteria: criteriaEffective,
+          changedFiles: [...changedFiles],
+          toolCalls,
+          workspaceRoot: resolvedWorkspaceRoot,
+          finalText
+        });
+        recordEvent("quality_gate", { step, passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
+        if (qualityGate.passed) {
+          recordEvent("completion", { step, message: "Task completed.", finalText });
+          console.log("[AgentLoop] Deterministic final summary — quality gate passed, returning immediately");
+          const changedFileList = [...changedFiles].sort();
+          const diffSummary = resolvedWorkspaceRoot
+            ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList)
+            : { stat: "", numstat: "" };
+          return {
+            success: true,
+            status: "completed",
+            final: finalText,
+            error: null,
+            history,
+            events,
+            toolCalls,
+            changedFiles: changedFileList,
+            diffSummary,
+            qualityGate,
+            acceptanceCriteria: criteriaEffective,
+            workspaceRoot: resolvedWorkspaceRoot || null,
+            workspaceId: workspaceId || null
+          };
         }
       }
     }
@@ -2681,6 +3817,19 @@ RULES:
         numstat: ""
       };
 
+  // Phase 4.9: Ensure finalText is set before the final QualityGate.
+  if (!finalText && planner) {
+    finalText = buildPlannerFinalText({
+      planner,
+      toolCalls,
+      readFileCache,
+      readOnly: isReadOnly || isNonCodingTask
+    });
+    console.log('[PLANNER_FALLBACK_FINAL_TEXT]', { finalText });
+    const dbgPFF = createEvent("debug", { section: "PLANNER_FALLBACK_FINAL_TEXT", finalText });
+    events.push(dbgPFF); history.push(dbgPFF);
+  }
+
   if (!qualityGate?.passed) {
     const qInputFinal = {
       acceptanceCriteria: criteriaEffective,
@@ -2703,20 +3852,18 @@ RULES:
       const dbg = createEvent("debug", { section: "QUALITY_GATE_INPUT_FINAL", data: qInputFinal });
       events.push(dbg); history.push(dbg);
     }
-    qualityGate = await evaluateQualityGate({ ...qInputFinal, acceptanceCriteria: criteriaEffective });
+    qualityGate = await runQualityGate({
+      ...qInputFinal,
+      acceptanceCriteria: criteriaEffective,
+      requiredCommands: originalRequiredCommands
+    });
     if (DEBUG()) {
       console.log("[QUALITY GATE OUTPUT FINAL]", { passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
       const dbg = createEvent("debug", { section: "QUALITY_GATE_OUTPUT_FINAL", data: { passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures, checks: (qualityGate.checks || []).map(c => ({ id: c.id, passed: c.passed, message: c.message })) } });
       events.push(dbg); history.push(dbg);
     }
-    // Non-coding tasks: override quality gate to passed (no file changes expected)
-    if ((isNonCodingTask || isReadOnly) && changedFiles.size === 0 && finalText) {
-      qualityGate.passed = true;
-    }
   }
-
-  const hasReadOnlyCompleted = (isNonCodingTask || isReadOnly) && (inspectedFiles.size > 0 || finalText) && changedFiles.size === 0;
-  const success = hasReadOnlyCompleted || (qualityGate.passed === true && !validationFailed);
+  const success = !plannerFatalBlock && qualityGate?.passed === true && !validationFailed;
   const status = success ? "completed" : "needs_revision";
   if (!finalText) {
     finalText = success
@@ -2733,6 +3880,9 @@ RULES:
   if (DEBUG()) {
     console.log("[runAgentLoop] final status=%s success=%s changedFiles=%d steps=%d",
       status, success, changedFileList.length, events.filter(e => e.type === "thinking").length);
+  }
+  if (planner) {
+    planner._logCompletion();
   }
 
       return {
@@ -2799,28 +3949,51 @@ export function normalizeToolPayload(parsed) {
   return { toolName, args };
 }
 
-// Compress local prompts: remove excessive blanks, normalize simple script ops
-function compressLocalInstruction(objective) {
-  let text = String(objective || '').trim();
-  // Collapse multiple blank lines
-  text = text.replace(/\n{2,}/g, '\n');
-  // Simple rename pattern: "name" -> to -> "name2" or without quotes
-  const renameLoose = /["']?([A-Za-z0-9:_\-]+)["']?\s*(?:\r?\n|\s)+to\s*(?:\r?\n|\s)+["']?([A-Za-z0-9:_\-]+)["']?/i;
-  const npmRun = /npm\s+run\s+([A-Za-z0-9:_\-]+)/i.exec(text);
-  const m = renameLoose.exec(text);
-  if (m) {
-    const from = m[1];
-    const to = m[2];
-    const runLine = npmRun ? ` Then run npm run ${npmRun[1]}.` : '';
-    return `Open package.json. Rename script ${from} to ${to}.${runLine}`;
+// Compress local prompts: safe whitespace-only transformations.
+// Never replaces task intent, never invents actions, never changes semantics.
+export function compressLocalInstruction(objective) {
+  const text = String(objective || '').trim();
+
+  // For prompts shorter than 2000 characters, disable all compression
+  if (text.length < 2000) {
+    return text;
   }
-  // Simple add pattern: "name": "value"
-  const addMatch = /["']([A-Za-z0-9:_\-]+)["']\s*:\s*["']([^"']+)["']/i.exec(text);
-  if (/(^|\b)add\b/i.test(text) && addMatch) {
-    const name = addMatch[1];
-    const value = addMatch[2];
-    const runAdd = new RegExp(`npm\\s+run\\s+${name.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}`, 'i').test(text) ? ` Then run npm run ${name}.` : '';
-    return `Open package.json. Add script ${name} = "${value}".${runAdd}`;
+
+  // Safety: if text has more than 4 double-quotes, the value likely contains
+  // nested quotes (e.g. "node -e "console.log(...)""). Compression is unsafe.
+  const doubleQuoteCount = (text.match(/"/g) || []).length;
+  if (doubleQuoteCount > 4) {
+    console.log('[LOCAL_PROMPT_COMPRESSED]', {
+      originalLength: text.length,
+      compactLength: text.length,
+      compressionRatio: '1.00',
+      semanticChangesDetected: false,
+      reason: 'aborted — nested double-quotes detected'
+    });
+    return text;
   }
-  return text;
+
+  // Only safe whitespace transformations:
+  let compact = text;
+  // Collapse 3+ consecutive blank lines to at most 2 (preserves paragraph separation)
+  compact = compact.replace(/\n{3,}/g, '\n\n');
+  // Collapse multiple consecutive spaces/tabs to a single space
+  compact = compact.replace(/[ \t]{2,}/g, ' ');
+
+  const originalLength = text.length;
+  const compactLength = compact.length;
+  const compressionRatio = originalLength > 0
+    ? (originalLength / Math.max(compactLength, 1)).toFixed(2)
+    : '1.00';
+
+  if (compact !== text) {
+    console.log('[LOCAL_PROMPT_COMPRESSED]', {
+      originalLength,
+      compactLength,
+      compressionRatio,
+      semanticChangesDetected: false
+    });
+  }
+
+  return compact;
 }

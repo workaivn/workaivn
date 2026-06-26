@@ -124,3 +124,90 @@ test("agent loop returns needs_revision when minimal product build never passes 
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("quality gate fails when required command was not executed", async () => {
+  const gate = await evaluateQualityGate({
+    acceptanceCriteria: {
+      taskType: "ANALYSIS",
+      taskMode: "read_only",
+      objective: "Read package.json. Then run: npm test",
+      requestedFiles: ["package.json"],
+      requiredCommands: ["npm test"]
+    },
+    changedFiles: [],
+    toolCalls: [
+      {
+        tool: "READ_FILE",
+        success: true,
+        args: { path: "package.json" },
+        result: { file: "package.json", content: "{\"name\":\"demo\"}" }
+      }
+    ],
+    finalText: "Read package.json and completed validation."
+  });
+
+  assert.equal(gate.passed, false);
+  assert.ok(gate.failures.some(message => /Required commands not executed: npm test/i.test(message)));
+});
+
+test("quality gate reports failed required command separately from missing command", async () => {
+  const gate = await evaluateQualityGate({
+    acceptanceCriteria: {
+      taskType: "ANALYSIS",
+      taskMode: "read_only",
+      objective: "Read package.json. Then run: npm test",
+      requestedFiles: ["package.json"],
+      requiredCommands: ["npm test"]
+    },
+    changedFiles: [],
+    toolCalls: [
+      {
+        tool: "READ_FILE",
+        success: true,
+        args: { path: "package.json" },
+        result: { file: "package.json", content: "{\"name\":\"demo\"}" }
+      },
+      {
+        tool: "RUN_TERMINAL",
+        success: false,
+        args: { command: "npm test" },
+        result: { command: "npm test", exitCode: 1, stdout: "", stderr: "failed" }
+      }
+    ],
+    finalText: "Read package.json and npm test failed."
+  });
+
+  assert.equal(gate.passed, false);
+  assert.ok(gate.failures.some(message => /Required commands failed: npm test/i.test(message)));
+  assert.ok(!gate.failures.some(message => /Required commands not executed: npm test/i.test(message)));
+});
+
+test("quality gate allows read-only validation without changed files when command ran", async () => {
+  const gate = await evaluateQualityGate({
+    acceptanceCriteria: {
+      taskType: "ANALYSIS",
+      taskMode: "read_only",
+      objective: "Read package.json. Then run: npm test",
+      requestedFiles: ["package.json"],
+      requiredCommands: ["npm test"]
+    },
+    changedFiles: [],
+    toolCalls: [
+      {
+        tool: "READ_FILE",
+        success: true,
+        args: { path: "package.json" },
+        result: { file: "package.json", content: "{\"name\":\"demo\"}" }
+      },
+      {
+        tool: "RUN_TERMINAL",
+        success: true,
+        args: { command: "npm test" },
+        result: { command: "npm test", exitCode: 0, stdout: "ok", stderr: "" }
+      }
+    ],
+    finalText: "Read package.json and npm test passed."
+  });
+
+  assert.equal(gate.passed, true);
+});

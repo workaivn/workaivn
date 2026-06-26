@@ -12,7 +12,8 @@ const TASK_TYPE_PATTERNS = {
     /^(?:hello|hi|hey|chào|hello_workai|xin chào|test)$/i,
     /\b(?:just|only)\s+(?:reply|answer|respond|say)\b/i,
     /^(?:what|who|why|how|when|where)\s+(?:is|are|was|were|do|does|did)\s+(?:you|your)\b/i,
-    /\b(?:không\s+cần|ko\s+cần|chỉ\s+cần|trả\s+lời)\b/i
+    /\b(?:không\s+cần|ko\s+cần|chỉ\s+cần|trả\s+lời)\b/i,
+    /^(?:repeat|say|echo|summarize|tổng\s+kết|lặp\s+lại)\b/i
   ],
   search: [
     /\b(?:tìm|search|find|where\s+is|show\s+me|locate)\b/i,
@@ -22,7 +23,8 @@ const TASK_TYPE_PATTERNS = {
   analysis: [
     /\b(?:phân\s+tích|analyze|analyse|inspect|review|check|kiểm\s+tra|xem\s+xét)\b/i,
     /\b(?:đọc|read|show|display|print|dump).*\b(?:file|nội\s+dung|content)\b/i,
-    /\b(?:what\s+(?:is|are|does)|how\s+(?:is|are|does|many))\b(?!.*(?:add|create|write|modify))/i
+    /\b(?:what\s+(?:is|are|does)|how\s+(?:is|are|does|many))\b(?!.*(?:add|create|write|modify))/i,
+    /\b(?:explain\s+(?:what|this|the|why|how))/i
   ]
 };
 

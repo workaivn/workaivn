@@ -1306,13 +1306,14 @@ export async function getAgentRun(req, res) {
         const reason = call.result?.reason || call.result?.error || "Blocked";
         const intentMode = call.result?.intentMode || null;
         const forbiddenTool = call.result?.forbiddenTool || call.tool;
+        const args = call.args ? JSON.stringify(call.args) : null;
         try {
           console.log("[PATCH_UI_SOURCE]", { source: "api_get_run:blockedTools", file, iteration: (call.step ?? null) });
         } catch {}
-        return { tool: call.tool, file, reason, intentMode, forbiddenTool };
+        return { tool: call.tool, file, args, reason, intentMode, forbiddenTool };
       });
     const terminalCommands = toolCalls
-      .filter(call => call.tool === "RUN_TERMINAL")
+      .filter(call => call.tool === "RUN_TERMINAL" && !call?.result?.blocked)
       .map(call => ({ command: call.args?.command || "", ok: call.success !== false }));
 
     const errors = [

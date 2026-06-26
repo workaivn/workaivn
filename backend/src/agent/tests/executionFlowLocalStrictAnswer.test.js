@@ -25,10 +25,8 @@ test('Read package.json -> strict final must include package name', async () => 
       generateResponse: async ({ messages }) => {
         calls.push(messages);
         step += 1;
-        if (step === 1) {
-          return JSON.stringify({ tool: 'READ_FILE', args: { path: 'package.json' }, done: false });
-        }
-        // Step 2: verify strict instruction is present
+        // Planner now dispatches READ_FILE directly (no model call for READ_FILE).
+        // First model call receives guidance to produce FINAL with strict instructions.
         const lastSys = messages.filter(m => m.role === 'system').at(-1)?.content || '';
         assert.match(lastSys, /You have read package\.json\./);
         assert.match(lastSys, /Extract the 'name' field/);

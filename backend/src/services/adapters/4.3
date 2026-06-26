@@ -1,0 +1,15 @@
+Implement Phase 4.3 - Dependency Engine.
+
+Goal:
+Planner unlocks tasks only when all dependencies succeed.
+
+Requirements:
+- READY only if every dependency SUCCESS.
+- FAILED dependency blocks descendants.
+- BLOCKED state supported.
+- Planner API:
+  canRun(task)
+  unblockChildren(task)
+- Never execute child before parent.
+- Add dependency diagnostics.
+- Existing tests must continue passing.

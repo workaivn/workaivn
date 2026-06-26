@@ -95,20 +95,23 @@ async function readChangedFileEvidence(workspaceRoot, changedFiles) {
   return evidence;
 }
 
-export async function evaluateQualityGate({
-  acceptanceCriteria,
-  changedFiles = [],
-  toolCalls = [],
-  workspaceRoot = "",
-  finalText = ""
-}) {
+export async function evaluateQualityGate(input = {}) {
+  const {
+    acceptanceCriteria,
+    changedFiles = [],
+    toolCalls = [],
+    workspaceRoot = "",
+    finalText = "",
+  } = input;
+  const packageJsonValid = input.packageJsonValid !== false;
   const criteria = acceptanceCriteria || {};
+  const requiredCommands = input.requiredCommands || criteria.requiredCommands || [];
   const taskType = criteria.taskType || "CODING";
   // Intent-aware mode override
   let mode = criteria.taskMode || (taskType === "CHAT" ? "qa" : (taskType === "CODING" ? "coding" : "read_only"));
   const intentMode = String(criteria.intentMode || "");
   if (intentMode === "READ_ONLY") mode = "read_only";
-  if (intentMode === "WRITE" || intentMode === "WRITE_AND_RUN") mode = "coding";
+  if ((intentMode === "WRITE" || intentMode === "WRITE_AND_RUN") && !criteria.doNotModify) mode = "coding";
   if (DEBUG()) {
     const filesRead = toolCalls.filter(call => call.tool === "READ_FILE" && call.success).map(call => call.result?.file || call.args?.path);
     const terminals = toolCalls.filter(call => call.tool === "RUN_TERMINAL");
@@ -152,6 +155,24 @@ export async function evaluateQualityGate({
       return !successfulReadBasenames.includes(f);
     });
     const nonEmptyFinal = !!String(finalText || "").trim();
+    const terminalCalls = toolCalls.filter(call => call.tool === "RUN_TERMINAL");
+    const requiredCommandStates = requiredCommands.map(cmd => {
+      const expected = String(cmd || "").trim();
+      const matchingCalls = terminalCalls.filter(call =>
+        String(call.args?.command || call.result?.command || "").trim() === expected
+      );
+      const succeeded = matchingCalls.some(call =>
+        call.success === true &&
+        (call.result?.exitCode === 0 || call.result?.exitCode === undefined)
+      );
+      return { command: expected, executed: matchingCalls.length > 0, succeeded };
+    });
+    const missingCommands = requiredCommandStates
+      .filter(state => !state.executed)
+      .map(state => state.command);
+    const failedCommands = requiredCommandStates
+      .filter(state => state.executed && !state.succeeded)
+      .map(state => state.command);
     // Detect raw dump: starts with --- <file> --- and includes code-like content
     const normalizedFinal = String(finalText || "");
     const startsWithDumpHeader = /^---\s+[^\n]+\s+---/i.test(normalizedFinal.trim());
@@ -182,13 +203,15 @@ export async function evaluateQualityGate({
         answersObjective = String(finalText || "").toLowerCase().includes(pkgName.toLowerCase());
       }
     }
-    const passed = missing.length === 0 && nonEmptyFinal && (!questionWords || !isRawDump) && answersObjective;
+    const passed = missing.length === 0 && missingCommands.length === 0 && failedCommands.length === 0 && nonEmptyFinal && (!questionWords || !isRawDump) && answersObjective;
     const out = {
       passed,
       evaluatedAt: new Date(),
       score: passed ? 100 : 0,
       checks: [
         { id: "requested_files_read", passed: missing.length === 0, message: missing.length ? `Missing reads: ${missing.join(", ")}` : "All requested files were read." },
+        { id: "required_commands_executed", passed: missingCommands.length === 0, message: missingCommands.length ? `Missing required commands: ${missingCommands.join(", ")}` : "All required commands were executed." },
+        { id: "required_commands_succeeded", passed: failedCommands.length === 0, message: failedCommands.length ? `Required commands failed: ${failedCommands.join(", ")}` : "All required commands succeeded." },
         { id: "final_present", passed: nonEmptyFinal, message: "Final answer must be present." },
         { id: "no_file_changes", passed: changedFiles.length === 0, message: changedFiles.length ? "No file modifications allowed for read-only tasks." : "No files were modified." },
         { id: "not_raw_dump", passed: !isRawDump, message: isRawDump ? "Final answer is raw file dump, not analysis." : "Final is not a raw dump." },
@@ -196,6 +219,8 @@ export async function evaluateQualityGate({
       ],
       failures: passed ? [] : [
         ...(missing.length ? [`Requested files not read: ${missing.join(", ")}`] : []),
+        ...(missingCommands.length ? [`Required commands not executed: ${missingCommands.join(", ")}`] : []),
+        ...(failedCommands.length ? [`Required commands failed: ${failedCommands.join(", ")}`] : []),
         ...(nonEmptyFinal ? [] : ["No final text"]),
         ...(changedFiles.length ? ["Files changed in read-only task"] : []),
         ...(isRawDump ? ["Final answer is raw file dump, not analysis."] : []),
@@ -204,6 +229,7 @@ export async function evaluateQualityGate({
       feedback: passed ? "Quality gate passed." : "Quality gate failed: ensure requested files are read and provide a final answer.",
       evidence: {
         filesRead: unique(successfulReads.map(call => call.result?.file || call.args?.path)),
+        terminalCommands: terminalCalls.map(call => call.args?.command).filter(Boolean),
         filesChanged: [],
         layers: []
       }
@@ -217,7 +243,7 @@ export async function evaluateQualityGate({
   const meaningfulFiles = unique(changedFiles).filter(isMeaningfulFile);
   // successfulReads already computed above
   const successfulToolCalls = toolCalls.filter(call =>
-    call.success && ["READ_FILE", "LIST_FILES", "SEARCH_FILES"].includes(call.tool)
+    call.success && ["READ_FILE", "LIST_FILES", "SEARCH_CODE", "SEARCH_SYMBOL"].includes(call.tool)
   );
   const terminalCalls = toolCalls.filter(call => call.tool === "RUN_TERMINAL");
   const successfulCommands = terminalCalls.filter(call => call.success && isValidationCommand(call.args?.command));
@@ -273,12 +299,14 @@ export async function evaluateQualityGate({
     const meaningfulChanged = meaningfulFiles.length > 0;
     const mustValidate = meaningfulChanged || intentMode === "WRITE_AND_RUN" || objectiveRequiresTerminal;
 
-    // Accept idempotent write success
-    const hasAlreadyUpToDate = toolCalls.some(call => call.tool === "WRITE_FILE" && call.success && call.result && call.result.alreadyUpToDate === true);
+    // Accept idempotent write success (alreadyUpToDate or changed === false)
+    const hasAlreadyUpToDate = toolCalls.some(call =>
+      call.tool === "WRITE_FILE" && call.success && call.result && (call.result.alreadyUpToDate === true || call.result.changed === false)
+    );
 
     check(
       "workspace_changes",
-      meaningfulChanged || hasAlreadyUpToDate,
+      meaningfulChanged || hasAlreadyUpToDate || (intentMode === "WRITE_AND_RUN" && successfulCommands.length > 0),
       "No meaningful source files were changed.",
       meaningfulFiles
     );
@@ -325,9 +353,10 @@ export async function evaluateQualityGate({
 
     check(
       "patch_validation",
-      (meaningfulFiles.length > 0 &&
+      (meaningfulFiles.length === 0) || (
         successfulValidations.length > 0 &&
-        failedValidations.length === 0),
+        failedValidations.length === 0
+      ),
       "Changed files must pass patch validation.",
       {
         passed: successfulValidations.map(call => call.args?.file),
@@ -345,6 +374,28 @@ export async function evaluateQualityGate({
     if (claimsChange && meaningfulFiles.length === 0 && DEBUG()) {
       console.warn("[CLAIMED_CHANGE_WITHOUT_EVIDENCE]");
     }
+
+    // Required commands enforcement: user-requested commands must be exact-matched with success
+    if (requiredCommands.length > 0) {
+      for (const cmd of requiredCommands) {
+        const matched = terminalCalls.some(c =>
+          c.success &&
+          String(c.args?.command || "").trim() === cmd &&
+          (c.result?.exitCode === 0 || c.result?.exitCode === undefined)
+        );
+        check(
+          `required_command_${cmd.replace(/[^a-zA-Z0-9]/g, '_')}`,
+          matched,
+          `Required command "${cmd}" must be executed successfully (exit code 0).`,
+          { command: cmd, matched }
+        );
+      }
+    }
+  }
+
+  // Non-coding mode check: package.json validity
+  if (!packageJsonValid) {
+    check("package_json_valid", false, "package.json is not valid JSON after modifications.");
   }
 
   const placeholders = (criteria.forbiddenPlaceholders || [])

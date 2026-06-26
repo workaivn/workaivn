@@ -1,0 +1,281 @@
+PHASE 8 — SELF-EVOLVING PLATFORM
+Phase 8.1 — Self Benchmark Engine
+Implement Phase 8.1 - Self Benchmark Engine.
+
+Goal:
+WorkAIVN automatically benchmarks every provider/model.
+
+Test:
+- JSON tool call
+- READ_FILE
+- WRITE_FILE
+- APPLY_PATCH
+- RUN_TERMINAL
+- FINAL
+- multi-step coding
+- read-only analysis
+
+Collect:
+- latency
+- success rate
+- tool accuracy
+- JSON validity
+- cost
+- token usage
+- timeout rate
+
+Create:
+backend/src/agent/benchmark/
+
+benchmarkRunner.js
+modelBenchmark.js
+benchmarkStore.js
+
+Output:
+MODEL_BENCHMARK_RESULT
+MODEL_SCORE
+Phase 8.2 — Model Router
+Implement Phase 8.2 - Model Router.
+
+Goal:
+Automatically choose the best model for each task type.
+
+Route:
+- simple read => cheapest fast model
+- coding patch => best coding model
+- long analysis => long-context model
+- local simple task => llama.cpp/Ollama
+- hard recovery => cloud model
+
+Use benchmark scores from Phase 8.1.
+
+Never hardcode one default model for everything.
+Phase 8.3 — Prompt Optimizer
+Implement Phase 8.3 - Prompt Optimizer.
+
+Goal:
+WorkAIVN tracks which prompts work best.
+
+Collect:
+- prompt template
+- model
+- task type
+- success/fail
+- retry count
+- quality gate score
+
+Planner should prefer prompt templates with higher success rate.
+
+Create:
+promptOptimizer.js
+promptExperiment.js
+promptTemplateStore.js
+Phase 8.4 — Failure Learning
+Implement Phase 8.4 - Failure Learning.
+
+Goal:
+Every failed run becomes training signal.
+
+Store:
+- objective
+- failed task
+- failed tool
+- stderr
+- model output
+- recovery used
+- final result
+
+Planner should avoid repeating known failed strategy.
+
+Create:
+failureMemory.js
+failurePatternMatcher.js
+Phase 8.5 — Auto Regression Generator
+Implement Phase 8.5 - Auto Regression Generator.
+
+Goal:
+When a bug is fixed, WorkAIVN automatically creates a regression test.
+
+Example:
+Bug:
+FINAL dispatched as tool
+
+Generated test:
+FINAL should be accepted, not executeTool("FINAL")
+
+Create:
+regressionGenerator.js
+testCaseBuilder.js
+
+Output:
+AUTO_REGRESSION_CREATED
+Phase 8.6 — Self Refactor Advisor
+Implement Phase 8.6 - Self Refactor Advisor.
+
+Goal:
+WorkAIVN analyzes its own codebase and suggests refactors.
+
+Detect:
+- duplicated planner logic
+- large files
+- tangled dependencies
+- slow paths
+- unused helpers
+- repeated prompt logic
+
+Do not auto-apply refactor yet.
+Only generate advisory report.
+Phase 8.7 — Self Patch Mode
+Implement Phase 8.7 - Self Patch Mode.
+
+Goal:
+WorkAIVN can safely patch its own agent code.
+
+Rules:
+- must create plan
+- must run tests
+- must pass Quality Gate
+- must create regression test
+- must not modify unrelated files
+
+Self-patching must be explicitly enabled.
+Phase 8.8 — Model Cost Governor
+Implement Phase 8.8 - Model Cost Governor.
+
+Goal:
+Prevent credit burn.
+
+Track:
+- per provider cost
+- per run cost
+- per task cost
+- monthly limit
+- remaining budget
+
+If low budget:
+- prefer local model
+- reduce context
+- disable expensive retries
+- ask user before cloud escalation
+
+Create:
+costGovernor.js
+budgetPolicy.js
+Phase 8.9 — Auto Provider Fallback
+Implement Phase 8.9 - Auto Provider Fallback.
+
+Goal:
+If one provider fails or hits quota, route to another.
+
+Handle:
+- 429 quota
+- timeout
+- bad JSON
+- provider offline
+- local server down
+
+Fallback order should be configurable.
+
+Do not lose run state when switching provider.
+Phase 8.10 — Self Evaluation Dashboard
+Implement Phase 8.10 - Self Evaluation Dashboard.
+
+Goal:
+Admin can see how WorkAIVN improves over time.
+
+Show:
+- model scores
+- success rate
+- failed runs
+- regression tests generated
+- cost trend
+- prompt template performance
+- planner strategy performance
+Phase 8.11 — Continuous Improvement Loop
+Implement Phase 8.11 - Continuous Improvement Loop.
+
+Goal:
+After each run, WorkAIVN updates:
+- benchmark stats
+- failure memory
+- prompt score
+- strategy score
+- model score
+- regression suggestions
+
+This should be async and non-blocking.
+Phase 8.12 — Safe Experiment Runner
+Implement Phase 8.12 - Safe Experiment Runner.
+
+Goal:
+WorkAIVN can test new strategies without risking real workspace.
+
+Use:
+- temp workspace clone
+- dry-run mode
+- sandbox execution
+- compare outputs
+- accept/reject experiment
+
+Never experiment directly on user workspace.
+Phase 8.13 — Strategy A/B Testing
+Implement Phase 8.13 - Strategy A/B Testing.
+
+Goal:
+Compare planner strategies.
+
+Example:
+READ_FIRST vs PATCH_FIRST
+
+Measure:
+- success
+- time
+- tool count
+- token cost
+- retries
+
+Automatically prefer winner after enough samples.
+Phase 8.14 — Local Model Trainer Dataset
+Implement Phase 8.14 - Local Model Trainer Dataset.
+
+Goal:
+Export successful local-agent traces for future fine-tuning.
+
+Export:
+- objective
+- planner task
+- correct tool call
+- tool result
+- final answer
+
+Format:
+JSONL
+
+No secrets.
+Mask sensitive data.
+Phase 8.15 — Self-Evolving Platform Complete
+Implement Phase 8.15 - Self-Evolving Platform Integration.
+
+Final flow:
+
+Run finishes
+↓
+Collect metrics
+↓
+Evaluate result
+↓
+Update model scores
+↓
+Update prompt scores
+↓
+Update planner strategy scores
+↓
+Store failures
+↓
+Generate regression suggestions
+↓
+Update dashboard
+
+Definition of Done:
+WorkAIVN improves after every run.
+It spends less, loops less, selects better models, creates better tests, and avoids known failures.

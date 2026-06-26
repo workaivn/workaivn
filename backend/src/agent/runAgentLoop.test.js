@@ -156,6 +156,44 @@ test("runAgentLoop retries once with a strict JSON-only instruction", async () =
   }
 });
 
+test("runAgentLoop dispatches parallel READ_FILE tasks and stops without model call", async () => {
+  const workspaceRoot = await createWorkspace();
+  // Create additional files to read
+  await fs.writeFile(path.join(workspaceRoot, "a.json"), JSON.stringify({ a: 1 }), "utf8");
+  await fs.writeFile(path.join(workspaceRoot, "b.json"), JSON.stringify({ b: 2 }), "utf8");
+  await execFileAsync("git", ["add", "a.json", "b.json"], { cwd: workspaceRoot });
+  await execFileAsync("git", ["commit", "-m", "add test files"], { cwd: workspaceRoot });
+
+  let modelCallCount = 0;
+
+  try {
+    const result = await runAgentLoop({
+      messages: [{ role: "user", content: "Read a.json and b.json and summarize them." }],
+      workspaceRoot,
+      maxSteps: 10,
+      acceptanceCriteria: {
+        taskType: "SEARCH",
+        taskMode: "read_only",
+        requestedFiles: ["a.json", "b.json"],
+        requiredFlows: [],
+        forbiddenPlaceholders: ["to be implemented", "not implemented", "implementation pending", "coming soon"]
+      },
+      generateResponse: async () => {
+        modelCallCount++;
+        return JSON.stringify({ done: true, final: "Model was called — unexpected." });
+      }
+    });
+
+    assert.equal(modelCallCount, 0, "Model should not be called when planner handles all tasks");
+    assert.equal(result.success, true);
+    const readCalls = result.toolCalls.filter(c => c.tool === "READ_FILE" && c.success);
+    assert.equal(readCalls.length, 2, "Both READ_FILE tasks should succeed");
+    assert.ok(result.final.includes("2 succeeded"), "Final summary should mention success count");
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 test("runAgentLoop retries and salvages plain text as final response", async () => {
   const workspaceRoot = await createWorkspace();
   let callCount = 0;
