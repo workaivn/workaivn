@@ -431,6 +431,7 @@ async function executeAgentRun({
   run.maxSteps = policy.maxSteps;
 
   const result = await runAgentLoop({
+    enableToolOptimizer: true,
     messages: [
       { role: "system", content: agent.systemPrompt },
       ...(continuationFeedback
@@ -552,6 +553,10 @@ async function executeAgentRun({
   }
   run.completedAt = new Date();
   await run.save();
+  console.log('[RUN_COMPLETION]', {
+    savedStatus: run.status,
+    savedSuccess: run.status === "completed" && run.qualityGate?.passed === true
+  });
 
   return {
     success: run.status === "completed" && run.qualityGate?.passed === true,

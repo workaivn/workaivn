@@ -110,3 +110,40 @@ test('D: Read scripts only, do not edit or run', async () => {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test('HOTFIX: Create landing page with npm build remains coding WRITE_AND_RUN', async () => {
+  const root = await createWorkspace({ name: 'landing-app', version: '1.0.0', scripts: { build: 'echo build' } });
+  const prompt = `Create a simple landing page for WorkAIVN with:
+
+* Hero title
+* Subtitle
+* 3 feature cards
+* CTA button
+
+Use the existing React application.
+Do not create a new project.
+
+Run:
+npm run build`;
+
+  try {
+    const result = await runAgentLoop({
+      messages: [{ role: 'user', content: prompt }],
+      workspaceRoot: root,
+      maxSteps: 0,
+      generateResponse: async () => JSON.stringify({ done: true, final: 'not used' })
+    });
+
+    const classifier = result.events.find(e => e.section === 'CLASSIFIER_RESULT')?.result;
+    assert.ok(classifier, 'Classifier debug event should be present');
+    assert.equal(classifier.taskMode, 'coding');
+    assert.equal(classifier.intentMode, 'WRITE_AND_RUN');
+    assert.deepEqual(classifier.forbiddenTools, []);
+    assert.deepEqual(classifier.requiredCommands, ['npm run build']);
+    assert.equal(result.acceptanceCriteria.taskMode, 'coding');
+    assert.equal(result.acceptanceCriteria.intentMode, 'WRITE_AND_RUN');
+    assert.equal(result.acceptanceCriteria.doNotModify, false);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

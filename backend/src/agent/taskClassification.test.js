@@ -94,3 +94,24 @@ test("buildAcceptanceCriteria classifies add+run prompt as CODING", () => {
   assert.equal(c.requiresWorkspaceChange, true);
   assert.equal(c.requiresValidationCommand, true);
 });
+
+test("landing page create prompt with build command is CODING despite do not create new project", () => {
+  const prompt = `Create a simple landing page for WorkAIVN with:
+
+* Hero title
+* Subtitle
+* 3 feature cards
+* CTA button
+
+Use the existing React application.
+Do not create a new project.
+
+Run:
+npm run build`;
+
+  const c = buildAcceptanceCriteria(prompt);
+  assert.equal(c.taskType, "CODING");
+  assert.equal(c.taskMode, "coding");
+  assert.equal(c.requiresWorkspaceChange, true);
+  assert.equal(c.requiresValidationCommand, true);
+});

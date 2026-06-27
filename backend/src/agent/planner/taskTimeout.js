@@ -79,6 +79,23 @@ export function shouldStallTask(taskState, now) {
   return { stalled: false };
 }
 
+/**
+ * Check if a task has exceeded its wall-clock timeout.
+ * Returns { timedOut: true, elapsed, timeoutMs } if timed out,
+ * else { timedOut: false }.
+ */
+export function checkTaskTimeout(task) {
+  const startedAt = task.startedAt;
+  if (!startedAt) return { timedOut: false };
+  const timeoutMs = task.timeoutMs || DEFAULT_TIMEOUT_MS;
+  const now = Date.now();
+  const elapsed = now - startedAt;
+  if (elapsed >= timeoutMs) {
+    return { timedOut: true, elapsed, timeoutMs };
+  }
+  return { timedOut: false };
+}
+
 export function buildTaskTimeoutReason(taskState) {
   const parts = [];
   if (taskState.statusReason) parts.push(taskState.statusReason);

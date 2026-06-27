@@ -353,12 +353,13 @@ test('classifyReadWriteFiles: read and write targets detected correctly', () => 
   assert.deepEqual(writeFiles, ['src/priority-test.js'], 'src/priority-test.js should be write target');
 });
 
-test('classifyReadWriteFiles: all files default to write when no read/write keywords', () => {
+test('classifyReadWriteFiles: files without read/write keywords are not write targets', () => {
   const objective = 'Work on package.json and src/app.js';
   const files = ['package.json', 'src/app.js'];
 
   const { readFiles, writeFiles } = classifyReadWriteFiles(objective, files);
-  assert.equal(writeFiles.length, 2, 'Both files should be write targets by default');
+  assert.equal(readFiles.length, 0, 'No files should be read targets without explicit read intent');
+  assert.equal(writeFiles.length, 0, 'No files should be write targets without explicit write intent');
 });
 
 test('buildPlan: mixed prompt decomposes into READ → WRITE → RUN tasks', () => {
@@ -373,7 +374,7 @@ test('buildPlan: mixed prompt decomposes into READ → WRITE → RUN tasks', () 
 
   // Should have 3+ tasks: READ_FILE, WRITE(CODING), RUN_TERMINAL
   const readTasks = tasks.filter(t => t.tool === 'READ_FILE');
-  const writeTasks = tasks.filter(t => !t.tool);  // CODING tasks without tool set
+  const writeTasks = tasks.filter(t => t.tool === 'WRITE_FILE');  // WRITE_FILE tasks from decomposition
   const runTasks = tasks.filter(t => t.tool === 'RUN_TERMINAL');
 
   assert.ok(readTasks.length >= 1, 'Should have at least one READ_FILE task');

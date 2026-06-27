@@ -1,6 +1,8 @@
 import { askAI } from "../services/aiRouter.js";
 import fs from "fs/promises";
+import path from "path";
 import { executeTool } from "./toolExecutor.js";
+import { createExecutionCache, getSharedExecutionCache } from "./executionCache.js";
 import { scanProject } from "./projectScanner.js";
 import {
   getDiffSummary,
@@ -15,7 +17,10 @@ import {
 import { evaluateQualityGate } from "./qualityGate.js";
 import { Planner } from "./planner/planner.js";
 import { TaskStatus } from "./planner/plannerTypes.js";
+import { Task } from "./planner/task.js";
 import { buildPlan, extractCommands } from "./planner/planBuilder.js";
+import { buildPlannerContext } from "./planner/contextBuilder.js";
+import { expandPlannerTasks } from "./planner/taskExpander.js";
 import {
   notifyToolExecution,
   canExecuteTool,
@@ -24,14 +29,38 @@ import {
   isPlannerRecovering,
   hasReadyRecoveryTask,
   getNextRecoveryTask,
-  checkRecoveryCompletion
+  checkRecoveryCompletion,
+  tryRecovery
 } from "./planner/executionController.js";
+import { checkTaskTimeout, markTaskStall } from "./planner/taskTimeout.js";
 
 const DEBUG = () => process.env.DEBUG_AGENT === "true";
 
 const WRITE_TOOLS = new Set(["WRITE_FILE", "APPLY_PATCH"]);
 
 const READ_ONLY_TASK_TYPES = new Set(["CHAT", "SEARCH", "ANALYSIS"]);
+
+function emitHistoryLookup(history, task, step) {
+  if (!history || !task || !task.tool) return false;
+  const reason = history.skipReason(task.tool, task.toolArgs);
+  console.log('[PLANNER_HISTORY_LOOKUP]', {
+    taskId: task.id,
+    tool: task.tool,
+    args: task.toolArgs,
+    result: reason || 'not_found',
+    step
+  });
+  if (reason) {
+    console.log('[PLANNER_SKIP_HISTORY]', {
+      taskId: task.id,
+      tool: task.tool,
+      reason,
+      step
+    });
+    return true;
+  }
+  return false;
+}
 
 function parseAgentResponse(response) {
   const raw = String(response ?? "").trim();
@@ -225,6 +254,138 @@ function tryParseWithRepair(raw) {
   }
 
   return null;
+}
+
+function isPlannerReasoningTask(task) {
+  const kind = String(task?.kind || "").toUpperCase();
+  const tool = String(task?.tool || "").toUpperCase();
+  return kind === "REASONING" || kind === "GENERATE_CONTENT" || tool === "GENERATE_CONTENT";
+}
+
+function parseReasoningJson(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text) throw new Error("Reasoning returned empty response");
+
+  const candidates = [text];
+  for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+    if (match[1]?.trim()) candidates.unshift(match[1].trim());
+  }
+
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  const objectText = extractFirstJsonObject(text);
+  if (objectText) {
+    try {
+      return JSON.parse(objectText);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  const repaired = tryParseWithRepair(text);
+  if (repaired) return repaired;
+
+  throw new Error(lastError ? `Reasoning returned invalid JSON: ${lastError.message}` : "Reasoning returned no JSON object");
+}
+
+function extractReasoningToolPayloads(parsed) {
+  if (Array.isArray(parsed)) return parsed;
+  if (!parsed || typeof parsed !== "object") return [];
+  for (const key of ["toolCalls", "tool_calls", "actions", "tasks", "tools"]) {
+    if (Array.isArray(parsed[key])) return parsed[key];
+  }
+  if (parsed.tool) return [parsed];
+  return [];
+}
+
+function createExecutionTasksFromReasoning(parsed, reasoningTask) {
+  const payloads = extractReasoningToolPayloads(parsed);
+  if (payloads.length === 0) {
+    throw new Error("Reasoning JSON did not contain executable tool calls");
+  }
+
+  const tasks = [];
+  for (const payload of payloads) {
+    const norm = normalizeToolPayload(payload);
+    const toolName = String(norm.toolName || "").toUpperCase();
+    const args = norm.args || {};
+    if (!toolName || toolName === "FINAL") continue;
+
+    if (toolName === "WRITE_FILE") {
+      const file = String(args.path || "").trim();
+      const content = typeof args.content === "string" ? args.content : "";
+      if (!file) throw new Error("WRITE_FILE from reasoning is missing path");
+      if (!content.trim()) throw new Error(`WRITE_FILE from reasoning has empty content for ${file}`);
+      tasks.push(new Task({
+        kind: "EXECUTION",
+        goal: `Write generated file: ${file}`,
+        tool: "WRITE_FILE",
+        toolArgs: { ...args, path: file, file },
+        dependencies: [],
+        priority: 80
+      }));
+      continue;
+    }
+
+    if (toolName === "APPLY_PATCH") {
+      const file = String(args.file || args.path || "").trim();
+      if (!file) throw new Error("APPLY_PATCH from reasoning is missing file");
+      if (!String(args.find || "").length || !String(args.replace || "").length) {
+        throw new Error(`APPLY_PATCH from reasoning is missing find/replace for ${file}`);
+      }
+      tasks.push(new Task({
+        kind: "EXECUTION",
+        goal: `Apply generated patch: ${file}`,
+        tool: "APPLY_PATCH",
+        toolArgs: { ...args, file },
+        dependencies: [],
+        priority: 80
+      }));
+      continue;
+    }
+
+    if (toolName === "RUN_TERMINAL") {
+      const command = String(args.command || "").trim();
+      if (!command) throw new Error("RUN_TERMINAL from reasoning is missing command");
+      tasks.push(new Task({
+        kind: "EXECUTION",
+        goal: `Run command: ${command}`,
+        tool: "RUN_TERMINAL",
+        toolArgs: { ...args, command },
+        dependencies: [],
+        priority: 100
+      }));
+      continue;
+    }
+
+    if (toolName === "READ_FILE") {
+      const file = String(args.path || "").trim();
+      if (!file) throw new Error("READ_FILE from reasoning is missing path");
+      tasks.push(new Task({
+        kind: "EXECUTION",
+        goal: `Read file: ${file}`,
+        tool: "READ_FILE",
+        toolArgs: { ...args, path: file },
+        dependencies: [],
+        priority: 60
+      }));
+      continue;
+    }
+
+    throw new Error(`Unsupported reasoning tool: ${toolName}`);
+  }
+
+  if (tasks.length === 0) {
+    throw new Error(`Reasoning task ${reasoningTask?.id || ""} produced no executable tasks`);
+  }
+  return tasks;
 }
 
 function createEvent(type, details = {}) {
@@ -474,7 +635,7 @@ function buildReadOnlySummary(toolCalls, readFileCache) {
     : "Read files summary not available.";
 }
 
-function buildPlannerFinalText({ planner, toolCalls, readFileCache, readOnly = false }) {
+function buildPlannerFinalText({ planner, toolCalls, readFileCache, readOnly = false, changedFiles = [] }) {
   const allTasks = planner?.graph?.allNodes?.() || [];
   const failedTasks = allTasks.filter(t => t.status === TaskStatus.FAILED || t.status === TaskStatus.RECOVERY_FAILED);
   if (failedTasks.length > 0) {
@@ -493,9 +654,26 @@ function buildPlannerFinalText({ planner, toolCalls, readFileCache, readOnly = f
     return `${buildReadOnlySummary(toolCalls, readFileCache)}\n\nPlanner execution completed successfully. (${succeeded} succeeded, ${skipped} skipped)`;
   }
 
+  // Build descriptive success text from tool results
+  const fileChanges = [...(changedFiles || [])]
+    .filter(Boolean);
+  const successfulCommands = (toolCalls || [])
+    .filter(c => c.tool === "RUN_TERMINAL" && c.success)
+    .map(c => c.args?.command || "")
+    .filter(Boolean);
+
+  const parts = [];
+  if (fileChanges.length) {
+    parts.push(`Created/verified ${fileChanges.join(", ")}`);
+  }
+  if (successfulCommands.length) {
+    parts.push(`ran ${successfulCommands.join(", ")} successfully`);
+  }
+  const detail = parts.length ? ` — ${parts.join(" and ")}` : "";
+
   return allTasks.length
-    ? `Planner execution completed successfully. (${succeeded} succeeded, ${skipped} skipped)`
-    : "Planner execution completed successfully.";
+    ? `Planner execution completed successfully.${detail} (${succeeded} succeeded, ${skipped} skipped)`
+    : `Planner execution completed successfully.${detail}`;
 }
 
 function isGoalSatisfied(taskType, toolCalls, changedFiles) {
@@ -548,6 +726,83 @@ async function defaultGenerateResponse({ messages, plan }) {
   return askAI({ messages, mode: "agent", plan });
 }
 
+/**
+ * Infer a deterministic tool from a planner task's goal when task.tool is not set.
+ * Returns { tool, args } or null if inference is not possible.
+ */
+function inferToolFromGoal(task, objective) {
+  if (!task || !task.goal) return null;
+  const goal = task.goal;
+
+  const readMatch = goal.match(/^Read file:\s*(.+)/i);
+  if (readMatch) {
+    return { tool: 'READ_FILE', args: { path: readMatch[1].trim() } };
+  }
+
+  const runMatch = goal.match(/^Run command:\s*(.+)/i);
+  if (runMatch) {
+    return { tool: 'RUN_TERMINAL', args: { command: runMatch[1].trim() } };
+  }
+
+  const writeMatch = goal.match(/^Write file:\s*(.+?)\s*—\s*(.+)$/i);
+  if (writeMatch) {
+    const filePath = writeMatch[1].trim();
+    const description = writeMatch[2].trim();
+    let content = '';
+    const contentMatch = description.match(/with:\s*(.+)$/i) || description.match(/with\s+(.+)$/i);
+    if (contentMatch) {
+      let extracted = contentMatch[1].trim();
+      // Strip leading "content " prefix (common in goals: "with content ...")
+      if (/^content\s+/i.test(extracted)) {
+        extracted = extracted.replace(/^content\s+/i, '');
+      }
+      // Truncate at transition words that signal subsequent instructions
+      const transitionWords = /[.;]?\s+(Then|Next|After|Finally|Run|Create)\b/i;
+      const transitionMatch = extracted.match(transitionWords);
+      if (transitionMatch) {
+        extracted = extracted.substring(0, transitionMatch.index);
+      }
+      // Also strip trailing " Then" or " then" at end of extracted content
+      extracted = extracted.replace(/\s+Then\s*$/i, '').trim();
+      content = extracted;
+    } else if (objective) {
+      const escaped = filePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const objMatch = objective.match(new RegExp(escaped + '\\s+with:\\s*(.+?)$', 'im'));
+      if (objMatch) content = objMatch[1].trim();
+    }
+    return {
+      tool: 'WRITE_FILE',
+      args: { file: filePath, content, path: filePath }
+    };
+  }
+
+  const patchMatch = goal.match(/^Apply patch:\s*(.+)/i);
+  if (patchMatch) {
+    return { tool: 'APPLY_PATCH', args: { file: patchMatch[1].trim() } };
+  }
+
+  return null;
+}
+
+// Phase 4.13: Deterministic planner task detection
+// Returns true only when a planner task has all required args for deterministic dispatch
+export function isDeterministicPlannerTask(task) {
+  if (!task || !task.tool) return false;
+  const args = task.toolArgs || {};
+  switch (task.tool) {
+    case 'READ_FILE':
+      return Boolean(args.path);
+    case 'WRITE_FILE':
+      return Boolean(args.path) && typeof args.content === 'string';
+    case 'RUN_TERMINAL':
+      return Boolean(args.command);
+    case 'APPLY_PATCH':
+      return Boolean(args.patch) || Boolean(args.file);
+    default:
+      return false;
+  }
+}
+
 export async function runAgentLoop({
   messages = [],
   plan = "free",
@@ -562,7 +817,9 @@ export async function runAgentLoop({
   onEvent = () => {},
   generateResponse = defaultGenerateResponse,
   abortSignal = null,
-  policy = null
+  policy = null,
+  enableToolOptimizer = true,
+  executionCache = null
 }) {
   const criteria = acceptanceCriteria || buildAcceptanceCriteria(messages.at(-1)?.content || "");
   // Per-intent policy
@@ -602,9 +859,10 @@ export async function runAgentLoop({
   }
 
   // CODING: scan project and suggest edit plan at the start
+  let scan = { projectType: "generic" };
   if ((criteria.taskType || "CODING").toUpperCase() === "CODING") {
     try {
-      const scan = resolvedWorkspaceRoot ? await scanProject(resolvedWorkspaceRoot) : { projectType: "generic" };
+      scan = resolvedWorkspaceRoot ? await scanProject(resolvedWorkspaceRoot) : { projectType: "generic" };
       if (DEBUG()) {
         console.log("[PROJECT_SCAN_RESULT]", scan);
         const dbg = createEvent("debug", { section: "PROJECT_SCAN_RESULT", scan });
@@ -633,6 +891,30 @@ export async function runAgentLoop({
   const events = [...initialEvents];
   const toolCalls = [...initialToolCalls];
   const changedFiles = new Set(initialChangedFiles);
+  const optimizer = enableToolOptimizer ? (executionCache || getSharedExecutionCache(resolvedWorkspaceRoot) || createExecutionCache()) : null;
+  const opt = {
+    getCachedRead: async (p) => optimizer ? await optimizer.getCachedRead(p, resolvedWorkspaceRoot) : null,
+    setCachedRead: async (p, c) => { if (optimizer) await optimizer.setCachedRead(p, c, resolvedWorkspaceRoot); },
+    shouldSkipWrite: async (p, c) => optimizer ? await optimizer.shouldSkipWrite(p, c, resolvedWorkspaceRoot) : { skipped: false },
+    getCachedTerminal: async (c) => optimizer ? await optimizer.getCachedTerminal(c, resolvedWorkspaceRoot) : null,
+    setCachedTerminal: async (c, r, f) => { if (optimizer) await optimizer.setCachedTerminal(c, r, f, resolvedWorkspaceRoot); },
+    invalidateFile: (f) => optimizer?.invalidateFile(f),
+    recordEstimatedTimeSaved: (ms) => optimizer?.recordEstimatedTimeSaved(ms),
+    printSummary: () => optimizer?.printSummary(),
+  };
+  // plannerChangedFiles is the single authoritative collection that Recovery must NEVER clear.
+  // QualityGate always reads from plannerChangedFiles.
+  // recordChangedFile always writes to both, ensuring consistency.
+  const plannerChangedFiles = changedFiles;
+
+  const recordChangedFile = (filePath) => {
+    if (!filePath) return;
+    plannerChangedFiles.add(filePath);
+    changedFiles.add(filePath);
+    console.log('[PLANNER_CHANGED_FILE]', { path: filePath });
+    console.log('[AFTER_WRITE]', { changedFiles: [...changedFiles], plannerChangedFiles: [...plannerChangedFiles] });
+    opt.invalidateFile(filePath);
+  };
   let hasWorkspaceMutation = changedFiles.size > 0;
   // Read-only optimization: once all requested files are read, require FINAL
   let readOnlyAllRequiredRead = false;
@@ -783,9 +1065,10 @@ export async function runAgentLoop({
   function preClassifyToolPolicy(objectiveText) {
     const text = String(objectiveText || "");
     const lower = text.toLowerCase();
-    const doNotModify = /(do\s+not\s+(modify|change|edit|write|create))|\bkhông\s+(sửa|thay\s*đổi|viết|tạo)\b/i.test(text);
+    const doNotModify = /\bdo\s+not\s+(?:modify|change|edit|write)(?:\s+(?:any\s+)?(?:files?|code))?\b|\bdo\s+not\s+modify\s+files?\b|\bkhông\s+(?:sửa|thay\s*đổi|viết)\b/i.test(text);
     const doNotRun = /(do\s+not\s+run(\s+(terminal|npm))?)|\bkhông\s+chạy\b/i.test(text);
-    const writeIntent = /(create|write|add|modify|update|edit|patch|change|rename|delete|remove|refactor|build|implement|make|develop)/i.test(text);
+    const writeIntentText = text.replace(/\bdo\s+not\s+(?:modify|change|edit|write)(?:\s+(?:any\s+)?(?:files?|code))?\b|\bdo\s+not\s+modify\s+files?\b|\bkhông\s+(?:sửa|thay\s*đổi|viết)\b/ig, " ");
+    const writeIntent = /\b(?:create|build|implement|make|add|update|modify|edit|replace|write|fix|patch|change|rename|delete|remove|refactor|develop)\b|\blanding\s+page\b|\b(?:dashboard|login|crud|feature|api|component|page|screen|form)\b/i.test(writeIntentText);
     const hasRunLabel = /(?:^|\n)\s*(?:Then\s+)?(?:Run|Execute):\s*[^\n]*/i.test(text);
     const hasRunCommand = /(npm\s+(run\s+)?[a-z0-9:_\-]+|node\s+[^\s]+\.(?:m?js)|yarn\s+[a-z0-9:_\-]+)/i.test(text);
     const runRequested = hasRunLabel || hasRunCommand;
@@ -803,9 +1086,9 @@ export async function runAgentLoop({
     } else {
       mode = "WRITE";
     }
-    // Respect criteria.taskMode for qa and read_only tasks
+    // Respect qa/read_only only when there is no write intent. Write/create/build wins.
     if (criteria?.taskMode === "qa" || criteria?.taskMode === "read_only") {
-      if (!(writeIntent && runRequested)) {
+      if (!writeIntent) {
         mode = "READ_ONLY";
       }
     }
@@ -879,10 +1162,102 @@ export async function runAgentLoop({
     requiredCommands: originalRequiredCommands
   });
   let planner = null;
+  let contextFiles = [];
   if (toolPolicy.mode !== "UNKNOWN") {
     const plan = buildPlan(objective, criteriaEffective);
     planner = new Planner(plan.tasks);
+    planner.executionMemory?.setContext?.({
+      workspaceRoot: resolvedWorkspaceRoot || '',
+      cwd: resolvedWorkspaceRoot || ''
+    });
     planner.getNextTask();
+
+    // Phase 4.14-4.15: Build execution context and expand generic tasks
+    // Only gather context when planner has generic tasks (tool: null) — meaning
+    // the user did not specify exact file paths and the model needs project context.
+    // We read the files immediately and inject their content as a system message
+    // rather than adding READ_FILE tasks to the planner (which would disrupt execution order).
+    // Then expand generic tasks into concrete planner-dispatched tasks.
+    const hasGenericTask = plan.tasks.some(t => !t.tool);
+    if (resolvedWorkspaceRoot && hasGenericTask) {
+      const contextResult = buildPlannerContext({
+        workspaceRoot: resolvedWorkspaceRoot,
+        projectScan: scan,
+        plannerTasks: plan.tasks,
+        classifierResult: criteriaEffective,
+        executionHistory: null
+      });
+      if (contextResult.requiredReads.length > 0) {
+        const contextLines = [];
+        for (const file of contextResult.requiredReads) {
+          try {
+            const fullPath = path.resolve(resolvedWorkspaceRoot, file);
+            const content = await fs.readFile(fullPath, 'utf-8');
+            contextLines.push(`=== ${file} ===\n${content}`);
+            contextFiles.push(file);
+            toolCalls.push({
+              tool: "READ_FILE",
+              args: { path: file },
+              result: { file, content },
+              success: true,
+              source: "planner_context"
+            });
+            await opt.setCachedRead(file, content);
+          } catch {
+            // file doesn't exist or can't be read — skip it
+          }
+        }
+        if (contextLines.length > 0) {
+          const contextMessage = `Here is the current state of the project files:\n\n${contextLines.join('\n\n')}`;
+          conversation.push({ role: 'system', content: contextMessage });
+          console.log('[PLANNER_CONTEXT_BUILD]', {
+            projectContext: contextResult.projectContext,
+            filesRead: contextLines.length,
+            totalRequested: contextResult.requiredReads.length
+          });
+        }
+      }
+
+      // Phase 4.15: Context is ready — log state. Only transition to CONTEXT_READY
+      // when we have actual context files and the task is CODING (not READ_ONLY/ANALYSIS).
+      if (planner && contextFiles.length > 0) {
+        const isCoding = criteria.taskType === 'CODING' || criteria.taskType === 'PRODUCT_BUILD';
+        if (isCoding) {
+          planner.setState('CONTEXT_READY');
+          console.log('[PLANNER_CONTEXT_READY]', {
+            projectType: scan.projectType || 'generic',
+            contextFiles
+          });
+        }
+      }
+    }
+  }
+
+  // Phase 4.15: Expand generic tasks into concrete planner tasks
+  // Initialize readFileCache before any code that accesses it
+  const readFileCache = new Map();
+
+  if (planner && planner.state === 'CONTEXT_READY') {
+    // Only expand when there are meaningful source files (not just package.json/metadata)
+    const meaningfulFiles = contextFiles.filter(f => !/package\.json$|README|LICENSE|\.gitignore/i.test(f));
+    if (meaningfulFiles.length === 0) {
+      console.log('[PLANNER_EXPAND_SKIP]', { reason: 'no meaningful source files in context', contextFiles });
+      planner.setState('EXECUTING');
+    } else {
+      const expanded = expandPlannerTasks(planner, {
+        goal: objective,
+        projectType: scan.projectType || 'generic',
+        entryFiles: scan.entryFiles || [],
+        scan,
+        contextFiles,
+        fileContents: readFileCache
+      });
+      if (expanded.length > 0) {
+        planner.setState('EXPANDED');
+      } else {
+        planner.setState('EXECUTING');
+      }
+    }
   }
   if (DEBUG()) {
     const ev = createEvent("debug", {
@@ -894,7 +1269,7 @@ export async function runAgentLoop({
     events.push(ev); history.push(ev);
   }
   const inspectedFiles = new Set(
-    initialToolCalls
+    toolCalls
       .filter(call => call.tool === "READ_FILE" && call.success)
       .map(call => call.result?.file || call.args?.path)
       .filter(Boolean)
@@ -936,10 +1311,9 @@ export async function runAgentLoop({
   const baseline = resolvedWorkspaceRoot
     ? await getGitSnapshot(resolvedWorkspaceRoot)
     : { changedFiles: [] };
-  const readFileCache = new Map();
   const toolCallCounts = new Map();
   const MAX_DUPLICATE_TOOL_CALLS = 2;
-  for (const call of initialToolCalls) {
+  for (const call of toolCalls) {
     if (call.tool === "READ_FILE" && call.success) {
       const path = call.result?.file || call.args?.path;
       if (path) {
@@ -957,6 +1331,7 @@ export async function runAgentLoop({
   let plannerFatalBlock = false;
   // Local wrapper that always passes required commands and package.json validity to quality gate
   const runQualityGate = async (input) => {
+    console.log('[BEFORE_QUALITY_GATE]', { changedFiles: input.changedFiles || [] });
     return evaluateQualityGate({
       ...input,
       requiredCommands: toolPolicy.requiredCommands,
@@ -1102,9 +1477,83 @@ RULES:
     return event;
   }
 
+  async function getOptimizedToolResult(toolName, args, toolCtx, taskId = null, stepForLog = 0) {
+    if (!optimizer || !toolName) return null;
+    if (toolName === "READ_FILE" && args?.path) {
+      const content = await opt.getCachedRead(args.path);
+      if (content != null) {
+        opt.recordEstimatedTimeSaved(25);
+        const result = { success: true, file: args.path, content, cached: true };
+        if (taskId) {
+          console.log('[PLANNER_HISTORY_LOOKUP]', { taskId, tool: toolName, args, result: 'CACHE_HIT', step: stepForLog });
+        }
+        return result;
+      }
+    }
+    if (toolName === "RUN_TERMINAL" && args?.command) {
+      const cached = await opt.getCachedTerminal(args.command);
+      if (cached) {
+        opt.recordEstimatedTimeSaved(1000);
+        if (taskId) {
+          console.log('[PLANNER_HISTORY_LOOKUP]', { taskId, tool: toolName, args, result: 'CACHE_HIT', step: stepForLog });
+        }
+        return cached;
+      }
+    }
+    if (toolName === "WRITE_FILE" && args?.path && args?.content != null) {
+      const { skipped } = await opt.shouldSkipWrite(args.path, args.content);
+      if (skipped) {
+        opt.recordEstimatedTimeSaved(50);
+        return { success: true, file: args.path, changed: false, alreadyUpToDate: true, cached: true };
+      }
+    }
+    return null;
+  }
+
+  async function executeToolOptimized(toolName, args, toolCtx, taskId = null, stepForLog = 0) {
+    const cachedResult = await getOptimizedToolResult(toolName, args, toolCtx, taskId, stepForLog);
+    if (cachedResult) return cachedResult;
+    const result = await executeTool(toolName, args, toolCtx);
+    if (result?.success) {
+      if (toolName === "READ_FILE" && result.content != null) {
+        await opt.setCachedRead(result.file || args.path, result.content);
+      }
+      if (toolName === "RUN_TERMINAL" && Number(result.exitCode) === 0) {
+        await opt.setCachedTerminal(args.command, result, [...readFileCache.keys(), ...changedFiles]);
+      }
+    }
+    return result;
+  }
+
+  function getMemoryContext() {
+    return {
+      workspaceRoot: resolvedWorkspaceRoot || '',
+      cwd: resolvedWorkspaceRoot || ''
+    };
+  }
+
+  function resolvePlannerTaskMemory(task, stepForLog = 0) {
+    if (!planner || !task?.tool) return { dispatch: true, action: 'MISS' };
+    const resolution = planner.prepareTaskDispatch(task, getMemoryContext());
+    if (resolution.action === 'HIT') {
+      console.log('[PLANNER_HISTORY_LOOKUP]', {
+        taskId: task.id,
+        tool: task.tool,
+        args: task.toolArgs || {},
+        result: 'MEMORY_HIT',
+        step: stepForLog
+      });
+    }
+    return resolution;
+  }
+
   let blockedToolRetryUsedGlobal = false;
   const blockedAttempts = new Map(); // toolName -> count of blocked attempts
   for (let step = 0; step < maxSteps; step += 1) {
+    // Phase 4.15: Transition EXPANDED → EXECUTING at loop start
+    if (planner && planner.state === 'EXPANDED') {
+      planner.setState('EXECUTING');
+    }
     // Ensure at most one model retry per step
     let didRetryThisStep = false;
     // Global run timeout
@@ -1178,6 +1627,273 @@ RULES:
         step + 1, maxSteps, conversation.length, toolCalls.length);
     }
 
+    // Phase 4.15: REASONING tasks are model-generation tasks, not tools.
+    // Execute them through the existing provider adapter and inject concrete
+    // EXECUTION tasks (WRITE_FILE/APPLY_PATCH/RUN_TERMINAL/etc.) into the graph.
+    if (planner && !isPlannerRecovering(planner)) {
+      const readyReasoningTasks = planner.graph.allNodes().filter(t =>
+        isPlannerReasoningTask(t) && t.status === TaskStatus.READY
+      );
+      const reasoningTask = readyReasoningTasks[0] || null;
+      if (reasoningTask && reasoningTask.status === TaskStatus.READY) {
+        const originalChildren = [...reasoningTask.children];
+        console.log('[PLANNER_REASONING_START]', {
+          step,
+          taskId: reasoningTask.id,
+          goal: (reasoningTask.goal || '').substring(0, 120)
+        });
+        recordEvent('planner_reasoning_start', { step, taskId: reasoningTask.id, goal: reasoningTask.goal });
+
+        // Extract target file from reasoning goal
+        const targetFileMatch = reasoningTask.goal.match(/Generate (?:content|patch) for file:\s*(.+)/i);
+        const targetFile = targetFileMatch ? targetFileMatch[1].trim() : null;
+
+        // Read ONLY the target file content (if cached) — max 3000 chars
+        const targetContent = targetFile && readFileCache.has(targetFile)
+          ? String(readFileCache.get(targetFile) || '').slice(0, 3000)
+          : null;
+
+        // Compact package.json summary (name, scripts, frontend deps only)
+        let pkgScripts = null;
+        let pkgDeps = null;
+        let projectFramework = null;
+        let frameworkVersion = null;
+        const pkgEntry = [...readFileCache.entries()]
+          .find(([f]) => /package\.json$/i.test(f));
+        if (pkgEntry) {
+          try {
+            const pkg = JSON.parse(pkgEntry[1]);
+            if (pkg.scripts) pkgScripts = JSON.stringify(pkg.scripts);
+            const frontendDeps = {};
+            for (const key of ['react', 'react-dom', 'next', 'vite', '@vitejs/plugin-react', '@angular/core', 'vue', 'react-router', 'react-router-dom']) {
+              if (pkg.dependencies?.[key]) frontendDeps[key] = pkg.dependencies[key];
+              if (pkg.devDependencies?.[key]) frontendDeps[key] = pkg.devDependencies[key];
+            }
+            pkgDeps = Object.keys(frontendDeps).length ? JSON.stringify(frontendDeps) : null;
+
+            // HOTFIX 3: Detect framework and version from package.json
+            const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+            const extractMajor = (ver) => {
+              const m = String(ver || '').match(/^\D*(\d+)/);
+              return m ? parseInt(m[1], 10) : null;
+            };
+            if (allDeps['next']) {
+              projectFramework = 'Next.js';
+              frameworkVersion = allDeps['next'];
+            } else if (allDeps['react-router-dom']) {
+              const major = extractMajor(allDeps['react-router-dom']);
+              projectFramework = 'React Router';
+              frameworkVersion = major >= 6 ? 'v6' : 'v5';
+            } else if (allDeps['react-router']) {
+              const major = extractMajor(allDeps['react-router']);
+              projectFramework = 'React Router';
+              frameworkVersion = major >= 6 ? 'v6' : 'v5';
+            } else if (allDeps['vite']) {
+              projectFramework = 'Vite';
+              frameworkVersion = allDeps['vite'];
+            } else if (allDeps['react-scripts']) {
+              projectFramework = 'CRA';
+              frameworkVersion = allDeps['react-scripts'];
+            } else if (allDeps['react']) {
+              projectFramework = 'React';
+              frameworkVersion = allDeps['react'];
+            }
+          } catch { /* skip if unparseable */ }
+        }
+
+        const projectType = scan?.projectType || 'generic';
+        const command = scan?.buildCommands?.[0] || scan?.runCommands?.[0] || null;
+
+        const promptParts = [
+          'You are a coding planner. Return JSON only.',
+          '',
+          `Goal: ${objective}`,
+          `Target: ${targetFile || reasoningTask.goal}`,
+          `Project: ${projectType}${scan?.packageManager ? ` (${scan.packageManager})` : ''}`
+        ];
+
+        if (projectFramework) {
+          const fwLine = frameworkVersion ? `${projectFramework} ${frameworkVersion}` : projectFramework;
+          promptParts.push(`Framework: ${fwLine}`);
+        }
+
+        if (command) promptParts.push(`Command: ${command}`);
+        if (pkgScripts) promptParts.push(`\nPackage scripts:\n${pkgScripts}`);
+        if (pkgDeps) promptParts.push(`\nRelevant dependencies:\n${pkgDeps}`);
+        if (targetContent) promptParts.push(`\nCurrent target file:\n${targetContent}`);
+
+        promptParts.push(
+          '',
+          'Return one JSON object:',
+          '{',
+          '  "tool": "WRITE_FILE",',
+          '  "args": {',
+          '    "path": "<target file>",',
+          '    "content": "<complete file content>"',
+          '  }',
+          '}'
+        );
+
+        let reasoningPrompt = promptParts.join('\n');
+
+        // Hard limit: 4000 chars
+        if (reasoningPrompt.length > 4000) {
+          reasoningPrompt = reasoningPrompt.slice(0, 3980) + '\n(truncated)';
+        }
+
+        console.log('[PLANNER_REASONING_PROMPT_SIZE]', {
+          chars: reasoningPrompt.length,
+          tokensEstimate: Math.ceil(reasoningPrompt.length / 4)
+        });
+
+        console.log('[PLANNER_REASONING_REQUEST_SIZE]', {
+          messages: 1,
+          chars: reasoningPrompt.length,
+          note: 'isolated reasoning prompt — no full conversation included'
+        });
+
+        let rawReasoning;
+        let parsedReasoning;
+        let executionTasks;
+        const reasoningMemoryHit = planner.executionMemory?.getReasoning(reasoningPrompt);
+        if (reasoningMemoryHit?.parsedReasoning) {
+          parsedReasoning = reasoningMemoryHit.parsedReasoning;
+          try {
+            executionTasks = createExecutionTasksFromReasoning(parsedReasoning, reasoningTask);
+          } catch (error) {
+            console.log('[PLANNER_REASONING_FAILED]', {
+              step,
+              taskId: reasoningTask.id,
+              error: error.message,
+              source: 'execution_memory'
+            });
+            planner.markFailure(reasoningTask.id, error.message);
+            continue;
+          }
+        } else {
+          try {
+            rawReasoning = await generateResponse({
+              messages: [
+                { role: 'system', content: reasoningPrompt }
+              ],
+              plan,
+              step,
+              objective: reasoningTask.goal
+            });
+          } catch (error) {
+            console.log('[PLANNER_REASONING_FAILED]', { step, taskId: reasoningTask.id, error: error.message });
+            planner.markFailure(reasoningTask.id, `Reasoning provider failed: ${error.message}`);
+            continue;
+          }
+
+          try {
+            parsedReasoning = parseReasoningJson(rawReasoning);
+            executionTasks = createExecutionTasksFromReasoning(parsedReasoning, reasoningTask);
+            planner.executionMemory?.setReasoning(reasoningPrompt, {
+              taskId: reasoningTask.id,
+              parsedReasoning,
+              rawReasoning: String(rawReasoning || '').slice(0, 5000)
+            });
+          } catch (error) {
+          console.log('[PLANNER_REASONING_FAILED]', {
+            step,
+            taskId: reasoningTask.id,
+            error: error.message,
+            rawResponse: String(rawReasoning || '').slice(0, 2000)
+          });
+          planner.markFailure(reasoningTask.id, error.message);
+          continue;
+          }
+        }
+
+        // Pre-write verification: block WRITE_FILE tasks targeting backend/server files
+        const BACKEND_WRITE_MARKERS = [
+          'import express', 'from "express"', "from 'express'",
+          'app.use(', 'app.get(', 'app.post(', 'express()',
+          'server.listen', 'connectDB', 'mongoose.connect',
+          'export default app', 'middleware'
+        ];
+        const blockedWriteTasks = [];
+        let recheckFailed = false;
+        for (const t of executionTasks) {
+          if (t.tool === 'WRITE_FILE') {
+            const targetPath = t.toolArgs?.path || t.toolArgs?.file || '';
+            const norm = targetPath.replace(/\\/g, '/');
+            const cachedContent = readFileCache.get(norm) || readFileCache.get(targetPath);
+            if (cachedContent) {
+              const text = String(cachedContent);
+              if (BACKEND_WRITE_MARKERS.some(m => text.includes(m))) {
+                console.log('[PLANNER_WRITE_BLOCKED_UNSAFE_TARGET]', {
+                  reason: 'backend_file_selected_for_frontend',
+                  file: norm,
+                  taskId: t.id
+                });
+                blockedWriteTasks.push(t);
+                continue;
+              }
+            }
+          }
+        }
+        if (blockedWriteTasks.length > 0) {
+          console.log('[PLANNER_WRITE_BLOCKED_UNSAFE_TARGET]', {
+            blocked: blockedWriteTasks.map(t => t.toolArgs?.path || t.toolArgs?.file),
+            reason: 'backend_file_selected_for_frontend'
+          });
+          executionTasks = executionTasks.filter(t => !blockedWriteTasks.includes(t));
+          if (executionTasks.length === 0) {
+            recheckFailed = true;
+          }
+        }
+        if (recheckFailed) {
+          planner.markFailure(reasoningTask.id, 'All execution tasks target backend files — write blocked');
+          continue;
+        }
+
+        console.log('[PLANNER_REASONING_COMPLETE]', {
+          step,
+          taskId: reasoningTask.id,
+          executionTaskCount: executionTasks.length
+        });
+        recordEvent('planner_reasoning_complete', {
+          step,
+          taskId: reasoningTask.id,
+          executionTaskCount: executionTasks.length
+        });
+
+        const addedIds = planner.replaceReasoningTask(reasoningTask.id, executionTasks);
+        const addedList = Array.isArray(addedIds) ? addedIds : [];
+        for (const execTaskId of addedList) {
+          const execTask = planner.graph.getNode(execTaskId);
+          console.log('[PLANNER_EXECUTION_TASK_CREATED]', {
+            reasoningTaskId: reasoningTask.id,
+            taskId: execTaskId,
+            tool: execTask?.tool || null,
+            goal: (execTask?.goal || '').substring(0, 120)
+          });
+        }
+
+        const lastExecutionTaskId = addedList[addedList.length - 1];
+        if (lastExecutionTaskId) {
+          for (const childId of originalChildren) {
+            const child = planner.graph.getNode(childId);
+            if (!child || child.status === TaskStatus.SUCCESS || child.status === TaskStatus.SKIPPED) continue;
+            try {
+              planner.graph.connect(lastExecutionTaskId, childId);
+              if (child.status === TaskStatus.READY) {
+                child.status = TaskStatus.PENDING;
+                child.touch();
+              }
+            } catch {
+              // Edge already exists or child was removed.
+            }
+          }
+          planner._updateReadyStates();
+        }
+
+        continue;
+      }
+    }
+
     // Phase 4.6: Dispatch recovery tasks automatically without model involvement
     if (isPlannerRecovering(planner)) {
       const recoveryTask = getNextRecoveryTask(planner);
@@ -1208,8 +1924,11 @@ RULES:
           inspectedFiles.add(toolResult.file);
         }
         // Track file changes for WRITE tools dispatched by recovery
-        if (WRITE_TOOLS.has(toolName) && toolResult?.success && toolResult?.changed && toolResult.file) {
-          changedFiles.add(toolResult.file);
+        // NOTE: No toolResult?.changed guard — Recovery re-executes writes that may
+        // report changed:false if already up-to-date. The file was already recorded
+        // by the original write; always record again to preserve plannerChangedFiles.
+        if (WRITE_TOOLS.has(toolName) && toolResult?.success && toolResult.file) {
+          recordChangedFile(toolResult.file);
         }
         // Notify planner of recovery task result
         const notifyResult = notifyToolExecution(planner, toolName, args, toolResult);
@@ -1242,8 +1961,31 @@ RULES:
       }
 
       if (parallelGroup && parallelGroup.length > 0) {
-        // Execute all tasks in the group concurrently
-        const taskResults = await Promise.all(parallelGroup.map(async (task) => {
+        // Phase 4.12: Filter out tasks already completed in in-run history.
+        // ExecutionCache is checked inside executeToolOptimized so cache can return
+        // CACHE_HIT instead of a premature not_found history lookup.
+        const activeTasks = [];
+        const waitingTasks = [];
+        for (const task of parallelGroup) {
+          const resolution = resolvePlannerTaskMemory(task, step);
+          if (resolution.dispatch) {
+            planner.markTaskRunning(task, getMemoryContext());
+            activeTasks.push(task);
+          } else if (resolution.action === 'WAIT') {
+            waitingTasks.push(task);
+          } else if (resolution.action === 'REUSE_FAILURE') {
+            planner.markFailure(task.id, `Previous identical ${task.tool} task failed`);
+          }
+        }
+        if (activeTasks.length === 0) {
+          if (waitingTasks.length === 0) {
+            planner.waitParallelGroup();
+            planner.mergeParallelGroup();
+          }
+          continue;
+        }
+        // Execute remaining tasks in the group concurrently
+        const taskResults = await Promise.all(activeTasks.map(async (task) => {
           const toolName = task.tool;
           const args = task.toolArgs || {};
           console.log('[PLANNER_DISPATCH]', { step, taskId: task.id, tool: toolName, args, parallel: true });
@@ -1251,7 +1993,7 @@ RULES:
 
           const toolCtx = { workspaceRoot: resolvedWorkspaceRoot };
           const startedAt = new Date();
-          const toolResult = await executeTool(toolName, args, toolCtx);
+          const toolResult = await executeToolOptimized(toolName, args, toolCtx, task.id, step);
           const completedAt = new Date();
 
           const toolCall = {
@@ -1273,7 +2015,7 @@ RULES:
           }
           // Track file changes for WRITE tools dispatched in parallel group
           if (WRITE_TOOLS.has(toolName) && toolResult?.success && toolResult?.changed && toolResult.file) {
-            changedFiles.add(toolResult.file);
+            recordChangedFile(toolResult.file);
           }
 
           // Notify planner of the result (triggers recovery on failure)
@@ -1290,80 +2032,180 @@ RULES:
           }
         }
 
+        planner.resolveWaitingTasks(waitingTasks, getMemoryContext());
+
         planner.waitParallelGroup();
         planner.mergeParallelGroup();
         continue;
       }
 
-      // Fallback to single task dispatch (existing behavior)
-      const nextTask = planner.getNextTask();
-      if (nextTask && nextTask.tool) {
-        const toolName = nextTask.tool;
-        const args = nextTask.toolArgs || {};
-        console.log('[PLANNER_DISPATCH]', { step, taskId: nextTask.id, tool: toolName, args });
-        recordEvent('planner_dispatch', { step, taskId: nextTask.id, tool: toolName, args });
-
-        const toolCtx = { workspaceRoot: resolvedWorkspaceRoot };
-        const startedAt = new Date();
-        const toolResult = await executeTool(toolName, args, toolCtx);
-        const completedAt = new Date();
-
-        const toolCall = {
-          step,
-          tool: toolName,
-          args,
-          success: toolResult?.success !== false,
-          result: toolResult,
-          startedAt,
-          completedAt
-        };
-        toolCalls.push(toolCall);
-
-        // Populate readFileCache for successful READ_FILE
-        if (toolName === "READ_FILE" && toolResult?.success && toolResult.file && toolResult.content) {
-          const normalized = String(toolResult.file).replace(/\\/g, "/");
-          readFileCache.set(normalized, toolResult.content);
-          inspectedFiles.add(toolResult.file);
-          // For read-only tasks: after reading all requested files, guide model to produce FINAL
-          const reqFiles = criteria?.requestedFiles || [];
-          if (toolPolicy.mode === "READ_ONLY" && reqFiles.length > 0) {
-            const allRead = reqFiles.every(f => {
-              const norm = String(f).replace(/\\/g, "/").toLowerCase();
-              return readFileCache.has(norm);
+      // Phase 4.11: Check for task timeout before dispatching
+      if (planner) {
+        const active = planner.getModelTask() || planner.getNextTask();
+        if (active && active.startedAt) {
+          const timeout = checkTaskTimeout(active);
+          if (timeout.timedOut) {
+            console.log('[PLANNER_TASK_TIMEOUT]', {
+              taskId: active.id,
+              tool: active.tool || 'CODING',
+              elapsed: timeout.elapsed,
+              timeoutMs: timeout.timeoutMs
             });
-            if (allRead) {
-              let strict = null;
-              if (reqFiles.some(r => /(^|\/)package\.json$/i.test(r))) {
-                strict = buildStrictAnswerInstruction(objective, "package.json");
+            const error = `Task timed out after ${timeout.elapsed}ms (limit: ${timeout.timeoutMs}ms)`;
+            planner.markFailure(active.id, error);
+            const branchType = planner.branchType(active.id);
+            if (branchType === 'FAILURE') {
+              const recoveryResult = tryRecovery(planner, active);
+              if (recoveryResult.recoveryStarted) {
+                console.log('[PLANNER_RECOVERY_START]', { step, tool: active.tool || 'CODING', recoveryTaskIds: recoveryResult.recoveryTaskIds });
+                recordEvent('planner_recovery_start', { step, tool: active.tool || 'CODING', recoveryTaskIds: recoveryResult.recoveryTaskIds });
+                continue;
               }
-              const lines = [
-                "READ-ONLY MODE: The required file(s) have been read successfully.",
-                "Answer the user's exact question now.",
-                "Do not modify files.",
-                "Do not run commands."
-              ];
-              if (strict) lines.push(strict);
-              conversation.push({ role: "system", content: lines.join(" \n") });
-              readOnlyAllRequiredRead = true;
-              console.log('[READ_ONLY_GUIDED_FINAL]', { files: reqFiles });
             }
           }
         }
-        // Track file changes for WRITE tools dispatched by single task dispatch
-        if (WRITE_TOOLS.has(toolName) && toolResult?.success && toolResult?.changed && toolResult.file) {
-          changedFiles.add(toolResult.file);
+      }
+
+      // Fallback to single task dispatch — with tool inference for deterministic tasks
+      const nextTask = planner.getNextTask();
+      if (nextTask) {
+        let toolName = nextTask.tool;
+        let args = nextTask.toolArgs || {};
+
+        // If task has no tool set, try to infer a deterministic tool from the goal
+        if (!toolName) {
+          const inferred = inferToolFromGoal(nextTask, objective);
+          if (inferred) {
+            // Only accept inferred WRITE_FILE when content is known
+            // Only accept inferred APPLY_PATCH when file/target is known
+            const hasRequiredArgs = !(
+              (inferred.tool === 'WRITE_FILE' && !inferred.args.content) ||
+              (inferred.tool === 'APPLY_PATCH' && !inferred.args.file && !inferred.args.target)
+            );
+            if (hasRequiredArgs) {
+              toolName = inferred.tool;
+              args = inferred.args;
+              nextTask.tool = toolName;
+              nextTask.toolArgs = args;
+              console.log('[PLANNER_INFER_TOOL]', {
+                taskId: nextTask.id,
+                goal: (nextTask.goal || '').substring(0, 80),
+                inferredTool: toolName,
+                inferredArgs: args,
+                step
+              });
+            }
+          }
         }
 
-        // Notify planner of the result (triggers recovery on failure)
-        const plannerResult = notifyToolExecution(planner, toolName, args, toolResult);
-        logPlannerStatus(planner);
+        if (toolName) {
+          // Phase 4.13: Check if task has all required args for deterministic dispatch
+          const isDeterministic = isDeterministicPlannerTask({ tool: toolName, toolArgs: args });
+          if (!isDeterministic) {
+            console.log('[PLANNER_DETERMINISTIC_FALLBACK]', {
+              taskId: nextTask.id,
+              tool: toolName,
+              reason: `Missing required args for ${toolName}`
+            });
+            // Fall through to model path — do not dispatch deterministically
+          } else {
+            console.log('[PLANNER_DETERMINISTIC_TASK]', { taskId: nextTask.id, tool: toolName, step });
 
-        if (plannerResult?.recoveryStarted) {
-          console.log('[PLANNER_RECOVERY_START]', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
-          recordEvent('planner_recovery_start', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
+          const resolution = resolvePlannerTaskMemory(nextTask, step);
+          if (!resolution.dispatch) {
+            if (resolution.action === 'REUSE_FAILURE') {
+              planner.markFailure(nextTask.id, `Previous identical ${toolName} task failed`);
+            }
+            logPlannerStatus(planner);
+            continue;
+          }
+
+          console.log('[PLANNER_DETERMINISTIC_DISPATCH]', { taskId: nextTask.id, tool: toolName, step });
+          console.log('[PLANNER_DISPATCH]', { step, taskId: nextTask.id, tool: toolName, args });
+          recordEvent('planner_dispatch', { step, taskId: nextTask.id, tool: toolName, args });
+
+          const toolCtx = { workspaceRoot: resolvedWorkspaceRoot };
+          const startedAt = new Date();
+          planner.markTaskRunning(nextTask, getMemoryContext());
+          const toolResult = await executeToolOptimized(toolName, args, toolCtx, nextTask.id, step);
+          const completedAt = new Date();
+
+          const toolCall = {
+            step,
+            tool: toolName,
+            args,
+            success: toolResult?.success !== false,
+            result: toolResult,
+            startedAt,
+            completedAt
+          };
+          toolCalls.push(toolCall);
+
+          // Populate readFileCache for successful READ_FILE
+          if (toolName === "READ_FILE" && toolResult?.success && toolResult.file && toolResult.content) {
+            const normalized = String(toolResult.file).replace(/\\/g, "/");
+            readFileCache.set(normalized, toolResult.content);
+            inspectedFiles.add(toolResult.file);
+            // For read-only tasks: after reading all requested files, guide model to produce FINAL
+            const reqFiles = criteria?.requestedFiles || [];
+            if (toolPolicy.mode === "READ_ONLY" && reqFiles.length > 0) {
+              const allRead = reqFiles.every(f => {
+                const norm = String(f).replace(/\\/g, "/").toLowerCase();
+                return readFileCache.has(norm);
+              });
+              if (allRead) {
+                let strict = null;
+                if (reqFiles.some(r => /(^|\/)package\.json$/i.test(r))) {
+                  strict = buildStrictAnswerInstruction(objective, "package.json");
+                }
+                const lines = [
+                  "READ-ONLY MODE: The required file(s) have been read successfully.",
+                  "Answer the user's exact question now.",
+                  "Do not modify files.",
+                  "Do not run commands."
+                ];
+                if (strict) lines.push(strict);
+                conversation.push({ role: "system", content: lines.join(" \n") });
+                readOnlyAllRequiredRead = true;
+                console.log('[READ_ONLY_GUIDED_FINAL]', { files: reqFiles });
+              }
+            }
+          }
+          // Track file changes for WRITE tools dispatched by single task dispatch
+          if (WRITE_TOOLS.has(toolName) && toolResult?.success && toolResult?.changed && toolResult.file) {
+            recordChangedFile(toolResult.file);
+          }
+
+          // Run VALIDATE_PATCH for planner-dispatched write tools (quality gate expects it)
+          if (WRITE_TOOLS.has(toolName) && toolResult?.success && toolResult?.changed && toolResult.file) {
+            const validation = await executeTool("VALIDATE_PATCH", { file: toolResult.file }, toolCtx);
+            const validationCall = {
+              step,
+              tool: "VALIDATE_PATCH",
+              args: { file: toolResult.file },
+              success: validation?.success !== false,
+              result: validation,
+              startedAt: new Date(),
+              completedAt: new Date()
+            };
+            toolCalls.push(validationCall);
+            if (!validationCall.success) {
+              validationFailed = true;
+            }
+          }
+
+          // Notify planner of the result (triggers recovery on failure)
+          const plannerResult = notifyToolExecution(planner, toolName, args, toolResult);
+          logPlannerStatus(planner);
+
+          if (plannerResult?.recoveryStarted) {
+            console.log('[PLANNER_RECOVERY_START]', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
+            recordEvent('planner_recovery_start', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
+          }
+
+          continue;
+          }
         }
-
-        continue;
       }
     }
 
@@ -1382,7 +2224,8 @@ RULES:
           planner,
           toolCalls,
           readFileCache,
-          readOnly: isReadOnly || isNonCodingTask
+          readOnly: isReadOnly || isNonCodingTask,
+          changedFiles
         }) || reason;
         qualityGate = await runQualityGate({
           acceptanceCriteria: criteriaEffective,
@@ -1392,6 +2235,26 @@ RULES:
           finalText,
           requiredCommands: originalRequiredCommands
         });
+        // Quality Gate is the final authority: if it passed, the run is completed
+        if (qualityGate?.passed === true) {
+          console.log('[PLANNER_RECOVERY_OVERRIDE]', { reason: 'qualityGate passed, overriding recovery failure', status: 'completed' });
+          const changedFileList = [...changedFiles].sort();
+          return {
+            success: true,
+            status: "completed",
+            final: finalText,
+            error: null,
+            history,
+            events,
+            toolCalls,
+            changedFiles: changedFileList,
+            diffSummary: resolvedWorkspaceRoot ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList) : { stat: "", numstat: "" },
+            qualityGate,
+            acceptanceCriteria: criteriaEffective,
+            workspaceRoot: resolvedWorkspaceRoot || null,
+            workspaceId: workspaceId || null
+          };
+        }
         return {
           success: false,
           status: "needs_revision",
@@ -1421,7 +2284,8 @@ RULES:
           planner,
           toolCalls,
           readFileCache,
-          readOnly: isReadOnly || isNonCodingTask
+          readOnly: isReadOnly || isNonCodingTask,
+        changedFiles
         }) || 'Planner has no ready tasks remaining. Stopping execution.';
         qualityGate = await runQualityGate({
           acceptanceCriteria: criteriaEffective,
@@ -1431,6 +2295,26 @@ RULES:
           finalText,
           requiredCommands: originalRequiredCommands
         });
+        // Quality Gate is the final authority: if it passed, the run is completed
+        if (qualityGate?.passed === true) {
+          console.log('[PLANNER_STUCK_OVERRIDE]', { reason: 'qualityGate passed, overriding stuck planner', status: 'completed' });
+          const changedFileList = [...changedFiles].sort();
+          return {
+            success: true,
+            status: "completed",
+            final: finalText,
+            error: null,
+            history,
+            events,
+            toolCalls,
+            changedFiles: changedFileList,
+            diffSummary: resolvedWorkspaceRoot ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList) : { stat: "", numstat: "" },
+            qualityGate,
+            acceptanceCriteria: criteriaEffective,
+            workspaceRoot: resolvedWorkspaceRoot || null,
+            workspaceId: workspaceId || null
+          };
+        }
         return {
           success: false,
           status: "needs_revision",
@@ -1449,12 +2333,25 @@ RULES:
       }
     }
 
-    // Phase 4.8 BUG 2: When parallel planner is complete, generate a deterministic final summary
-    // and stop without calling the model again.
-    // Only triggers when parallelMode is active (planner handled ALL work).
-    // Single-task dispatch path: model still needs to provide final answer.
-    if (planner && planner.parallelMode && planner.isComplete()) {
+    // Phase 4.12+: When planner is complete (all tasks succeeded/skipped) AND
+    // all tasks had specific tools assigned (no model-dependent generic tasks),
+    // generate a deterministic final summary and stop without calling the model again.
+    if (planner && planner.isComplete()) {
       const allTasks = planner.graph.allNodes();
+      const allTasksResolved = allTasks.every(t =>
+        t.tool ||
+        isPlannerReasoningTask(t) ||
+        (
+          t.status === TaskStatus.SUCCESS &&
+          planner.state === 'COMPLETED' &&
+          t.children &&
+          t.children.size > 0
+        )
+      );
+      if (!allTasksResolved) {
+        // Generic tasks (tool: null) need model involvement — skip immediate finalization
+        if (DEBUG()) console.log('[PLANNER_COMPLETE_SKIP]', { reason: 'generic tasks present', taskCount: allTasks.length });
+      } else {
     const succeeded = allTasks.filter(t => t.status === TaskStatus.SUCCESS || t.status === TaskStatus.RECOVERED).length;
     const skipped = allTasks.filter(t => t.status === TaskStatus.SKIPPED).length;
       const failedTasks = allTasks.filter(t => t.status === TaskStatus.FAILED || t.status === TaskStatus.RECOVERY_FAILED);
@@ -1462,8 +2359,56 @@ RULES:
         planner,
         toolCalls,
         readFileCache,
-        readOnly: isReadOnly || isNonCodingTask
+        readOnly: isReadOnly || isNonCodingTask,
+        changedFiles
       });
+
+      // HOTFIX 5: Detailed planner summary
+      {
+        const reasoningTasks = allTasks.filter(t => isPlannerReasoningTask(t) || t.kind === 'REASONING' || t.kind === 'GENERATE_CONTENT');
+        const executionTasks = allTasks.filter(t => t.tool && t.tool !== 'REASONING' && t.kind !== 'REASONING' && t.kind !== 'GENERATE_CONTENT' && t.kind !== 'RECOVERY');
+        const recoveryTasks = allTasks.filter(t => t.kind === 'RECOVERY');
+        const createdFiles = [...changedFiles].filter(f => {
+          const t = allTasks.find(tt => (tt.tool === 'WRITE_FILE' || tt.tool === 'APPLY_PATCH') && tt.status === 'SUCCESS' && (tt.toolArgs?.path === f || tt.toolArgs?.file === f));
+          return t && changedFiles.has(f);
+        });
+        const updatedFiles = [...changedFiles].filter(f => !createdFiles.includes(f));
+        const executedCommands = (toolCalls || []).filter(c => c.tool === 'RUN_TERMINAL' && c.success).map(c => c.args?.command).filter(Boolean);
+        const duplicateRemoved = (toolCalls || []).filter(c => c.tool === 'RUN_TERMINAL' && !c.success).length;
+        const recoveryFailed = allTasks.filter(t => t.status === 'RECOVERY_FAILED').length;
+        const recoverySucceeded = allTasks.filter(t => t.status === 'RECOVERED').length;
+
+        const allTerminalCalls = (toolCalls || []).filter(c => c.tool === 'RUN_TERMINAL');
+        const commandsAttempted = allTerminalCalls.map(c => c.args?.command).filter(Boolean);
+        const commandsPassed = allTerminalCalls.filter(c => c.success).map(c => c.args?.command).filter(Boolean);
+        const commandsFailed = allTerminalCalls.filter(c => !c.success).map(c => c.args?.command).filter(Boolean);
+        const qgType = criteriaEffective?.taskClass || criteriaEffective?.taskType || 'unknown';
+
+        console.log('\n========== Planner Summary ==========');
+        console.log(`Reasoning Tasks:         ${reasoningTasks.length}`);
+        console.log(`Execution Tasks:         ${executionTasks.length}`);
+        console.log(`Recovery Tasks:          ${recoveryTasks.length}`);
+        console.log(`Files Created:           ${createdFiles.length > 0 ? createdFiles.join(', ') : 'none'}`);
+        console.log(`Files Updated:           ${updatedFiles.length > 0 ? updatedFiles.join(', ') : 'none'}`);
+        console.log(`Commands Attempted:      ${commandsAttempted.length > 0 ? commandsAttempted.join(', ') : 'none'}`);
+        console.log(`Commands Passed:         ${commandsPassed.length > 0 ? commandsPassed.join(', ') : 'none'}`);
+        console.log(`Commands Failed:         ${commandsFailed.length > 0 ? commandsFailed.join(', ') : 'none'}`);
+        console.log(`Skipped Tasks:           ${skipped}`);
+        console.log(`Duplicate Tasks Removed: ${duplicateRemoved}`);
+        console.log(`Recovery:                ${recoveryFailed > 0 ? `${recoveryFailed} failed` : recoverySucceeded > 0 ? `${recoverySucceeded} succeeded` : 'no recovery needed'}`);
+        console.log(`Quality Gate Type:       ${qgType}`);
+        const finalResult = failedTasks.length === 0 && qualityGate?.passed ? 'PASSED' :
+          failedTasks.length === 0 ? 'PASSED (quality gate issues)' :
+          'FAILED';
+        console.log(`Final Result:            ${finalResult}`);
+        const memStats = planner.getMemorySummary?.() || {};
+        console.log(`Memory hits:             ${memStats.memoryHits ?? 0}`);
+        console.log(`Skipped duplicate executions: ${memStats.skippedDuplicateExecutions ?? 0}`);
+        console.log(`Reasoning reused:        ${memStats.reasoningReused ?? 0}`);
+        console.log(`Retries avoided:         ${memStats.retriesAvoided ?? 0}`);
+        console.log('======================================\n');
+        planner.executionMemory?.printSummary?.();
+      }
 
       console.log('[PLANNER_COMPLETE_SUMMARY]', { succeeded, skipped, failed: failedTasks.length });
       recordEvent('planner_complete', { step, succeeded, skipped, failed: failedTasks.length, finalText });
@@ -1479,11 +2424,20 @@ RULES:
       if (qualityGate?.passed && !plannerFatalBlock) {
         recordEvent("completion", { step, message: "Planner completed.", finalText });
         console.log('[AgentLoop] Planner completed — quality gate passed, stopping');
+        // Emit REQUESTED_CHANGE_STATUS and DIRECT_FINAL_SUMMARY events (expected by tests)
+        const changeStatus = changedFiles.size > 0 ? "changed" : "already_satisfied";
+        const dbgRCS = createEvent("debug", { section: "REQUESTED_CHANGE_STATUS", status: changeStatus, filesChanged: [...changedFiles] });
+        events.push(dbgRCS); history.push(dbgRCS);
+        console.log("[DIRECT_FINAL_SUMMARY]", { generated: true, changeStatus });
+        const dbgFS = createEvent("debug", { section: "DIRECT_FINAL_SUMMARY", generated: true, changeStatus });
+        events.push(dbgFS);
         const changedFileList = [...changedFiles].sort();
         const isCodingTask = true;
         const diffSummary = resolvedWorkspaceRoot && isCodingTask
           ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList)
           : { stat: "", numstat: "" };
+        planner.executionMemory?.printSummary?.();
+        opt.printSummary();
         return {
           success: true,
           status: "completed",
@@ -1504,6 +2458,117 @@ RULES:
       // Quality gate failed — still stop, do not call model
       console.log('[PLANNER_COMPLETE_STOP]', { reason: 'Quality gate failed after planner completion', finalText });
       break;
+      }
+    }
+
+    // Phase: Handle REASONING tasks (LLM content generation) before falling through to tool-calling mode
+    if (false && planner && planner.hasReasoningTasks()) {
+      const reasoningTask = planner.getNextReasoningTask();
+      if (reasoningTask) {
+        console.log('[PLANNER_REASONING_TASK]', {
+          step,
+          taskId: reasoningTask.id,
+          goal: (reasoningTask.goal || '').substring(0, 80),
+          kind: reasoningTask.kind
+        });
+        recordEvent('planner_reasoning_task', { step, taskId: reasoningTask.id, goal: reasoningTask.goal });
+
+        // Build a focused content-generation prompt for this reasoning task
+        const fileMatch = reasoningTask.goal.match(/Generate (content|patch) for file:\s*(.+)/i);
+        const targetFile = fileMatch ? fileMatch[2].trim() : null;
+
+        const reasoningPrompt = [
+          `You are a code generation engine. Generate the complete file content for: ${targetFile || reasoningTask.goal}`,
+          `Objective: ${objective}`,
+          `Return ONLY the file content in a code block. No explanations, no JSON wrapper, no tool calls.`,
+          targetFile ? `The file path is: ${targetFile}` : '',
+          `Use the project context and existing code to generate appropriate, production-quality content.`,
+          `Match existing code style, imports, and conventions.`
+        ].filter(Boolean).join('\n');
+
+        console.log('[PLANNER_REASONING_GENERATE]', {
+          step,
+          taskId: reasoningTask.id,
+          targetFile: targetFile || '(inferred from goal)',
+          promptLength: reasoningPrompt.length
+        });
+        recordEvent('planner_reasoning_generate', { step, taskId: reasoningTask.id, targetFile });
+
+        const reasonMessages = [
+          ...conversation,
+          { role: 'system', content: reasoningPrompt }
+        ];
+
+        let rawContent;
+        try {
+          rawContent = await generateResponse({
+            messages: reasonMessages,
+            plan,
+            step,
+            objective: reasoningTask.goal
+          });
+        } catch (error) {
+          console.log('[PLANNER_REASONING_FAILED]', {
+            step,
+            taskId: reasoningTask.id,
+            error: error.message
+          });
+          planner.markFailure(reasoningTask.id, `Content generation failed: ${error.message}`);
+          continue;
+        }
+
+        const generatedText = String(rawContent || '');
+        // Extract content from code blocks if present
+        let content = generatedText;
+        const codeBlockMatch = generatedText.match(/```(?:\w+)?\s*([\s\S]*?)```/);
+        if (codeBlockMatch) {
+          content = codeBlockMatch[1].trim();
+        }
+        content = content.trim();
+
+        if (!content) {
+          console.log('[PLANNER_REASONING_EMPTY]', { step, taskId: reasoningTask.id });
+          planner.markFailure(reasoningTask.id, 'Content generation returned empty content');
+          continue;
+        }
+
+        console.log('[PLANNER_REASONING_COMPLETE]', {
+          step,
+          taskId: reasoningTask.id,
+          contentLength: content.length,
+          targetFile: targetFile || '(inferred)'
+        });
+        recordEvent('planner_reasoning_complete', { step, taskId: reasoningTask.id, contentLength: content.length, targetFile });
+
+        // Replace the reasoning task with concrete WRITE_FILE execution tasks
+        if (targetFile) {
+          const writeTask = new Task({
+            kind: 'CODING',
+            goal: `Write file: ${targetFile} with generated content`,
+            tool: 'WRITE_FILE',
+            toolArgs: { path: targetFile, content, file: targetFile },
+            dependencies: [],
+            priority: 54
+          });
+          const addedIds = planner.replaceReasoningTask(reasoningTask.id, [writeTask]);
+          if (addedIds && addedIds.length > 0) {
+            console.log('[PLANNER_REASONING_EXECUTION]', {
+              step,
+              reasoningTaskId: reasoningTask.id,
+              executionTaskIds: addedIds,
+              tool: 'WRITE_FILE',
+              targetFile
+            });
+          }
+        } else {
+          // No target file inferred — mark as failed
+          console.log('[PLANNER_REASONING_NO_TARGET]', { step, taskId: reasoningTask.id });
+          planner.markFailure(reasoningTask.id, 'Could not infer target file from reasoning task goal');
+        }
+
+        // Continue the loop — the WRITE_FILE tasks will be dispatched deterministically next iteration
+        continue;
+      }
     }
 
     recordEvent("thinking", { step });
@@ -1757,7 +2822,8 @@ RULES:
             planner,
             toolCalls,
             readFileCache,
-            readOnly: isReadOnly || isNonCodingTask
+            readOnly: isReadOnly || isNonCodingTask,
+            changedFiles
           });
           console.log('[PLANNER_FALLBACK_FINAL_TEXT]', { finalText });
         }
@@ -2049,6 +3115,25 @@ RULES:
     const toolName = norm.toolName || norm.tool;
     const args = norm.args || {};
 
+    // Phase 4.13: Tool mismatch protection — if planner has a deterministic ready task
+    // with a different tool than what the model returned, ignore the model and let
+    // the planner dispatch handle it on the next iteration.
+    if (planner && toolName && toolName !== "FINAL") {
+      const readyTask = planner.getNextTask();
+      if (readyTask && readyTask.tool && readyTask.tool === toolName && isDeterministicPlannerTask(readyTask)) {
+        // Model returned the correct tool for the planner's ready task — let it proceed
+      } else if (readyTask && readyTask.tool && readyTask.tool !== toolName && isDeterministicPlannerTask(readyTask)) {
+        console.log('[PLANNER_MODEL_TOOL_IGNORED]', {
+          taskId: readyTask.id,
+          expectedTool: readyTask.tool,
+          modelTool: toolName,
+          step
+        });
+        // Skip the model's tool call; the next loop iteration will dispatch the planner task
+        continue;
+      }
+    }
+
     // If the model selected FINAL explicitly, do not execute any tool. Mark done, run the gate, and exit loop.
     if (toolName === "FINAL") {
       console.log("[FINAL_BRANCH_ENTERED]", { step, branch: "tool:FINAL", mode: toolPolicy.mode });
@@ -2100,7 +3185,8 @@ RULES:
             planner,
             toolCalls,
             readFileCache,
-            readOnly: isReadOnly || isNonCodingTask
+            readOnly: isReadOnly || isNonCodingTask,
+            changedFiles
           });
           console.log('[PLANNER_FALLBACK_FINAL_TEXT]', { finalText });
       }
@@ -2443,6 +3529,160 @@ RULES:
       break;
     }
 
+    // Phase 4.12/4.15: Check execution history AND ExecutionCache before duplicate detection
+    // If the tool was already executed (history) OR cached (ExecutionCache), skip it.
+    if (planner && toolName && toolName !== 'FINAL') {
+      const h = planner.executionHistory;
+      const historyReason = h?.skipReason(toolName, args);
+      let cacheHit = null;
+
+      // Query ExecutionCache for READ_FILE and RUN_TERMINAL
+      if (toolName === 'READ_FILE' && args?.path) {
+        cacheHit = await opt.getCachedRead(args.path);
+      } else if (toolName === 'RUN_TERMINAL' && args?.command) {
+        cacheHit = await opt.getCachedTerminal(args.command);
+      }
+
+      if (historyReason || cacheHit) {
+        const mismatchReason = cacheHit ? 'CACHE_HIT' : historyReason;
+        // Find READY planner task whose tool+args match (history or cache)
+        const matching = planner.graph.allNodes().find(n => {
+          if (n.status !== 'READY' && n.status !== 'PENDING') return false;
+          if (n.tool !== toolName) return false;
+          if (historyReason && h?.shouldSkip(toolName, n.toolArgs || {})) return true;
+          // For cache matches, don't require exact args match — same tool is enough
+          if (cacheHit && n.tool === toolName) return true;
+          return false;
+        });
+        const readyTask = planner.getNextTask();
+
+        if (matching) {
+          const lookupResult = cacheHit ? 'CACHE_HIT' : historyReason;
+          console.log('[PLANNER_HISTORY_LOOKUP]', {
+            taskId: matching.id, tool: toolName, args, result: lookupResult, step
+          });
+          console.log('[PLANNER_SKIP_HISTORY]', {
+            taskId: matching.id, tool: toolName, reason: lookupResult, step
+          });
+          planner.markSuccess(matching.id, { tool: toolName, args, result: { success: true, skipped: true } });
+          logPlannerStatus(planner);
+          continue;
+        }
+
+        // Tool does NOT match any READY planner task — model stall
+        // Track stall on the current model task to prevent infinite loop
+        const modelTask = planner.getModelTask();
+        const stallTarget = modelTask || (readyTask && readyTask.status === 'READY' ? readyTask : null);
+        if (stallTarget) {
+          markTaskStall(stallTarget, `model returned ${toolName} (${mismatchReason}) instead of expected tool`);
+          console.log('[PLANNER_STALL_DETECTED]', {
+            taskId: stallTarget.id,
+            tool: toolName,
+            stallCount: stallTarget.stallCount,
+            attempts: stallTarget.attempts,
+            goal: (stallTarget.goal || '').substring(0, 60),
+            reason: `tool_mismatch_${mismatchReason}`
+          });
+        }
+
+        console.log('[PLANNER_HISTORY_SKIP_IGNORED]', {
+          reason: 'tool_mismatch_current_task',
+          tool: toolName,
+          args,
+          readyTask: readyTask ? { id: readyTask.id, tool: readyTask.tool, goal: (readyTask.goal || '').substring(0, 60) } : null,
+          step
+        });
+
+        // After 2 history-skips without progress, force-dispatch the ready task if args are known
+        // Otherwise after maxAttempts, fail current task
+        const skipCount = (stallTarget?.stallCount || 0);
+        const maxAttempts = stallTarget?.maxAttempts || 4;
+        const shouldForceDispatch = skipCount >= 2 && readyTask && readyTask.tool;
+
+        if (shouldForceDispatch && readyTask.tool) {
+          const taskArgs = readyTask.toolArgs || {};
+          const hasEnoughArgs = readyTask.tool === 'WRITE_FILE'
+            ? !!(taskArgs.file || taskArgs.path) && !!(taskArgs.content)
+            : readyTask.tool === 'RUN_TERMINAL'
+              ? !!(taskArgs.command)
+              : readyTask.tool === 'APPLY_PATCH'
+                ? !!(taskArgs.file || taskArgs.path || taskArgs.target)
+                : readyTask.tool === 'READ_FILE'
+                  ? !!(taskArgs.path || taskArgs.file)
+                  : true;
+
+          if (hasEnoughArgs) {
+            console.log('[PLANNER_DIRECT_DISPATCH]', {
+              taskId: readyTask.id, tool: readyTask.tool, args: taskArgs, step
+            });
+            const toolCtx = { workspaceRoot: resolvedWorkspaceRoot };
+            const startedAt = new Date();
+            const toolResult = await executeTool(readyTask.tool, taskArgs, toolCtx);
+            const completedAt = new Date();
+            const toolCall = {
+              step, tool: readyTask.tool, args: taskArgs,
+              success: toolResult?.success !== false,
+              result: toolResult, startedAt, completedAt
+            };
+            toolCalls.push(toolCall);
+            if (readyTask.tool === 'READ_FILE' && toolResult?.success && toolResult.file && toolResult.content) {
+              const normalized = String(toolResult.file).replace(/\\/g, '/');
+              readFileCache.set(normalized, toolResult.content);
+              inspectedFiles.add(toolResult.file);
+            }
+            if (WRITE_TOOLS.has(readyTask.tool) && toolResult?.success && toolResult?.changed && toolResult.file) {
+              recordChangedFile(toolResult.file);
+            }
+            notifyToolExecution(planner, readyTask.tool, taskArgs, toolResult);
+            logPlannerStatus(planner);
+            continue;
+          }
+        }
+
+        // Check if max attempts/stalls reached — fail current task
+        if (stallTarget && skipCount >= maxAttempts) {
+          const error = `Task stalled: model returned ${toolName} (${mismatchReason}) instead of expected tool after ${skipCount} attempts`;
+          console.log('[PLANNER_TASK_ATTEMPT_LIMIT]', { taskId: stallTarget.id, tool: toolName, stallCount: skipCount, step });
+          planner.markFailure(stallTarget.id, error);
+          const branchType = planner.branchType(stallTarget.id);
+          if (branchType === 'FAILURE') {
+            const recoveryResult = tryRecovery(planner, stallTarget);
+            if (recoveryResult.recoveryStarted) {
+              console.log('[PLANNER_RECOVERY_START]', { step, tool: toolName, recoveryTaskIds: recoveryResult.recoveryTaskIds });
+              recordEvent('planner_recovery_start', { step, tool: toolName, recoveryTaskIds: recoveryResult.recoveryTaskIds });
+              continue;
+            }
+          }
+          qualityGate = { passed: false, score: 0, failures: [error], feedback: error };
+          break;
+        }
+
+        // Push corrective instruction to guide the model toward the right tool
+        if (readyTask && readyTask.tool) {
+          let correctiveContent = '';
+          if (mismatchReason === 'already_read') {
+            correctiveContent = `${JSON.stringify(args?.path || args?.file || '')} was already read.`;
+          } else if (mismatchReason === 'already_executed') {
+            correctiveContent = `${JSON.stringify(args?.command || '')} was already executed.`;
+          } else if (mismatchReason === 'already_written') {
+            correctiveContent = `${JSON.stringify(args?.file || args?.path || '')} was already written.`;
+          } else {
+            correctiveContent = `Tool ${toolName} was already completed.`;
+          }
+          conversation.push({
+            role: 'system',
+            content: `Current task is ${readyTask.tool} ${JSON.stringify(readyTask.toolArgs || {})}. ${correctiveContent} Do not repeat it. Return ${readyTask.tool} only.`
+          });
+          console.log('[PLANNER_CORRECTIVE_INSTRUCTION]', {
+            expectedTool: readyTask.tool, expectedArgs: readyTask.toolArgs, step
+          });
+        }
+
+        // Skip execution — the corrective instruction will guide the model on next iteration
+        continue;
+      }
+    }
+
     // args already normalized above
 
     if (WRITE_TOOLS.has(toolName) && inspectedFiles.size === 0) {
@@ -2622,6 +3862,7 @@ RULES:
             recordEvent("tool_completed", { step, tool: "RUN_TERMINAL", success: termCall.success, file: null, error: termResult?.error || null });
             if (termCall.success) {
               if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
+              console.log('[QUALITY_GATE_CHANGED_FILES]', { files: [...changedFiles] });
               qualityGate = await runQualityGate({ acceptanceCriteria: criteriaEffective, changedFiles: [...changedFiles], toolCalls, workspaceRoot: resolvedWorkspaceRoot, finalText });
               recordEvent("quality_gate", { step, passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
               if (qualityGate.passed) {
@@ -2701,8 +3942,40 @@ RULES:
     recordEvent("tool_started", { step, tool: toolName, args });
     if (DEBUG()) console.log("[AgentLoop] tool=%s args=%s", toolName, JSON.stringify(args || {}));
     if (DEBUG()) console.log("[runAgentLoop] step %d tool=%s args=%j", step, toolName, args);
+    // ── Execution Cache: check before execution ────────────────────
+    let cachedResult = null;
+    if (toolName === "READ_FILE" && args?.path) {
+      const cached = await opt.getCachedRead(args.path);
+      if (cached) {
+        cachedResult = { success: true, file: args.path, content: cached };
+      }
+    }
+    if (!cachedResult && toolName === "WRITE_FILE" && args?.path && args?.content) {
+      const { skipped } = await opt.shouldSkipWrite(args.path, args.content);
+      if (skipped) {
+        cachedResult = { success: true, file: args.path, changed: false, alreadyUpToDate: true };
+      }
+    }
+    if (!cachedResult && toolName === "RUN_TERMINAL" && args?.command) {
+      const cached = await opt.getCachedTerminal(args.command);
+      if (cached) {
+        cachedResult = cached;
+      }
+    }
+
     const startedAt = new Date();
-    const result = await executeTool(toolName, args, toolContext);
+    const result = cachedResult || await executeTool(toolName, args, toolContext);
+
+    // ── Execution Cache: store after execution ────────────────────
+    if (result?.success) {
+      if (toolName === "READ_FILE" && result.content) {
+        await opt.setCachedRead(result.file || args.path, result.content);
+      }
+      if (toolName === "RUN_TERMINAL" && result.exitCode !== undefined) {
+        await opt.setCachedTerminal(args.command, result, [...changedFiles]);
+      }
+    }
+
     if (toolName === "WRITE_FILE" && (result === undefined || result === null)) {
       const reason = "WRITE_FILE produced no TOOL_RESULT (internal error)";
       recordEvent("tool_error", { step, tool: toolName, args, reason });
@@ -2754,6 +4027,45 @@ RULES:
     if (toolName === "READ_FILE" && result?.success && result?.file) {
       if (args && typeof args === "object") args.path = result.file;
     }
+
+    // Phase 4.15 fix — Regression 1: When model returns WRITE_FILE with content,
+    // match it to a GENERATE_CONTENT planner task (tool: null, goal mentions the file).
+    // Create the actual WRITE_FILE task with content so it dispatches deterministically.
+    if (planner && toolName === 'WRITE_FILE' && result?.success && args?.content) {
+      const filePath = result?.file || args?.path || args?.file || null;
+      if (filePath) {
+        const norm = String(filePath).replace(/\\/g, '/');
+        const genTask = planner.graph.allNodes().find(n =>
+          !n.tool &&
+          (n.status === 'PENDING' || n.status === 'READY') &&
+          n.goal?.toLowerCase().includes(norm.toLowerCase())
+        );
+        if (genTask) {
+          // Create the concrete WRITE_FILE task with the model's content
+          const writeTask = new Task({
+            kind: 'CODING',
+            goal: `Write file: ${norm} with generated content`,
+            tool: 'WRITE_FILE',
+            toolArgs: { path: norm, content: args.content, file: norm },
+            dependencies: [],
+            priority: 54
+          });
+          planner.addTask(writeTask);
+          // Mark the GENERATE_CONTENT task as replaced
+          planner.markSuccess(genTask.id, { tool: 'WRITE_FILE', args: { path: norm, content: args.content }, result });
+          console.log('[PLANNER_TASK_REPLACED]', {
+            taskId: genTask.id,
+            tool: 'WRITE_FILE',
+            path: norm,
+            contentLength: String(args.content || '').length,
+            reason: 'model provided content — GENERATE_CONTENT fulfilled'
+          });
+          // Mark the planner's WRITE_FILE as dispatched too (model already wrote the file)
+          // Skip matching in the next iteration
+        }
+      }
+    }
+
     const toolCall = {
       step,
       tool: toolName,
@@ -2934,7 +4246,7 @@ RULES:
           toolCalls.push(wfCall);
           history.push(wfCall);
           if (wfCall.success && wfRes?.file) {
-            changedFiles.add(wfRes.file);
+            recordChangedFile(wfRes.file);
             readFileCache.set("package.json", outText);
             recordEvent("file_changed", { step, tool: "WRITE_FILE", file: wfRes.file });
           }
@@ -2951,7 +4263,8 @@ RULES:
             toolCalls.push({ step, tool: "RUN_TERMINAL", args: { command: testCmd }, success: t2?.success !== false, result: summarizeToolResult(t2, "RUN_TERMINAL"), startedAt: new Date(), completedAt: new Date() });
             if (t2?.success) {
               if (!finalText) finalText = "Coding task completed with file changes and successful validation.";
-               qualityGate = await runQualityGate({ acceptanceCriteria: criteriaEffective, changedFiles: [...changedFiles], toolCalls, workspaceRoot: resolvedWorkspaceRoot, finalText });
+              console.log('[QUALITY_GATE_CHANGED_FILES]', { files: [...changedFiles] });
+              qualityGate = await runQualityGate({ acceptanceCriteria: criteriaEffective, changedFiles: [...changedFiles], toolCalls, workspaceRoot: resolvedWorkspaceRoot, finalText });
               recordEvent("quality_gate", { step, passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
               if (qualityGate.passed) {
                 recordEvent("completion", { step, message: "Task completed.", finalText });
@@ -3084,7 +4397,7 @@ RULES:
               toolCalls.push(wfCall);
               history.push(wfCall);
               if (wfCall.success && wfRes?.file) {
-                changedFiles.add(wfRes.file);
+                recordChangedFile(wfRes.file);
                 hasWorkspaceMutation = true;
                 readFileCache.set(normalized, outText);
                 recordEvent("file_changed", { step, tool: "WRITE_FILE", file: wfRes.file });
@@ -3174,7 +4487,7 @@ RULES:
                 toolCalls.push(wfCall);
                 history.push(wfCall);
                 if (wfCall.success && wfRes?.file) {
-                  changedFiles.add(wfRes.file);
+                  recordChangedFile(wfRes.file);
                   readFileCache.set(normalized, outText);
                   recordEvent("file_changed", { step, tool: "WRITE_FILE", file: wfRes.file });
                 }
@@ -3343,7 +4656,7 @@ RULES:
     }
 
     if (WRITE_TOOLS.has(toolName) && result?.success && result?.changed && result.file) {
-      changedFiles.add(result.file);
+      recordChangedFile(result.file);
       hasWorkspaceMutation = true;
       updateRequestedChangeStatus("changed", `${toolName.toLowerCase()}_success`, result.file, "file content changed");
       recordEvent("file_changed", { step, tool: toolName, file: result.file });
@@ -3790,7 +5103,7 @@ RULES:
     const after = await getGitSnapshot(resolvedWorkspaceRoot);
     const baselineFiles = new Set(baseline.changedFiles || []);
     for (const file of after.changedFiles || []) {
-      if (!baselineFiles.has(file)) changedFiles.add(file);
+      if (!baselineFiles.has(file)) recordChangedFile(file);
     }
   }
 
@@ -3819,18 +5132,46 @@ RULES:
 
   // Phase 4.9: Ensure finalText is set before the final QualityGate.
   if (!finalText && planner) {
-    finalText = buildPlannerFinalText({
-      planner,
-      toolCalls,
-      readFileCache,
-      readOnly: isReadOnly || isNonCodingTask
-    });
-    console.log('[PLANNER_FALLBACK_FINAL_TEXT]', { finalText });
+    const scriptInfoForFinal = extractRequestedScript(objective);
+    const canUseAlreadySatisfiedFinal = requestedChangeStatus === "already_satisfied" ||
+      (scriptInfoForFinal?.name && changedFiles.size === 0 && hasAllSuccessfulRequiredCommands());
+    if (canUseAlreadySatisfiedFinal && hasAllSuccessfulRequiredCommands()) {
+      if (requestedChangeStatus !== "already_satisfied") {
+        updateRequestedChangeStatus("already_satisfied", "read_confirmed", scriptInfoForFinal?.name || null, "required command succeeded and no file changes were needed");
+      }
+      const hasCommands = toolPolicy.requiredCommands && toolPolicy.requiredCommands.length > 0;
+      const cmdText = hasCommands ? toolPolicy.requiredCommands.join(", ") : "";
+      const output = lastTerminalOutput();
+      if (scriptInfoForFinal && scriptInfoForFinal.name) {
+        finalText = hasCommands
+          ? `The npm script '${scriptInfoForFinal.name}' already existed with the expected value, and ${cmdText} completed successfully.${output ? ` Output: ${output}` : ""}`
+          : `The npm script '${scriptInfoForFinal.name}' already existed with the expected value.${output ? ` Output: ${output}` : ""}`;
+      } else {
+        finalText = hasCommands
+          ? `The requested content already existed with the expected content, and ${cmdText} completed successfully.${output ? ` Output: ${output}` : ""}`
+          : `The requested content already existed with the expected content.${output ? ` Output: ${output}` : ""}`;
+      }
+      console.log("[DETERMINISTIC_FINAL_SUMMARY]", { generated: true, requestedChangeStatus, requiredCommands: toolPolicy.requiredCommands });
+      const dbgDetFinal = createEvent("debug", { section: "DETERMINISTIC_FINAL_SUMMARY", generated: true, requestedChangeStatus, requiredCommands: toolPolicy.requiredCommands });
+      events.push(dbgDetFinal); history.push(dbgDetFinal);
+    }
+  }
+
+  if (!finalText && planner) {
+          finalText = buildPlannerFinalText({
+            planner,
+            toolCalls,
+            readFileCache,
+            readOnly: isReadOnly || isNonCodingTask,
+            changedFiles
+          });
+          console.log('[PLANNER_FALLBACK_FINAL_TEXT]', { finalText });
     const dbgPFF = createEvent("debug", { section: "PLANNER_FALLBACK_FINAL_TEXT", finalText });
     events.push(dbgPFF); history.push(dbgPFF);
   }
 
   if (!qualityGate?.passed) {
+    console.log('[QUALITY_GATE_CHANGED_FILES]', { files: changedFileList });
     const qInputFinal = {
       acceptanceCriteria: criteriaEffective,
       changedFiles: changedFileList,
@@ -3863,8 +5204,26 @@ RULES:
       events.push(dbg); history.push(dbg);
     }
   }
-  const success = !plannerFatalBlock && qualityGate?.passed === true && !validationFailed;
+  // ── Quality Gate is the final completion authority ──────────────────
+  const qualityGatePassed = qualityGate?.passed === true;
+  const allPlannerNodes = planner ? planner.graph.allNodes() : [];
+  const hasExecutableWork = allPlannerNodes.some(t =>
+    (t.status === 'READY' || t.status === 'PENDING') &&
+    (t.tool || t.kind === 'REASONING' || t.kind === 'GENERATE_CONTENT')
+  );
+  const hasActiveRecovery = allPlannerNodes.some(t => t.status === 'RECOVERING' || t.kind === 'RECOVERY');
+  const failedTaskCount = allPlannerNodes.filter(t => t.status === 'FAILED').length;
+  const recoveryFailedCount = allPlannerNodes.filter(t => t.status === 'RECOVERY_FAILED').length;
+  const success = !plannerFatalBlock && qualityGatePassed && !hasExecutableWork && !hasActiveRecovery;
   const status = success ? "completed" : "needs_revision";
+  console.log('[RUN_COMPLETION]', {
+    plannerFinished: !hasExecutableWork,
+    qualityGatePassed,
+    plannerFailedTasks: failedTaskCount,
+    recoverableFailures: recoveryFailedCount,
+    returnedStatus: status,
+    returnedSuccess: success
+  });
   if (!finalText) {
     finalText = success
       ? "Agent implementation passed all acceptance criteria."
@@ -3884,6 +5243,8 @@ RULES:
   if (planner) {
     planner._logCompletion();
   }
+  planner?.executionMemory?.printSummary?.();
+  opt.printSummary();
 
       return {
         success,
@@ -3923,10 +5284,10 @@ RULES:
         }
         return false;
       } catch {
-        return false;
-      }
+    return false;
+  }
+
     }
-// Normalize tool payload into args regardless of format A/B
 export function normalizeToolPayload(parsed) {
   const toolName = String(parsed?.tool || "").toUpperCase();
   const rawArgs = (parsed && typeof parsed.args === "object" && parsed.args) ? parsed.args : {};

@@ -1,4 +1,5 @@
-import { TaskStatus, BranchType, CostCategory } from './plannerTypes.js';
+import { TaskKind, TaskStatus, BranchType, CostCategory } from './plannerTypes.js';
+import { Task } from './task.js';
 import { TaskNode } from './taskNode.js';
 import { TaskGraph } from './taskGraph.js';
 import {
@@ -10,12 +11,24 @@ import {
 import { allDependenciesSatisfied } from './dependencyUtils.js';
 import { estimateForTool, costBreakdown } from './costEstimator.js';
 import { getTaskPriority, sortReadyTasksByPriority, pickNextPlannerTask } from './priorityQueue.js';
+import { createExecutionHistory } from './executionHistory.js';
+import { ExecutionMemoryStatus, createExecutionMemory } from './executionMemory.js';
+
+export const PlannerState = Object.freeze({
+  WAITING_CONTEXT: 'WAITING_CONTEXT',
+  CONTEXT_READY: 'CONTEXT_READY',
+  EXPANDED: 'EXPANDED',
+  EXECUTING: 'EXECUTING',
+  COMPLETED: 'COMPLETED'
+});
 
 export class Planner {
   constructor(tasks = []) {
     this.graph = new TaskGraph();
     this.graph.create();
     this.taskMap = new Map();
+    this.executionMemory = createExecutionMemory();
+    this.executionHistory = createExecutionHistory(this.executionMemory);
     for (const task of tasks) {
       this._addTask(task);
     }
@@ -26,6 +39,32 @@ export class Planner {
     this.parallelMode = false;
     this.parallelGroups = [];
     this.currentParallelGroupIndex = -1;
+
+    // Phase 4.15: Planner state machine
+    this._state = PlannerState.WAITING_CONTEXT;
+  }
+
+  get state() {
+    return this._state;
+  }
+
+  setState(newState) {
+    const valid = [
+      PlannerState.WAITING_CONTEXT,
+      PlannerState.CONTEXT_READY,
+      PlannerState.EXPANDED,
+      PlannerState.EXECUTING,
+      PlannerState.COMPLETED
+    ];
+    if (valid.includes(newState)) {
+      this._state = newState;
+      console.log('[PLANNER_STATE]', { state: newState });
+    }
+  }
+
+  addTask(task) {
+    this._addTask(task);
+    this._updateReadyStates();
   }
 
   _addTask(task) {
@@ -197,12 +236,142 @@ export class Planner {
     return next || null;
   }
 
+  completeTask(taskId, result, options = {}) {
+    const task = this.taskMap.get(taskId);
+    if (!task) return false;
+    if (options.fromMemory && options.memoryRecord) {
+      return this._finishTaskFromMemory(task, options.memoryRecord, options.context || {});
+    }
+    return this.markSuccess(taskId, result);
+  }
+
+  _finishTaskFromMemory(task, memoryRecord, context = {}) {
+    if (!task || !memoryRecord) return false;
+    const taskId = task.id;
+    const reusedPayload = {
+      tool: task.tool,
+      args: task.toolArgs || {},
+      result: {
+        success: true,
+        reused: true,
+        memoryHit: true,
+        ...(memoryRecord.resultSummary || {})
+      }
+    };
+    if (memoryRecord.taskId !== taskId) {
+      console.log('[EXECUTION_MEMORY_SKIP]', {
+        taskId,
+        tool: task.tool,
+        status: memoryRecord.status
+      });
+      this.executionMemory?.markSkipped(task, {
+        tool: task.tool,
+        args: task.toolArgs || {},
+        context,
+        reason: 'duplicate execution skipped via ExecutionMemory',
+        result: reusedPayload.result
+      });
+      this.executionMemory?.markRetryAvoided?.();
+    }
+    if (memoryRecord.reasoning) {
+      this.executionMemory?.getReasoning?.(memoryRecord.reasoning);
+    }
+    task.status = TaskStatus.SUCCESS;
+    task.result = reusedPayload;
+    task.touch();
+    if (this.executionHistory) {
+      this.executionHistory.recordTask(taskId);
+    }
+    console.log('[PLANNER_SUCCESS]', { id: taskId, kind: task.kind, memoryHit: true });
+    unlockChildren(this.graph, taskId);
+    this._updateReadyStates();
+    this._evaluateAndApplyBranch(taskId);
+    this._logCompletion();
+    return true;
+  }
+
+  completeTaskFromMemory(task, memoryRecord, context = {}) {
+    if (!task) return false;
+    return this.completeTask(task.id, null, { fromMemory: true, memoryRecord, context });
+  }
+
+  resolveTaskMemory(task, context = {}) {
+    const lookup = this.executionMemory?.lookup?.(task, context) || {
+      status: ExecutionMemoryStatus.NOT_EXECUTED,
+      record: null
+    };
+    const status = lookup.status;
+    if (
+      status === ExecutionMemoryStatus.SUCCEEDED ||
+      status === ExecutionMemoryStatus.SKIPPED ||
+      status === ExecutionMemoryStatus.RECOVERED
+    ) {
+      this.completeTaskFromMemory(task, lookup.record, context);
+      return { action: 'HIT', record: lookup.record };
+    }
+    if (status === ExecutionMemoryStatus.RUNNING) {
+      console.log('[EXECUTION_MEMORY_WAIT]', { taskId: task.id, tool: task.tool, status });
+      return { action: 'WAIT', record: lookup.record };
+    }
+    if (status === ExecutionMemoryStatus.FAILED || status === ExecutionMemoryStatus.BLOCKED) {
+      console.log('[EXECUTION_MEMORY_REUSE_FAILURE]', { taskId: task.id, tool: task.tool, status });
+      this.executionMemory?.markRetryAvoided?.();
+      return { action: 'REUSE_FAILURE', record: lookup.record };
+    }
+    return { action: 'MISS', record: null };
+  }
+
+  resolveWaitingTasks(tasks, context = {}) {
+    const resolved = [];
+    for (const task of tasks) {
+      const lookup = this.executionMemory?.lookup?.(task, context) || {
+        status: ExecutionMemoryStatus.NOT_EXECUTED,
+        record: null
+      };
+      if (
+        lookup.status === ExecutionMemoryStatus.SUCCEEDED ||
+        lookup.status === ExecutionMemoryStatus.SKIPPED ||
+        lookup.status === ExecutionMemoryStatus.RECOVERED
+      ) {
+        this.completeTaskFromMemory(task, lookup.record, context);
+        resolved.push(task);
+      }
+    }
+    return resolved;
+  }
+
+  prepareTaskDispatch(task, context = {}) {
+    const resolution = this.resolveTaskMemory(task, context);
+    if (resolution.action === 'MISS') {
+      return { dispatch: true, action: 'MISS' };
+    }
+    return { dispatch: false, ...resolution };
+  }
+
+  markTaskRunning(task, context = {}) {
+    return this.executionMemory?.markRunning(task, context);
+  }
+
+  getMemorySummary() {
+    return this.executionMemory?.getStats?.() || {
+      memoryHits: 0,
+      skippedDuplicateExecutions: 0,
+      reasoningReused: 0,
+      retriesAvoided: 0
+    };
+  }
+
   markSuccess(taskId, result) {
     const task = this.taskMap.get(taskId);
     if (!task) return false;
     task.status = TaskStatus.SUCCESS;
     task.result = result;
     task.touch();
+    this.executionMemory?.markSucceeded(task, {
+      tool: result?.tool || task.tool,
+      args: result?.args || task.toolArgs || {},
+      result: result?.result || result
+    });
     console.log('[PLANNER_SUCCESS]', { id: taskId, kind: task.kind });
     unlockChildren(this.graph, taskId);
     this._updateReadyStates();
@@ -218,6 +387,12 @@ export class Planner {
     task.reason = reason;
     task.retryCount += 1;
     task.touch();
+    this.executionMemory?.markFailed(task, {
+      tool: task.tool,
+      args: task.toolArgs || {},
+      failureReason: reason,
+      attemptCount: task.retryCount
+    });
     console.log('[PLANNER_FAILURE]', { id: taskId, kind: task.kind, reason, retryCount: task.retryCount });
     blockChildren(this.graph, taskId, reason);
     this._updateReadyStates();
@@ -231,6 +406,11 @@ export class Planner {
     task.status = TaskStatus.BLOCKED;
     task.reason = reason;
     task.touch();
+    this.executionMemory?.markBlocked(task, {
+      tool: task.tool,
+      args: task.toolArgs || {},
+      failureReason: reason
+    });
     console.log('[PLANNER_BLOCKED]', { id: taskId, kind: task.kind, reason });
     blockChildren(this.graph, taskId, reason);
     this._updateReadyStates();
@@ -243,6 +423,14 @@ export class Planner {
     if (!task) return false;
     task.status = TaskStatus.RECOVERING;
     task.touch();
+    const existing = this.executionMemory?.lookup?.(task);
+    if (!existing || existing.status !== ExecutionMemoryStatus.FAILED) {
+      this.executionMemory?.record(task, ExecutionMemoryStatus.RUNNING, {
+        tool: task.tool,
+        args: task.toolArgs || {},
+        reasoning: 'recovery in progress'
+      });
+    }
     console.log('[PLANNER_RECOVERING]', { id: taskId, kind: task.kind });
     return true;
   }
@@ -252,6 +440,11 @@ export class Planner {
     if (!task) return false;
     task.status = TaskStatus.RECOVERED;
     task.touch();
+    this.executionMemory?.markRecovered(task, {
+      tool: task.tool,
+      args: task.toolArgs || {},
+      result: task.result
+    });
     console.log('[PLANNER_RECOVERED]', { id: taskId, kind: task.kind });
     // Unblock children so the original flow can continue after recovery
     unlockChildren(this.graph, taskId);
@@ -266,6 +459,12 @@ export class Planner {
     task.status = TaskStatus.RECOVERY_FAILED;
     task.reason = reason;
     task.touch();
+    this.executionMemory?.markFailed(task, {
+      tool: task.tool,
+      args: task.toolArgs || {},
+      failureReason: reason,
+      attemptCount: task.retryCount
+    });
     console.log('[PLANNER_RECOVERY_FAILED]', { id: taskId, kind: task.kind, reason });
     // Block children — recovery failure is terminal
     blockChildren(this.graph, taskId, reason);
@@ -333,11 +532,17 @@ export class Planner {
     const hasRecoveryFailed = all.some(t => t.status === TaskStatus.RECOVERY_FAILED);
     if (hasFailed || hasBlocked || hasRecoveryFailed) return false;
 
-    return all.every(t =>
+    const complete = all.every(t =>
       t.status === TaskStatus.SUCCESS ||
       t.status === TaskStatus.SKIPPED ||
       t.status === TaskStatus.RECOVERED
     );
+
+    if (complete && this._state !== PlannerState.COMPLETED) {
+      this.setState(PlannerState.COMPLETED);
+    }
+
+    return complete;
   }
 
   remainingTasks() {
@@ -382,6 +587,69 @@ export class Planner {
     const ready = this.graph.allNodes().filter(n => n.status === TaskStatus.READY && !n.tool);
     if (ready.length === 0) return null;
     return pickNextPlannerTask(ready);
+  }
+
+  // Check if there are any REASONING tasks (tasks requiring LLM generation)
+  hasReasoningTasks() {
+    return this.graph.allNodes().some(n =>
+      (n.kind === TaskKind.REASONING || n.kind === TaskKind.GENERATE_CONTENT) &&
+      (n.status === TaskStatus.PENDING || n.status === TaskStatus.READY)
+    );
+  }
+
+  // Get the highest-priority REASONING task
+  getNextReasoningTask() {
+    const reasoning = this.graph.allNodes().filter(n =>
+      (n.kind === TaskKind.REASONING || n.kind === TaskKind.GENERATE_CONTENT) &&
+      (n.status === TaskStatus.PENDING || n.status === TaskStatus.READY)
+    );
+    if (reasoning.length === 0) return null;
+    return pickNextPlannerTask(reasoning);
+  }
+
+  // Replace a completed REASONING task with concrete execution tasks
+  replaceReasoningTask(taskId, executionTasks) {
+    const task = this.taskMap.get(taskId);
+    if (!task) return false;
+
+    console.log('[PLANNER_REASONING_REPLACE]', {
+      taskId,
+      kind: task.kind,
+      goal: (task.goal || '').substring(0, 60),
+      replacementCount: executionTasks.length
+    });
+
+    task.status = TaskStatus.SUCCESS;
+    task.result = { replaced: true, executionTasks: executionTasks.map(t => ({ id: t.id, tool: t.tool, goal: t.goal })) };
+    task.touch();
+
+    const addedIds = [];
+    let prevId = taskId;
+    for (const execTask of executionTasks) {
+      const deps = Array.isArray(execTask.dependencies) ? [...execTask.dependencies] : [];
+      if (addedIds.length === 0 && !deps.includes(taskId)) {
+        deps.push(taskId);
+      }
+      if (addedIds.length > 0) {
+        deps.push(addedIds[addedIds.length - 1]);
+      }
+      execTask.dependencies = deps;
+      this.addTask(execTask);
+      addedIds.push(execTask.id);
+
+      console.log('[PLANNER_REASONING_EXECUTION_TASK]', {
+        taskId: execTask.id,
+        tool: execTask.tool,
+        goal: (execTask.goal || '').substring(0, 60),
+        dependsOn: deps
+      });
+    }
+
+    unlockChildren(this.graph, taskId);
+    this._updateReadyStates();
+    this._logCompletion();
+
+    return addedIds;
   }
 
   // Phase 4.9: Cost Estimation API
@@ -592,6 +860,11 @@ export class Planner {
     task.branchType = BranchType.SKIPPED;
     task.branchReason = `Task ${taskId} skipped because sibling branch was selected`;
     task.touch();
+    this.executionMemory?.markSkipped(task, {
+      tool: task.tool,
+      args: task.toolArgs || {},
+      reason: task.reason
+    });
 
     for (const childId of task.children) {
       this._skipRecursive(childId);

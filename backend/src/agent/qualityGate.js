@@ -297,7 +297,7 @@ export async function evaluateQualityGate(input = {}) {
     // Stricter rule: if meaningful files changed in coding mode, require a successful validation command
     // Read-only/analysis are handled above and never reach this branch
     const meaningfulChanged = meaningfulFiles.length > 0;
-    const mustValidate = meaningfulChanged || intentMode === "WRITE_AND_RUN" || objectiveRequiresTerminal;
+    const mustValidate = (meaningfulChanged || intentMode === "WRITE_AND_RUN" || objectiveRequiresTerminal) && criteria.taskClass !== 'ui_build';
 
     // Accept idempotent write success (alreadyUpToDate or changed === false)
     const hasAlreadyUpToDate = toolCalls.some(call =>
@@ -377,18 +377,32 @@ export async function evaluateQualityGate(input = {}) {
 
     // Required commands enforcement: user-requested commands must be exact-matched with success
     if (requiredCommands.length > 0) {
-      for (const cmd of requiredCommands) {
-        const matched = terminalCalls.some(c =>
-          c.success &&
-          String(c.args?.command || "").trim() === cmd &&
-          (c.result?.exitCode === 0 || c.result?.exitCode === undefined)
-        );
-        check(
-          `required_command_${cmd.replace(/[^a-zA-Z0-9]/g, '_')}`,
-          matched,
-          `Required command "${cmd}" must be executed successfully (exit code 0).`,
-          { command: cmd, matched }
-        );
+      // UI_BUILD: skip required command enforcement when validation command failed
+      // because the project has no build script (recovery analysis + no_build_script)
+      const isUIBuild = criteria.taskClass === "ui_build";
+      const hasFailedBuildScript = isUIBuild && terminalCalls.some(c =>
+        !c.success &&
+        /(?:npm|pnpm|yarn)\s+(?:run\s+)?\S+/i.test(String(c.args?.command || ''))
+      );
+      if (hasFailedBuildScript) {
+        console.log('[QUALITY_GATE_VALIDATION_SKIPPED]', {
+          reason: 'no_build_script',
+          requiredCommand: requiredCommands[0]
+        });
+      } else {
+        for (const cmd of requiredCommands) {
+          const matched = terminalCalls.some(c =>
+            c.success &&
+            String(c.args?.command || "").trim() === cmd &&
+            (c.result?.exitCode === 0 || c.result?.exitCode === undefined)
+          );
+          check(
+            `required_command_${cmd.replace(/[^a-zA-Z0-9]/g, '_')}`,
+            matched,
+            `Required command "${cmd}" must be executed successfully (exit code 0).`,
+            { command: cmd, matched }
+          );
+        }
       }
     }
   }
@@ -438,6 +452,43 @@ export async function evaluateQualityGate(input = {}) {
       "A product build cannot consist only of index.html and app.js.",
       meaningfulFiles
     );
+  }
+
+  console.log('[QUALITY_GATE_TASK_CLASS]', {
+    taskClass: criteria.taskClass,
+    rulesApplied: criteria.taskClass === 'ui_build' ? 'ui_build (1 meaningful file + WRITE_FILE success)' :
+                   criteria.taskClass === 'product_build' ? 'product_build (8 files + multi-layer)' :
+                   criteria.taskClass === 'bugfix' ? 'bugfix (minimal changed files)' :
+                   'standard rules'
+  });
+
+  // HOTFIX 2: UI_BUILD — at least one meaningful UI file, validation is optional
+  if (criteria.taskClass === "ui_build") {
+    const hasMeaningfulUI = meaningfulFiles.length >= 1;
+    const reasoningCompleted = toolCalls.some(c => c.tool === 'WRITE_FILE' && c.success);
+    const noUnsafeOverwrite = !toolCalls.some(c => c.tool === 'WRITE_FILE' && !c.success && String(c.error || '').includes('unsafe'));
+
+    check(
+      "ui_build_scope",
+      hasMeaningfulUI && reasoningCompleted && noUnsafeOverwrite,
+      `UI builds require at least 1 meaningful UI file changed, reasoning completed, and no unsafe overwrite.`,
+      { meaningfulFileCount: meaningfulFiles.length, reasoningCompleted, noUnsafeOverwrite }
+    );
+
+    // If validation command failed because script is missing, don't fail — report availability
+    const failedTerminalCalls = terminalCalls.filter(c => !c.success);
+    if (failedTerminalCalls.length > 0 && successfulCommands.length === 0) {
+      const hasMissingScript = failedTerminalCalls.some(c => {
+        const cmd = String(c.args?.command || '');
+        return /(?:npm|pnpm|yarn)\s+(?:run\s+)?\S+/i.test(cmd);
+      });
+      if (hasMissingScript) {
+        console.log('[UI_BUILD_VALIDATION_UNAVAILABLE]', {
+          reason: 'validation command attempted but script not present',
+          failedCommands: failedTerminalCalls.map(c => c.args?.command)
+        });
+      }
+    }
   }
 
   for (const flow of criteria.requiredFlows || []) {

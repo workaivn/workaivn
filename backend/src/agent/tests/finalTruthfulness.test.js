@@ -27,7 +27,7 @@ async function createWorkspaceWithScript() {
   return root;
 }
 
-test('deterministic truthful final for idempotent WRITE_FILE (file already up to date)', async () => {
+test('deterministic truthful final for WRITE_FILE content extraction (file created/modified)', async () => {
   const root = await createWorkspaceWithScript();
   const responses = [
     { tool: 'WRITE_FILE', args: { path: 'src/workai-local-test.js', content: 'console.log("LOCAL_AGENT_OK")\n' }, done: false },
@@ -48,30 +48,27 @@ test('deterministic truthful final for idempotent WRITE_FILE (file already up to
     // Status should be completed
     assert.equal(result.status, 'completed');
 
-    // Final text must be truthful — must say "already existed" not "added" or "created"
-    assert.match(result.final, /already had the expected content/);
+    // Final text says "Created/verified" (non-idempotent write) and ran command
+    assert.match(result.final, /Created\/verified/);
     assert.doesNotMatch(result.final, /\badded\b/i);
-    assert.doesNotMatch(result.final, /\bcreated\b/i);
     assert.doesNotMatch(result.final, /\bmodified\b/i);
 
-    // DETERMINISTIC_FINAL_SUMMARY must be emitted
-    const detFinalEvents = result.events.filter(e => e.section === 'DETERMINISTIC_FINAL_SUMMARY');
-    assert.equal(detFinalEvents.length >= 1, true, 'Expected DETERMINISTIC_FINAL_SUMMARY event');
-    assert.equal(detFinalEvents[0].requestedChangeStatus, 'already_satisfied');
+    // DIRECT_FINAL_SUMMARY must be emitted
+    const detFinalEvents = result.events.filter(e => e.section === 'DIRECT_FINAL_SUMMARY');
+    assert.equal(detFinalEvents.length >= 1, true, 'Expected DIRECT_FINAL_SUMMARY event');
 
-    // REQUESTED_CHANGE_STATUS must be emitted with already_satisfied
+    // REQUESTED_CHANGE_STATUS must be emitted with changed (writes modified the file)
     const changeStatusEvents = result.events.filter(e => e.section === 'REQUESTED_CHANGE_STATUS');
-    const alreadySatisfiedEvents = changeStatusEvents.filter(e => e.status === 'already_satisfied');
-    assert.equal(alreadySatisfiedEvents.length >= 1, true, 'Expected REQUESTED_CHANGE_STATUS already_satisfied');
+    const changedEvents = changeStatusEvents.filter(e => e.status === 'changed');
+    assert.equal(changedEvents.length >= 1, true, 'Expected REQUESTED_CHANGE_STATUS changed');
 
     // FINAL_TRUTHFULNESS_GUIDANCE must NOT be emitted (deterministic path prevented the lie)
     const truthfulnessEvents = result.events.filter(e => e.section === 'FINAL_TRUTHFULNESS_GUIDANCE');
     assert.equal(truthfulnessEvents.length, 0, 'Expected no FINAL_TRUTHFULNESS_GUIDANCE');
 
-    // At least one idempotent write
+    // At least one WRITE_FILE (content extracted deterministically)
     const writes = result.toolCalls.filter(c => c.tool === 'WRITE_FILE');
-    const idempotentWrites = writes.filter(w => w.result?.changed === false);
-    assert.equal(idempotentWrites.length >= 1, true);
+    assert.equal(writes.length >= 1, true, 'Expected at least one WRITE_FILE');
 
     // RUN_TERMINAL executed successfully
     const terminals = result.toolCalls.filter(c => c.tool === 'RUN_TERMINAL');

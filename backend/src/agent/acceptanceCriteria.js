@@ -28,13 +28,25 @@ const TASK_TYPE_PATTERNS = {
   ]
 };
 
+const WRITE_INTENT_PATTERNS = [
+  /\b(?:create|build|implement|make|add|update|modify|edit|replace|write|fix|patch|change|rename|delete|remove|refactor|develop)\b/i,
+  /\blanding\s+page\b/i,
+  /\b(?:dashboard|login|crud|feature|api|component|page|screen|form)\b/i
+];
+
+const CLEAR_READ_ONLY_PATTERN =
+  /\bdo\s+not\s+(?:modify|change|edit|write)(?:\s+(?:any\s+)?(?:files?|code))?\b|\bdo\s+not\s+modify\s+files?\b|\bkhÃ´ng\s+(?:sá»­a|thay\s*Ä‘á»•i|viáº¿t)\b/i;
+
 export function classifyTaskType(prompt) {
   const text = String(prompt || "").trim();
   if (!text) return "CHAT";
 
-  // CODING override: if prompt contains any coding/change intent, it must be CODING
-  // CODING intent wins UNLESS the prompt explicitly says do not modify files.
-  const explicitlyReadOnly = /\b(?:do\s+not\s+(?:modify|change|edit|write|create|run)|không\s+(?:sửa|thay\s+đổi|chạy))\b/i.test(text);
+  // CODING override: if prompt contains any coding/change intent, it must be CODING.
+  // "Do not create a new project" is a scope constraint, not a read-only request.
+  const explicitlyReadOnly = CLEAR_READ_ONLY_PATTERN.test(text);
+  const writeIntentText = text.replace(CLEAR_READ_ONLY_PATTERN, " ");
+
+  if (WRITE_INTENT_PATTERNS.some(pattern => pattern.test(writeIntentText))) return "CODING";
 
   const codingActions = [
     /\b(?:add|create|write|implement|thêm|tạo)\b/i,
@@ -49,7 +61,7 @@ export function classifyTaskType(prompt) {
     /\b(?:after\s+(?:modifying|editing|changing))\b/i
   ];
   for (const pattern of codingActions) {
-    if (pattern.test(text) && !explicitlyReadOnly) return "CODING";
+    if (pattern.test(writeIntentText) && !explicitlyReadOnly) return "CODING";
   }
 
   if (explicitlyReadOnly) {
@@ -82,15 +94,103 @@ export function classifyTaskType(prompt) {
   return "CODING";
 }
 
+function findMatchedKeywords(objective, taskClass) {
+  const text = String(objective || '');
+  const keywordMap = {
+    UI_BUILD: ['landing page', 'homepage', 'hero', 'ui', 'dashboard', 'admin page', 'component', 'react page', 'vue page', 'flutter page', 'tailwind', 'css', 'layout', 'responsive', 'theme', 'navigation', 'card', 'button', 'banner', 'marketing page'],
+    BUGFIX: ['fix', 'bug', 'patch', 'error', 'crash', 'broken', 'not working', 'failed'],
+    REFACTOR: ['refactor', 'restructure', 'clean up', 'reorganize', 'rewrite'],
+    CONFIG_CHANGE: ['config', 'setup', 'install', 'environment', 'env variable'],
+    LIBRARY_CHANGE: ['add library', 'add package', 'add dependency', 'install library', 'install package'],
+    PRODUCT_BUILD: ['complete product', 'complete application', 'full application', 'new SaaS', 'new CMS', 'new ERP', 'new CRM', 'large system', 'multi-module'],
+    BACKEND_FEATURE: ['api', 'endpoint', 'server', 'backend', 'database', 'schema', 'route', 'controller', 'middleware'],
+    FULLSTACK_FEATURE: ['frontend + backend', 'full stack']
+  };
+  const keywords = keywordMap[taskClass] || [];
+  const matched = keywords.filter(kw => text.toLowerCase().includes(kw.toLowerCase()));
+  return matched;
+}
+
+function classifyTaskClass(objective, taskType) {
+  if (taskType !== 'CODING') return taskType;
+  const text = String(objective || '');
+
+  // BUGFIX — fix/patch/bug keywords (highest priority)
+  if (/\b(?:fix|bug|patch|error|crash|broken|not\s+working|failed)\b/i.test(text)) return 'BUGFIX';
+
+  // REFACTOR — restructure/rewrite keywords
+  if (/\b(?:refactor|restructure|clean\s+up|reorganize|rewrite)\b/i.test(text)) return 'REFACTOR';
+
+  // CONFIG_CHANGE — setup/install/configure keywords
+  if (/\b(?:config(?:ure)?|setup|install|environment|env\s+variable)\b/i.test(text)) return 'CONFIG_CHANGE';
+
+  // LIBRARY_CHANGE — add/remove/install library/package
+  if (/\b(?:add\s+(?:a\s+)?(?:library|package|dependency)|install\s+(?:a\s+)?(?:library|package|dependency)|remove\s+(?:a\s+)?(?:library|package|dependency))\b/i.test(text)) return 'LIBRARY_CHANGE';
+
+  // PRODUCT_BUILD — very restrictive: only for "complete product" type requests
+  const productPatterns = [
+    /\bcomplete\s+(?:product|application|system|platform|solution)\b/i,
+    /\bfull\s+(?:application|stack|system|platform)\b/i,
+    /\bnew\s+(?:SaaS|CMS|ERP|CRM|platform|startup|ecommerce|e-commerce)\b/i,
+    /\blarge\s+(?:system|project|application|platform)\b/i,
+    /\bmulti[-\s]module\s+(?:project|application|system)\b/i,
+    /\bcomplete\s+(?:frontend|front-end)\s*\+\s*(?:backend|back-end)\b/i,
+    /\becommerce|e-commerce\b/i,
+    /\bwebsite\s+bán\s+hàng\b/i,
+  ];
+  if (productPatterns.some(p => p.test(text))) return 'PRODUCT_BUILD';
+  // Also treat requests with multiple commerce features (cart + payment/qr/sepay) as PRODUCT_BUILD
+  const commerceFeatureCount = [
+    /\b(?:giỏ\s*hàng|cart)\b/i,
+    /\b(?:thanh\s*toán|payment|checkout)\b/i,
+    /\bqr\s*(?:code)?\b/i,
+    /\bsepay\b/i
+  ].filter(p => p.test(text)).length;
+  if (commerceFeatureCount >= 2 && /\b(?:website|web|shop|store|bán\s+hàng|ecommerce|e-commerce)\b/i.test(text)) return 'PRODUCT_BUILD';
+
+  // FULLSTACK_FEATURE — both backend and frontend keywords present
+  const hasBackend = /\b(?:api|endpoint|server\s+side|backend|database|schema|route|controller|service|middleware|repository)\b/i.test(text);
+  const hasFrontend = /\b(?:ui|frontend|component|page|layout|landing\s+page|homepage|hero|theme|css|tailwind|responsive|navigation)\b/i.test(text);
+  if (hasBackend && hasFrontend) return 'FULLSTACK_FEATURE';
+
+  // BACKEND_FEATURE — API/server keywords without frontend keywords
+  if (hasBackend) return 'BACKEND_FEATURE';
+
+  // UI_BUILD — explicit UI/page/component keywords
+  const uiPatterns = [
+    /\blanding\s+page\b/, /\bhomepage\b/, /\bhero\b/,
+    /\b(?:^|\s)UI\b/, /\bdashboard\b/, /\badmin\s+page\b/,
+    /\.(?:jsx|tsx|css|scss)\b/,
+    /\bReact\s+page\b/, /\bVue\s+page\b/,
+    /\bFlutter\s+page\b/, /\bTailwind\b/,
+    /\bresponsive\b/, /\btheme\b/,
+    /\bnavigation\b/,
+    /\bmarketing\s+page\b/,
+  ];
+  if (uiPatterns.some(p => p.test(text))) return 'UI_BUILD';
+
+  // Default: passthrough taskType for non-specific CODING tasks
+  return taskType;
+}
+
 export function buildAcceptanceCriteria(prompt = "") {
   const objective = String(prompt || "").trim();
   const taskType = classifyTaskType(objective);
+  const taskClass = classifyTaskClass(objective, taskType);
+  const matchedKeywords = findMatchedKeywords(objective, taskClass);
+  console.log('[TASK_CLASSIFIER]', {
+    prompt: objective.substring(0, 120),
+    taskClass,
+    taskType,
+    confidence: taskClass !== taskType ? 'high' : 'low',
+    matchedKeywords
+  });
+
   const requestedFeatures = Object.entries(FEATURE_PATTERNS)
     .filter(([, pattern]) => pattern.test(objective))
     .map(([feature]) => feature);
-  const isProductBuild = taskType === "CODING" && requestedFeatures.some(feature =>
-    ["website", "app", "cart", "payment", "qr", "sepay"].includes(feature)
-  );
+  const isProductBuild = taskClass === 'PRODUCT_BUILD';
+  const isUIBuild = taskClass === 'UI_BUILD';
 
   const requiresWorkspaceChange = taskType === "CODING";
   const requiresValidationCommand = taskType === "CODING";
@@ -120,7 +220,7 @@ export function buildAcceptanceCriteria(prompt = "") {
     /\bonly\s+the\s+number\b/i,
     /\bjust\s+(?:say|answer|reply)\b/i
   ];
-  const saysDoNotModify = /\bdo\s+not\s+(?:modify|change|edit|write|create)\b|\bkhông\s+(?:sửa|thay\s*đổi|viết|tạo)\b/i.test(objective);
+  const saysDoNotModify = CLEAR_READ_ONLY_PATTERN.test(objective);
   let taskMode;
   if (taskType === "CODING") {
     taskMode = "coding";
@@ -136,7 +236,7 @@ export function buildAcceptanceCriteria(prompt = "") {
   return {
     objective,
     taskType,
-    taskClass: taskType === "CODING" && isProductBuild ? "product_build" : taskType,
+    taskClass: taskClass.toLowerCase(),
     taskMode,
     requestedFiles,
     requestedFeatures,
@@ -145,7 +245,7 @@ export function buildAcceptanceCriteria(prompt = "") {
     requiresFileRead,
     requiresSearchResult,
     requiresExistingStackInspection: isProductBuild,
-    requiresPackageJsonInspection: isProductBuild,
+    requiresPackageJsonInspection: isProductBuild || isUIBuild,
     minimumMeaningfulFiles: isProductBuild ? 8 : 1,
     allowsExistingStackIntegrationAlternative: isProductBuild,
     forbiddenPlaceholders: [

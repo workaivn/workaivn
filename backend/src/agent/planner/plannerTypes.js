@@ -8,6 +8,15 @@ export const BranchType = Object.freeze({
   SKIPPED: 'SKIPPED'
 });
 
+export const TaskKind = Object.freeze({
+  CODING: 'CODING',
+  ANALYSIS: 'ANALYSIS',
+  SEARCH: 'SEARCH',
+  REASONING: 'REASONING',
+  GENERATE_CONTENT: 'GENERATE_CONTENT',
+  RECOVERY: 'RECOVERY'
+});
+
 export const TaskStatus = Object.freeze({
   PENDING: 'PENDING',
   READY: 'READY',

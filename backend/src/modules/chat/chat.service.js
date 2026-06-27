@@ -753,7 +753,9 @@ export async function streamChat({
 
 		        plan,
 
-		        workspaceRoot
+		        workspaceRoot,
+
+		        enableToolOptimizer: true
 
 		      });
 

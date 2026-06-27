@@ -163,12 +163,39 @@ function handleStall(planner, toolName) {
 
 function markTaskAttempt(task) {
   const now = Date.now();
-  if (!task.startedAt) {
+  const isFirst = !task.startedAt;
+  if (isFirst) {
     task.startedAt = now;
     task.timeoutMs = getTaskTimeoutMs(task);
     task.maxAttempts = getMaxAttempts(task);
+    console.log('[PLANNER_TASK_STARTED]', {
+      taskId: task.id,
+      tool: task.tool || 'CODING',
+      timeoutMs: task.timeoutMs,
+      maxAttempts: task.maxAttempts,
+      goal: (task.goal || '').substring(0, 80)
+    });
   }
   markTaskProgress(task, null);
+  // Reset stall counter on genuine progress
+  task.stallCount = 0;
+  console.log('[PLANNER_TASK_PROGRESS]', {
+    taskId: task.id,
+    tool: task.tool || 'CODING',
+    attempts: task.attempts,
+    elapsed: `${Date.now() - task.startedAt}ms`
+  });
+}
+
+function parseScriptName(command) {
+  if (!command) return null;
+  // Extract script name from "npm run build", "npm run local:ok", "pnpm run build", etc.
+  const match = String(command).match(/(?:npm|pnpm|yarn)\s+run\s+([^\s]+)/i);
+  if (match) return match[1];
+  // Direct npm command like "npm test"
+  const directMatch = String(command).match(/npm\s+(test|start|stop|restart)\b/i);
+  if (directMatch) return directMatch[1];
+  return null;
 }
 
 export function notifyToolExecution(planner, toolName, args, result) {
@@ -188,10 +215,50 @@ export function notifyToolExecution(planner, toolName, args, result) {
   const success = result?.success !== false;
   const isRecovery = task.kind === 'RECOVERY';
 
+  // Phase 4.15 fix — Regression 4: When recovery reads package.json, check if the
+  // failed command script exists. If not, abort recovery with intelligent reason.
+  if (success && isRecovery && toolName === 'READ_FILE' && String(args.path || '').replace(/\\/g, '/').toLowerCase().endsWith('package.json')) {
+    const pkgContent = result?.content;
+    if (pkgContent) {
+      try {
+        const pkg = JSON.parse(pkgContent);
+        const scripts = pkg.scripts || {};
+        const parentId = findRecoveryParent(planner, task.id);
+        if (parentId) {
+          const failedTask = planner.graph.getNode(parentId);
+          const failedCommand = failedTask?.toolArgs?.command || '';
+          const scriptName = parseScriptName(failedCommand);
+          if (scriptName && !scripts[scriptName]) {
+            console.log('[PLANNER_RECOVERY_CONTEXT]', {
+              reason: `Script "${scriptName}" not found in package.json`,
+              availableScripts: Object.keys(scripts),
+              failedCommand
+            });
+            planner.markRecoveryFailed(parentId, `No "${scriptName}" script found in package.json. Available scripts: ${Object.keys(scripts).join(', ') || 'none'}. Aborting recovery.`);
+            console.log('[PLANNER_RECOVERY_ABORT]', {
+              taskId: parentId,
+              reason: `Script "${scriptName}" not found in package.json`,
+              command: failedCommand
+            });
+            return { handled: true, taskId: task.id, status: 'SUCCESS', recoveryAborted: true };
+          }
+        }
+      } catch {
+        // Invalid JSON — proceed with recovery anyway
+      }
+    }
+  }
+
   if (success) {
     planner.markSuccess(task.id, { tool: toolName, args, result });
     const kind = isRecovery ? 'RECOVERY' : task.kind;
     console.log('[PLANNER_TASK_SUCCESS]', { id: task.id, kind, tool: toolName });
+    // Phase 4.12: Record successful tool execution in planner history
+    if (planner.executionHistory) {
+      planner.executionHistory.recordTool(toolName, args, result, task);
+      planner.executionHistory.recordTask(task.id);
+      console.log('[PLANNER_HISTORY_RECORD]', { tool: toolName, taskId: task.id });
+    }
   } else {
     const error = (result?.error || `Tool ${toolName} failed`).slice(0, 200);
     planner.markFailure(task.id, error);
@@ -211,6 +278,15 @@ export function notifyToolExecution(planner, toolName, args, result) {
     // Phase 4.7: Recovery triggered by FAILURE branch, not hardcoded
     const branchType = planner.branchType(task.id);
     if (branchType === 'FAILURE') {
+      const memoryState = planner.executionMemory?.lookup?.(task);
+      if (memoryState && memoryState.status !== 'NOT_EXECUTED') {
+        console.log('[PLANNER_RECOVERY_MEMORY]', {
+          taskId: task.id,
+          status: memoryState.status,
+          attempts: memoryState.record?.attemptCount || task.retryCount || 0,
+          failureReason: memoryState.record?.failureReason || error
+        });
+      }
       const recoveryResult = tryRecovery(planner, task);
       if (recoveryResult.recoveryStarted) {
         return { handled: true, taskId: task.id, status: 'FAILED', recoveryStarted: true, recoveryTaskIds: recoveryResult.recoveryTaskIds };
