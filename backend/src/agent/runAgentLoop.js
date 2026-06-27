@@ -998,6 +998,16 @@ export async function runAgentLoop({
     }
     return true;
   }
+  function getTerminalCommandExecutions() {
+    return toolCalls
+      .filter(call => call.tool === "RUN_TERMINAL")
+      .map(call => ({
+        command: String(call.args?.command || call.result?.command || "").trim(),
+        success: call.success === true,
+        exitCode: call.result?.exitCode
+      }))
+      .filter(call => call.command);
+  }
   function computeRequestedChangeStatus() {
     // Actual file changes detected via git or write with changed=true
     if (changedFiles.size > 0) {
@@ -1065,30 +1075,39 @@ export async function runAgentLoop({
   function preClassifyToolPolicy(objectiveText) {
     const text = String(objectiveText || "");
     const lower = text.toLowerCase();
-    const doNotModify = /\bdo\s+not\s+(?:modify|change|edit|write)(?:\s+(?:any\s+)?(?:files?|code))?\b|\bdo\s+not\s+modify\s+files?\b|\bkhông\s+(?:sửa|thay\s*đổi|viết)\b/i.test(text);
+    const doNotModify = /\bdo\s+not\s+(?:modify|change|edit|write)(?:\s+(?:any\s+)?(?:files?|code|source))?\b|\bdo\s+not\s+modify\s+files?\b|\bkhông\s+(?:sửa|thay\s*đổi|viết)\b/i.test(text);
     const doNotRun = /(do\s+not\s+run(\s+(terminal|npm))?)|\bkhông\s+chạy\b/i.test(text);
-    const writeIntentText = text.replace(/\bdo\s+not\s+(?:modify|change|edit|write)(?:\s+(?:any\s+)?(?:files?|code))?\b|\bdo\s+not\s+modify\s+files?\b|\bkhông\s+(?:sửa|thay\s*đổi|viết)\b/ig, " ");
+    const writeIntentText = text.replace(/\bdo\s+not\s+(?:modify|change|edit|write)(?:\s+(?:any\s+)?(?:files?|code|source))?\b|\bdo\s+not\s+modify\s+files?\b|\bkhông\s+(?:sửa|thay\s*đổi|viết)\b/ig, " ");
     const writeIntent = /\b(?:create|build|implement|make|add|update|modify|edit|replace|write|fix|patch|change|rename|delete|remove|refactor|develop)\b|\blanding\s+page\b|\b(?:dashboard|login|crud|feature|api|component|page|screen|form)\b/i.test(writeIntentText);
+    
+    // Extract commands FIRST to use in mode decision
+    const requiredCommands = extractCommands(text);
+    const hasCommands = requiredCommands.length > 0;
+    
     const hasRunLabel = /(?:^|\n)\s*(?:Then\s+)?(?:Run|Execute):\s*[^\n]*/i.test(text);
-    const hasRunCommand = /(npm\s+(run\s+)?[a-z0-9:_\-]+|node\s+[^\s]+\.(?:m?js)|yarn\s+[a-z0-9:_\-]+)/i.test(text);
-    const runRequested = hasRunLabel || hasRunCommand;
+    const hasRunCommand = /(npm\s+(run\s+)?[a-z0-9:_\-]+|npm\s+test|node\s+[^\n.]+\.(?:m?js)|yarn\s+[a-z0-9:_\-]+|pnpm\s+[a-z0-9:_\-]+|bun\s+[a-z0-9:_\-]+|npx\s+[a-z0-9:_\-@]+|pytest\b|go\s+test|cargo\s+(?:test|check))/i.test(text);
+    const runRequested = hasRunLabel || hasRunCommand || hasCommands;
+    
     let mode = "UNKNOWN";
-    if (doNotModify && !runRequested) {
+    if (doNotModify && !runRequested && !hasCommands) {
       mode = "READ_ONLY";
+    } else if ((doNotModify || /(only\s+execute|do not modify)/i.test(text)) && (runRequested || hasCommands) && !writeIntent) {
+      // "Do not modify source code" or "only execute" + terminal command = COMMAND_ONLY
+      mode = "COMMAND_ONLY";
     } else if (writeIntent && runRequested) {
       mode = "WRITE_AND_RUN";
     } else if (writeIntent) {
       mode = "WRITE";
     } else if (/(read|show|list|tell|scripts|what\s+are|give\s+me)/i.test(text)) {
       mode = "READ_ONLY";
-    } else if (runRequested) {
+    } else if (runRequested || hasCommands) {
       mode = "WRITE_AND_RUN";
     } else {
       mode = "WRITE";
     }
     // Respect qa/read_only only when there is no write intent. Write/create/build wins.
     if (criteria?.taskMode === "qa" || criteria?.taskMode === "read_only") {
-      if (!writeIntent) {
+      if (!writeIntent && !hasCommands) {
         mode = "READ_ONLY";
       }
     }
@@ -1097,13 +1116,17 @@ export async function runAgentLoop({
     if (mode === "READ_ONLY") {
       ["READ_FILE", "LIST_FILES"].forEach(t => allow.add(t));
       ["WRITE_FILE", "APPLY_PATCH", "CREATE_FILE", "DELETE_FILE", "RUN_TERMINAL"].forEach(t => forbid.add(t));
+    } else if (mode === "COMMAND_ONLY") {
+      // COMMAND_ONLY: terminal allowed, writes forbidden
+      ["READ_FILE", "LIST_FILES", "RUN_TERMINAL"].forEach(t => allow.add(t));
+      ["WRITE_FILE", "APPLY_PATCH", "CREATE_FILE", "DELETE_FILE"].forEach(t => forbid.add(t));
     } else if (mode === "WRITE") {
       // Coding mode: allow terminal for validation even if not explicitly requested
       ["READ_FILE", "LIST_FILES", "WRITE_FILE", "APPLY_PATCH", "CREATE_FILE", "DELETE_FILE", "RUN_TERMINAL"].forEach(t => allow.add(t));
     } else if (mode === "WRITE_AND_RUN") {
       ["READ_FILE", "LIST_FILES", "WRITE_FILE", "APPLY_PATCH", "CREATE_FILE", "DELETE_FILE", "RUN_TERMINAL"].forEach(t => allow.add(t));
     }
-    if (doNotModify) {
+    if (doNotModify && mode !== "COMMAND_ONLY") {
       ["WRITE_FILE", "APPLY_PATCH", "CREATE_FILE", "DELETE_FILE"].forEach(t => { allow.delete(t); forbid.add(t); });
     }
     if (doNotRun) {
@@ -1118,7 +1141,6 @@ export async function runAgentLoop({
         forbid.add(t);
       });
     }
-    const requiredCommands = extractCommands(text);
     console.log("[REQUIRED_COMMANDS_EXTRACTED]", { source: "preClassifyToolPolicy", commands: requiredCommands });
     return { mode, allow, forbid, doNotModify, doNotRun, requiredCommands };
   }
@@ -1140,6 +1162,17 @@ export async function runAgentLoop({
         requiredCommands: originalRequiredCommands
       };
     }
+    if (toolPolicy.mode === "COMMAND_ONLY") {
+      return {
+        ...criteriaWithIntent,
+        taskMode: "command_only",
+        requiresWorkspaceChange: false,
+        requiresValidationCommand: false,
+        requiresFileRead: false,
+        requestedFiles: criteria.requestedFiles || [],
+        requiredCommands: originalRequiredCommands
+      };
+    }
     return {
       ...criteriaWithIntent,
       requestedFiles: criteria.requestedFiles || [],
@@ -1147,18 +1180,18 @@ export async function runAgentLoop({
     };
   })();
   const classifierDbg = createEvent("debug", { section: "CLASSIFIER_RESULT", result: {
-    taskMode: criteria.taskMode || criteria.taskType,
+    taskMode: criteriaEffective.taskMode || criteriaEffective.taskType,
     intentMode: toolPolicy.mode,
     forbiddenTools: [...toolPolicy.forbid],
-    requiredFiles: criteria.requestedFiles || [],
+    requiredFiles: criteriaEffective.requestedFiles || [],
     requiredCommands: originalRequiredCommands
   }});
   events.push(classifierDbg); history.push(classifierDbg);
   console.log("[CLASSIFIER_RESULT]", {
-    taskMode: criteria.taskMode || criteria.taskType,
+    taskMode: criteriaEffective.taskMode || criteriaEffective.taskType,
     intentMode: toolPolicy.mode,
     forbiddenTools: [...toolPolicy.forbid],
-    requiredFiles: criteria.requestedFiles || [],
+    requiredFiles: criteriaEffective.requestedFiles || [],
     requiredCommands: originalRequiredCommands
   });
   let planner = null;
@@ -1452,9 +1485,10 @@ RULES:
     content: acceptanceCriteriaToPrompt(criteria)
   });
 
-  const isReadOnly = toolPolicy.mode === "READ_ONLY" || isReadOnlyTask(objective, criteria);
-  const taskType = (criteria.taskType || "CODING").toUpperCase();
-  const isNonCodingTask = READ_ONLY_TASK_TYPES.has(taskType);
+  const isCommandOnly = toolPolicy.mode === "COMMAND_ONLY" || criteriaEffective.intentMode === "COMMAND_ONLY" || criteriaEffective.taskMode === "command_only";
+  const isReadOnly = !isCommandOnly && (toolPolicy.mode === "READ_ONLY" || isReadOnlyTask(objective, criteriaEffective));
+  const taskType = (criteriaEffective.taskType || "CODING").toUpperCase();
+  const isNonCodingTask = !isCommandOnly && READ_ONLY_TASK_TYPES.has(taskType);
   if (isReadOnly || isNonCodingTask) {
     console.log("[AgentLoop] %s task detected", isNonCodingTask ? taskType.toUpperCase() : "read-only");
     const hasFilesToRead = criteria?.requestedFiles && criteria.requestedFiles.length > 0;
@@ -1466,6 +1500,21 @@ RULES:
     } else {
       instruction = `READ-ONLY MODE: You may use READ_FILE and LIST_FILES to investigate. Do NOT call WRITE_FILE, APPLY_PATCH, or RUN_TERMINAL. After investigating, return { "done": true, "final": "your answer here" }.`;
     }
+    conversation.push({ role: "system", content: instruction });
+  } else if (isCommandOnly) {
+    console.log("[AgentLoop] command-only task detected");
+    const requiredCommandsText = (toolPolicy.requiredCommands || []).map(command => `- ${command}`).join("\n") || "- (none detected)";
+    const instruction = `COMMAND-ONLY MODE:
+RUN_TERMINAL is allowed.
+WRITE_FILE is forbidden.
+APPLY_PATCH is forbidden.
+CREATE_FILE is forbidden.
+DELETE_FILE is forbidden.
+Execute requiredCommands exactly:
+${requiredCommandsText}
+Do not finish before requiredCommands have executed.
+After execution, return { "done": true, "final": "your summary here" }.`;
+    console.log("[PROMPT_MODE_INJECTED]", { mode: "COMMAND_ONLY", instruction });
     conversation.push({ role: "system", content: instruction });
   }
 
@@ -2338,6 +2387,59 @@ RULES:
     // generate a deterministic final summary and stop without calling the model again.
     if (planner && planner.isComplete()) {
       const allTasks = planner.graph.allNodes();
+      const requiredCommandCompleted = isCommandOnly && originalRequiredCommands.length > 0 && hasAllSuccessfulRequiredCommands();
+      if (requiredCommandCompleted) {
+        finalText = buildPlannerFinalText({
+          planner,
+          toolCalls,
+          readFileCache,
+          readOnly: isReadOnly || isNonCodingTask || isCommandOnly,
+          changedFiles
+        }) || `Planner execution completed successfully. Required command(s) executed: ${originalRequiredCommands.join(", ")}.`;
+        qualityGate = await runQualityGate({
+          acceptanceCriteria: criteriaEffective,
+          changedFiles: [...changedFiles],
+          toolCalls,
+          workspaceRoot: resolvedWorkspaceRoot,
+          finalText
+        });
+        if (qualityGate?.passed === true && !plannerFatalBlock) {
+          const terminalCommands = getTerminalCommandExecutions();
+          console.log('[PLANNER_COMPLETE_STOP]', {
+            reason: 'planner completed after required command execution',
+            requiredCommands: originalRequiredCommands,
+            terminalCommands
+          });
+          recordEvent('planner_complete_stop', {
+            step,
+            reason: 'planner completed after required command execution',
+            requiredCommands: originalRequiredCommands,
+            terminalCommands
+          });
+          recordEvent("completion", { step, message: "Planner completed after required command execution.", finalText });
+          const changedFileList = [...changedFiles].sort();
+          const diffSummary = resolvedWorkspaceRoot
+            ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList)
+            : { stat: "", numstat: "" };
+          planner.executionMemory?.printSummary?.();
+          opt.printSummary();
+          return {
+            success: true,
+            status: "completed",
+            final: finalText,
+            error: null,
+            history,
+            events,
+            toolCalls,
+            changedFiles: changedFileList,
+            diffSummary,
+            qualityGate,
+            acceptanceCriteria: criteriaEffective,
+            workspaceRoot: resolvedWorkspaceRoot || null,
+            workspaceId: workspaceId || null
+          };
+        }
+      }
       const allTasksResolved = allTasks.every(t =>
         t.tool ||
         isPlannerReasoningTask(t) ||

@@ -58,6 +58,11 @@ export class OllamaProviderAdapter extends AiProviderAdapter {
       }
 
       const { modelName, messages, temperature = 0.7, maxTokens = 4096 } = params;
+       // Clamp max_tokens to 4096 for Ollama compatibility
+       const safeMaxTokens = Math.min(Number(maxTokens) || 4096, 4096);
+       if (safeMaxTokens !== maxTokens) {
+         console.log("[PROVIDER_MAX_TOKENS_CLAMPED]", { provider: "ollama", model: modelName, requestedMaxTokens: maxTokens, maxTokens: safeMaxTokens });
+       }
 
       for (const msg of messages) {
         if (Array.isArray(msg.content)) {
@@ -74,12 +79,12 @@ export class OllamaProviderAdapter extends AiProviderAdapter {
 
       if (DEBUG()) console.log("[OllamaAdapter] sending request to %s ...", endpoint);
 
-      const response = await this.client.chat.completions.create({
-        model,
-        messages,
-        temperature,
-        max_tokens: maxTokens
-      });
+const response = await this.client.chat.completions.create({
+         model,
+         messages,
+         temperature,
+         max_tokens: safeMaxTokens
+       });
 
       const outputText = response.choices?.[0]?.message?.content || "";
 

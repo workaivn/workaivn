@@ -2,16 +2,16 @@ import crypto from 'node:crypto';
 import { Task } from './task.js';
 
 export function extractCommands(text) {
-  const commands = [];
-  const seen = new Set();
-  const source = String(text || '').replace(/\r\n/g, '\n');
-  const commandStart = String.raw`(?:npm(?:\s+run)?\s+[A-Za-z0-9:_-]+|npm\s+test\b|pnpm(?:\s+run)?\s+[A-Za-z0-9:_-]+|pnpm\s+test\b|yarn(?:\s+run)?\s+[A-Za-z0-9:_-]+|yarn\s+test\b|node\s+[^\n.]+\.(?:m?js|cjs)|python3?\s+[^\n.]+\.py|pytest\b[^\n]*|go\s+test\b[^\n]*|cargo\s+(?:test|check)\b[^\n]*|dotnet\s+(?:test|build)\b[^\n]*|mvn\s+test\b[^\n]*|gradle\w*\s+(?:test|build)\b[^\n]*|flutter\s+(?:test|analy[sz]e)\b[^\n]*|dart\s+test\b[^\n]*)`;
-  const marker = String.raw`(?:then\s+run|run|execute|finally\s+run)`;
-  const patterns = [
-    new RegExp(String.raw`\b${marker}\s*:\s*(${commandStart})`, 'gi'),
-    new RegExp(String.raw`\b${marker}\s*\n+\s*(${commandStart})`, 'gi'),
-    new RegExp(String.raw`\b${marker}\s+(${commandStart})`, 'gi')
-  ];
+   const commands = [];
+   const seen = new Set();
+   const source = String(text || '').replace(/\r\n/g, '\n');
+   const commandStart = String.raw`(?:npm(?:\s+run)?\s+[A-Za-z0-9:_-]+(?:\s+--[^\n.]*)?|npm\s+test(?:\s+--[^\n.]*)?|pnpm(?:\s+run)?\s+[A-Za-z0-9:_-]+(?:\s+--[^\n.]*)?|pnpm\s+test(?:\s+--[^\n.]*)?|yarn(?:\s+run)?\s+[A-Za-z0-9:_-]+(?:\s+--[^\n.]*)?|yarn\s+test(?:\s+--[^\n.]*)?|node\s+[^\n.]+\.(?:m?js|cjs)|python3?\s+[^\n.]+\.py|pytest\b[^\n]*|go\s+test\b[^\n]*|cargo\s+(?:test|check)\b[^\n]*|dotnet\s+(?:test|build)\b[^\n]*|mvn\s+test\b[^\n]*|gradle\w*\s+(?:test|build)\b[^\n]*|flutter\s+(?:test|analy[sz]e)\b[^\n]*|dart\s+test\b[^\n]*)`;
+   const marker = String.raw`(?:then\s+run|run\s+exactly|run\s+exactly\s+this\s+command|only\s+execute\s+the\s+command|run|execute|finally\s+run)`;
+   const patterns = [
+     new RegExp(String.raw`\b${marker}\s*:\s*(${commandStart})`, 'gi'),
+     new RegExp(String.raw`\b${marker}\s*\n+\s*(${commandStart})`, 'gi'),
+     new RegExp(String.raw`\b${marker}\s+(${commandStart})`, 'gi')
+   ];
 
   function add(cmd) {
     const cleaned = String(cmd || '')

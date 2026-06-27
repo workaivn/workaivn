@@ -143,9 +143,14 @@ export class OpenAICompatibleProviderAdapter extends AiProviderAdapter {
           }
           // Build payload; local providers (koboldcpp/llamacpp) often reject unsupported fields like max_tokens
           const isLocal = (this.code === "koboldcpp" || this.code === "llamacpp");
+          // Clamp max_tokens to 512 for compatibility with local/providers that have this limit
+          const safeMaxTokens = Math.min(Number(maxTokens) || 512, 512);
+          if (safeMaxTokens !== maxTokens) {
+            console.log("[PROVIDER_MAX_TOKENS_CLAMPED]", { provider: this.code, model, requestedMaxTokens: maxTokens, maxTokens: safeMaxTokens });
+          }
           const payload = isLocal
             ? { model, messages, temperature }
-            : { model, messages, temperature, max_tokens: maxTokens };
+            : { model, messages, temperature, max_tokens: safeMaxTokens };
 
           const modelTimeout = Number(params?.modelCallTimeout || process.env.WORKAI_MODEL_CALL_TIMEOUT_MS || 90000);
           const response = await axios.post(`${this.baseUrl}/chat/completions`, payload, {
