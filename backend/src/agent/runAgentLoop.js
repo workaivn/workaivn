@@ -2176,6 +2176,21 @@ export async function runAgentLoop({
       shouldContinue: true
     };
   }
+  // Emit RUN_FILE_METADATA from any context (before early returns or final return)
+  function emitRunFileMetadata(overrideQualityGate = null) {
+    const qg = overrideQualityGate || qualityGate;
+    const meta = buildRunFileMetadata({
+      requestedFiles: criteriaEffective.requestedFiles || [],
+      plannerWriteTargets: criteriaEffective.plannerWriteTargets || [],
+      toolCalls,
+      changedFiles: [...changedFiles],
+      validationSummary: qg?.validationSummary,
+      qualityGatePassed: qg?.passed === true
+    });
+    logRunFileMetadata(meta);
+    return meta;
+  }
+
   async function maybeFinalizeRun(step, phase = 'loop') {
     if (!planner) return null;
     const plannerStatus = getPlannerRuntimeStatusSnapshot();
@@ -2291,6 +2306,7 @@ export async function runAgentLoop({
         phase
       });
       recordEvent("completion", { step, message: "Planner completed after required command execution.", finalText });
+      emitRunFileMetadata();
       planner.executionMemory?.printSummary?.();
       opt.printSummary();
       return {
@@ -2325,6 +2341,7 @@ export async function runAgentLoop({
         ? (finalization.reason || `Required validation command failed: ${finalization.command || 'unknown'}`)
         : (finalization.reason || 'Planner stopped before validation could complete.');
     plannerMetrics.finalizerStatus = finalization.status;
+    emitRunFileMetadata();
     planner.executionMemory?.printSummary?.();
     opt.printSummary();
     return {
@@ -3296,6 +3313,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
       const reason = "ANALYSIS_FINAL_TIMEOUT";
       if (DEBUG()) console.log("[ANALYSIS TIMEOUT]", { reason, elapsed: Date.now() - analysisAwaitStart });
       recordEvent("timeout", { step, message: reason, elapsed: Date.now() - analysisAwaitStart });
+      emitRunFileMetadata(qualityGate || { passed: false, score: 0, failures: [reason], feedback: reason });
       return {
         success: false,
         status: "needs_revision",
@@ -3315,6 +3333,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
     }
     if (abortSignal?.aborted) {
       recordEvent("cancelled", { step, message: "Run was cancelled by user" });
+      emitRunFileMetadata({ passed: false, failures: ["Cancelled by user"], feedback: "Run cancelled by user." });
       return {
         success: false,
         status: "cancelled",
@@ -4892,11 +4911,12 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           if (qualityGate.passed) {
             recordEvent("completion", { step, message: "Task completed.", finalText });
             console.log("[AgentLoop] Deterministic final summary — quality gate passed, returning immediately");
-            const changedFileList = [...changedFiles].sort();
-            const diffSummary = resolvedWorkspaceRoot
-              ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList)
-              : { stat: "", numstat: "" };
-            return {
+          const changedFileList = [...changedFiles].sort();
+          const diffSummary = resolvedWorkspaceRoot
+            ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList)
+            : { stat: "", numstat: "" };
+          emitRunFileMetadata();
+          return {
               success: true,
               status: "completed",
               final: finalText,
