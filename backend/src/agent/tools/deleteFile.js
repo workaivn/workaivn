@@ -1,11 +1,11 @@
 import fs from "fs/promises";
 import { resolveWorkspacePathSafe } from "../workspace.js";
 
-export async function deleteFileTool({ path, activeFiles = [], workspaceRoot }) {
+export async function deleteFileTool({ path, activeFiles = [], workspaceRoot, layout = null }) {
   if (!String(path || "").trim()) return { success: false, error: "DELETE_FILE requires path" };
   if (workspaceRoot) {
     try {
-      const resolved = await resolveWorkspacePathSafe(workspaceRoot, path);
+      const resolved = await resolveWorkspacePathSafe(workspaceRoot, path, { layout });
       await fs.unlink(resolved.absolutePath);
       return { success: true, file: resolved.relativePath, changed: true, deleted: true };
     } catch (error) {

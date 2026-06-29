@@ -1,10 +1,20 @@
 import fs from "fs/promises";
 import pathModule from "path";
-import { resolveWorkspacePath, resolveWorkspacePathSafe } from "../workspace.js";
+import { normalizeGeneratedModuleContent, resolveWorkspacePathSafe } from "../workspace.js";
 const DEBUG = () => process.env.DEBUG_AGENT === "true" || process.env.WORKAI_AGENT_DEBUG === "true";
 
-export async function writeFileTool({ path, content, activeFiles = [], workspaceRoot }) {
+export async function writeFileTool({ path, content, activeFiles = [], workspaceRoot, layout = null, allowEmptyContent = false, overwriteEmpty = false }) {
   const nextContent = String(content ?? "");
+  const allowEmptyOverwrite = allowEmptyContent === true || overwriteEmpty === true;
+
+  if (!allowEmptyOverwrite && !String(nextContent).trim()) {
+    return {
+      success: false,
+      error: "WRITE_FILE requires non-empty content",
+      changed: false,
+      overwritten: false
+    };
+  }
 
   if (workspaceRoot) {
     try {
@@ -24,9 +34,7 @@ export async function writeFileTool({ path, content, activeFiles = [], workspace
           return { success: false, error: "package.json scripts contains duplicate key workai:test", changed: false };
         }
       }
-      const candidate = resolveWorkspacePath(workspaceRoot, path);
-      await fs.mkdir(pathModule.dirname(candidate.absolutePath), { recursive: true });
-      const resolved = await resolveWorkspacePathSafe(workspaceRoot, path, { allowMissing: true });
+      const resolved = await resolveWorkspacePathSafe(workspaceRoot, path, { allowMissing: true, layout });
       let previousContent = null;
 
       try {
@@ -35,28 +43,51 @@ export async function writeFileTool({ path, content, activeFiles = [], workspace
         if (error.code !== "ENOENT") throw error;
       }
 
-      if (previousContent === nextContent) {
-        // Idempotent success: already up to date
+      const normalizedWrite = await normalizeGeneratedModuleContent({
+        workspaceRoot,
+        targetPath: resolved.relativePath,
+        content: nextContent,
+        layout,
+        workspaceFiles: activeFiles.map(file => String(file.path || file.name || ""))
+      });
+
+      if (!normalizedWrite.success) {
+        return {
+          success: false,
+          error: normalizedWrite.error,
+          changed: false,
+          overwritten: false,
+          moduleSystem: normalizedWrite.moduleSystem || "unknown"
+        };
+      }
+
+      const finalContent = String(normalizedWrite.content ?? nextContent);
+
+      if (previousContent === finalContent) {
         return {
           success: true,
           file: resolved.relativePath,
           changed: false,
           alreadyUpToDate: true,
           created: false,
-          bytesWritten: Buffer.byteLength(nextContent)
+          bytesWritten: 0,
+          moduleSystem: normalizedWrite.moduleSystem || "unknown",
+          transformed: normalizedWrite.transformed === true
         };
       }
 
       await fs.mkdir(pathModule.dirname(resolved.absolutePath), { recursive: true });
-      await fs.writeFile(resolved.absolutePath, nextContent, "utf8");
-      if (DEBUG()) console.log("[WRITE_FILE]", { path: resolved.relativePath, beforeLength: (previousContent || "").length, afterLength: nextContent.length });
+      await fs.writeFile(resolved.absolutePath, finalContent, "utf8");
+      if (DEBUG()) console.log("[WRITE_FILE]", { path: resolved.relativePath, beforeLength: (previousContent || "").length, afterLength: finalContent.length, moduleSystem: normalizedWrite.moduleSystem || "unknown", transformed: normalizedWrite.transformed === true });
 
       return {
         success: true,
         file: resolved.relativePath,
         changed: true,
         created: previousContent === null,
-        bytesWritten: Buffer.byteLength(nextContent)
+        bytesWritten: Buffer.byteLength(finalContent),
+        moduleSystem: normalizedWrite.moduleSystem || "unknown",
+        transformed: normalizedWrite.transformed === true
       };
     } catch (error) {
       if (DEBUG()) console.log("[WRITE_FILE][ERROR]", { path, error: error.message });

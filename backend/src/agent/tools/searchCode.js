@@ -11,7 +11,8 @@ const SEARCHABLE_EXTENSIONS = new Set([
 export async function searchCodeTool({
   query,
   activeFiles = [],
-  workspaceRoot
+  workspaceRoot,
+  layout = null
 }) {
 
   const q =
@@ -30,7 +31,7 @@ export async function searchCodeTool({
         if (!SEARCHABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) continue;
 
         try {
-          const resolved = await resolveWorkspacePathSafe(workspaceRoot, filePath);
+          const resolved = await resolveWorkspacePathSafe(workspaceRoot, filePath, { layout });
           const stats = await fs.stat(resolved.absolutePath);
           if (stats.size > 1024 * 1024) continue;
           const content = await fs.readFile(resolved.absolutePath, "utf8");

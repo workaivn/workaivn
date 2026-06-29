@@ -533,7 +533,7 @@ test('Priority Queue: RUN_TERMINAL gets priority 100 after dependency chain', ()
   // Write task becomes READY, priority should be computed
   const second = planner.getNextTask();
   assert.ok(second, 'Should have a next task');
-  assert.ok(!second.tool, 'Second task should be a write CODING task (no tool set)');
+  assert.equal(second.tool, 'WRITE_FILE', 'Second task should be an explicit WRITE_FILE task');
 
   // Complete the write
   notifyToolExecution(planner, 'WRITE_FILE', { path: 'src/priority-test.js', content: 'console.log("OK")' }, { success: true, changed: true, file: 'src/priority-test.js' });

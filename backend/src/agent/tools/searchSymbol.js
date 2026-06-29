@@ -29,7 +29,8 @@ function createChunks(filePath, content) {
 export async function searchSymbolTool({
   query,
   activeFiles = [],
-  workspaceRoot
+  workspaceRoot,
+  layout = null
 }) {
 
   const q =
@@ -104,7 +105,7 @@ export async function searchSymbolTool({
         }
 
         try {
-          const resolved = await resolveWorkspacePathSafe(workspaceRoot, filePath);
+          const resolved = await resolveWorkspacePathSafe(workspaceRoot, filePath, { layout });
           const content = await fs.readFile(resolved.absolutePath, "utf8");
           filesToSearch.push({
             name: filePath,

@@ -22,7 +22,8 @@ const TERMINAL_COMMAND_KEYWORDS = [
 const WRITE_KEYWORDS = [
   'create', 'write', 'add', 'implement', 'generate', 'build', 'construct', 
   'modify', 'update', 'edit', 'patch', 'replace', 'refactor', 'fix', 
-  'delete', 'remove', 'landing page', 'dashboard', 'login', 'crud', 'feature',
+  'delete', 'remove', 'append', 'prepend', 'insert', 'rename',
+  'landing page', 'dashboard', 'login', 'crud', 'feature',
   'api', 'component', 'page', 'screen', 'form'
 ];
 

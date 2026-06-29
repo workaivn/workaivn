@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runAgentLoop } from '../runAgentLoop.js';
+import { writeFileTool } from '../tools/writeFile.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -70,6 +71,39 @@ test('Local mode: WRITE_FILE then RUN_TERMINAL creates file and runs it', async 
     console.log('RESULT_META', { success: result.success, status: result.status, final: result.final, failures: result.qualityGate?.failures });
     assert.equal(result.success, true);
     assert.ok(String(result.final || '').length > 0);
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('Recovery write rejects empty content and preserves the target file', async () => {
+  const workspaceRoot = await createWorkspace();
+  const scriptPath = 'src/recovery-write-check.js';
+  const originalContent = 'console.log("KEEP_ME");\n';
+  const repairedContent = 'console.log("RECOVERY_OK");\n';
+  try {
+    await fs.writeFile(path.join(workspaceRoot, scriptPath), originalContent, 'utf8');
+
+    const rejected = await writeFileTool({
+      path: scriptPath,
+      content: '',
+      workspaceRoot
+    });
+    assert.equal(rejected.success, false, 'Empty recovery write must be rejected');
+
+    const afterRejected = await fs.readFile(path.join(workspaceRoot, scriptPath), 'utf8');
+    assert.equal(afterRejected, originalContent, 'Empty recovery write must not truncate the file');
+
+    const repaired = await writeFileTool({
+      path: scriptPath,
+      content: repairedContent,
+      workspaceRoot
+    });
+    assert.equal(repaired.success, true, 'Repaired recovery write should succeed');
+    assert.equal(repaired.changed, true, 'Repaired recovery write should change the file');
+
+    const stdout = await execFileAsync('node', [path.join(workspaceRoot, scriptPath)], { cwd: workspaceRoot });
+    assert.match(String(stdout.stdout || ''), /RECOVERY_OK/, 'Terminal run should use the repaired content');
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }

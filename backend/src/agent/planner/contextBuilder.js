@@ -201,13 +201,19 @@ export function buildPlannerContext({
   const candidateLandingTargets = frontendEntryFiles.length > 0 ? frontendEntryFiles : [];
 
   const result = {
+    workspaceRoot,
     projectContext,
     candidateFiles: filtered,
     requiredReads,
     reasons,
     backendAppFiles,
     frontendEntryFiles,
-    candidateLandingTargets
+    candidateLandingTargets,
+    appRoots: projectScan.appRoots || [],
+    sourceRoots: projectScan.sourceRoots || [],
+    moduleRoots: projectScan.moduleRoots || [],
+    testRoots: projectScan.testRoots || [],
+    existingTopLevelDirs: projectScan.existingTopLevelDirs || []
   };
 
   console.log('[PLANNER_CONTEXT_BUILD]', {

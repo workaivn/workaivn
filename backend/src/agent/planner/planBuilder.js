@@ -1,17 +1,34 @@
 import crypto from 'node:crypto';
 import { Task } from './task.js';
+import { parsePromptFileLiterals } from './promptLiteralParser.js';
+
+function prioritizeValidationCommands(commands = []) {
+  const specific = [];
+  const others = [];
+  const generic = [];
+
+  for (const cmd of (commands || []).map(cmd => String(cmd || '').trim()).filter(Boolean)) {
+    if (/^npm\s+test\s+--\s+.+/i.test(cmd)) {
+      specific.push(cmd);
+    } else if (/^npm\s+test\b/i.test(cmd)) {
+      generic.push(cmd);
+    } else {
+      others.push(cmd);
+    }
+  }
+
+  return [...specific, ...others, ...generic];
+}
 
 export function extractCommands(text) {
-   const commands = [];
-   const seen = new Set();
-   const source = String(text || '').replace(/\r\n/g, '\n');
-   const commandStart = String.raw`(?:npm(?:\s+run)?\s+[A-Za-z0-9:_-]+(?:\s+--[^\n.]*)?|npm\s+test(?:\s+--[^\n.]*)?|pnpm(?:\s+run)?\s+[A-Za-z0-9:_-]+(?:\s+--[^\n.]*)?|pnpm\s+test(?:\s+--[^\n.]*)?|yarn(?:\s+run)?\s+[A-Za-z0-9:_-]+(?:\s+--[^\n.]*)?|yarn\s+test(?:\s+--[^\n.]*)?|node\s+[^\n.]+\.(?:m?js|cjs)|python3?\s+[^\n.]+\.py|pytest\b[^\n]*|go\s+test\b[^\n]*|cargo\s+(?:test|check)\b[^\n]*|dotnet\s+(?:test|build)\b[^\n]*|mvn\s+test\b[^\n]*|gradle\w*\s+(?:test|build)\b[^\n]*|flutter\s+(?:test|analy[sz]e)\b[^\n]*|dart\s+test\b[^\n]*)`;
-   const marker = String.raw`(?:then\s+run|run\s+exactly|run\s+exactly\s+this\s+command|only\s+execute\s+the\s+command|run|execute|finally\s+run)`;
-   const patterns = [
-     new RegExp(String.raw`\b${marker}\s*:\s*(${commandStart})`, 'gi'),
-     new RegExp(String.raw`\b${marker}\s*\n+\s*(${commandStart})`, 'gi'),
-     new RegExp(String.raw`\b${marker}\s+(${commandStart})`, 'gi')
-   ];
+  const commands = [];
+  const seen = new Set();
+  const source = String(text || '').replace(/\r\n/g, '\n');
+  const lines = source.split('\n');
+  const marker = /^(?:[-*]\s*)?(?:after\s+implementation\s+run|then\s+run\s+exactly|then\s+run|run\s+exactly\s+this\s+command|run\s+exactly|only\s+execute(?:\s+the\s+command)?|finally\s+run|run|execute|validation|test)\s*:\s*(.*)$/i;
+  const inlineMarker = /(?:^|[.!?]\s+)(?:after\s+implementation\s+run|then\s+run\s+exactly|then\s+run|run\s+exactly\s+this\s+command|run\s+exactly|only\s+execute(?:\s+the\s+command)?|finally\s+run)\s*:\s*(.+)$/i;
+  const embeddedMarker = /(?:^|[\s.!?])(?:after\s+implementation\s+run|then\s+run\s+exactly|then\s+run|run\s+exactly\s+this\s+command|run\s+exactly|only\s+execute(?:\s+the\s+command)?|finally\s+run)\s*:?\s*(.+)$/i;
+  const direct = /^(?:[-*]\s*)?(?:npm(?:\s+run)?\s+[A-Za-z0-9:_-]+(?:\s+--\s*.*)?|npm\s+test(?:\s+--\s*.*)?|pnpm(?:\s+run)?\s+[A-Za-z0-9:_-]+(?:\s+--\s*.*)?|pnpm\s+test(?:\s+--\s*.*)?|yarn(?:\s+run)?\s+[A-Za-z0-9:_-]+(?:\s+--\s*.*)?|yarn\s+test(?:\s+--\s*.*)?|node\s+--test\s+.+|node\s+(?:-e|--eval)\s+.+|node\s+[^\n.]+\.(?:m?js|cjs)|python3?\s+[^\n.]+\.py|pytest\b[^\n]*|go\s+test\b[^\n]*|cargo\s+(?:test|check)\b[^\n]*|dotnet\s+(?:test|build)\b[^\n]*|mvn\s+test\b[^\n]*|gradle\w*\s+(?:test|build)\b[^\n]*|flutter\s+(?:test|analy[sz]e)\b[^\n]*|dart\s+test\b[^\n]*)$/i;
 
   function add(cmd) {
     const cleaned = String(cmd || '')
@@ -20,21 +37,81 @@ export function extractCommands(text) {
       .replace(/[.;,]\s*$/, '')
       .trim();
     if (!cleaned) return;
-    if (/^(npm|npm\s+run|npm\s+script|pnpm|yarn|node|python|python3)$/i.test(cleaned)) return;
     const key = cleaned.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
     commands.push(cleaned);
   }
 
-  for (const rx of patterns) {
-    let match;
-    while ((match = rx.exec(source)) !== null) {
-      add(match[1]);
+  function addIfCommand(candidate) {
+    const cleaned = String(candidate || '').replace(/[.;,]\s*$/, '').trim();
+    if (!cleaned) return false;
+    if (!direct.test(cleaned)) return false;
+    add(cleaned);
+    return true;
+  }
+
+  let expectCommand = false;
+  let suppressDirectCommands = false;
+  for (const line of lines) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed) {
+      if (!expectCommand) suppressDirectCommands = false;
+      continue;
+    }
+
+    const terminalMatch = /^RUN_TERMINAL\s+(.+)$/i.exec(trimmed);
+    if (terminalMatch) {
+      addIfCommand(terminalMatch[1]);
+      continue;
+    }
+
+    const markerMatch = marker.exec(trimmed);
+    if (markerMatch) {
+      const remainder = String(markerMatch[1] || '').trim();
+      if (remainder) {
+        addIfCommand(remainder);
+      } else {
+        expectCommand = true;
+      }
+      continue;
+    }
+
+    const inlineMatch = inlineMarker.exec(trimmed);
+    if (inlineMatch) {
+      const remainder = String(inlineMatch[1] || '').trim();
+      if (remainder) addIfCommand(remainder);
+      continue;
+    }
+
+    if (/\bwith\s+(?:value|content)\s*:\s*$/i.test(trimmed)) {
+      suppressDirectCommands = true;
+      continue;
+    }
+
+    if (expectCommand) {
+      if (direct.test(trimmed)) {
+        add(trimmed);
+        expectCommand = false;
+        continue;
+      }
+      // Keep waiting until we reach an actual command line.
+      continue;
+    }
+
+    if (!suppressDirectCommands && direct.test(trimmed)) {
+      add(trimmed);
+      continue;
+    }
+
+    const embeddedMatch = embeddedMarker.exec(trimmed);
+    if (embeddedMatch) {
+      const remainder = String(embeddedMatch[1] || '').trim();
+      if (remainder) addIfCommand(remainder);
     }
   }
 
-  return commands;
+  return prioritizeValidationCommands(commands);
 }
 
 export function expandRepeatedCommands(objective, commands = []) {
@@ -72,8 +149,8 @@ function findClosestKeyword(text, file, keywords) {
   return minDist;
 }
 
-const READ_WORDS = ['read','open','inspect','check','review','show','display','print','dump','view','examine','find','look','tell','list'];
-const WRITE_WORDS = ['create','write','add','implement','generate','build','construct','modify','update','change','edit','patch','replace','refactor','fix','delete','remove'];
+const READ_WORDS = ['read','open','inspect','check','review','show','display','print','dump','view','examine','find','look','tell','list','READ_FILE'];
+const WRITE_WORDS = ['create','write','add','implement','generate','build','construct','modify','update','change','edit','patch','replace','refactor','fix','delete','remove','append','prepend','insert','rename','WRITE_FILE','CREATE_FILE','APPLY_PATCH'];
 
 export function classifyReadWriteFiles(objective, files) {
   const readFiles = [];
@@ -114,7 +191,10 @@ export function classifyReadWriteFiles(objective, files) {
 }
 
 function hasWriteIntent(objective) {
-  return /\b(?:create|write|add|implement|generate|build|construct|modify|update|change|edit|patch|replace|refactor|fix|delete|remove)\b/i.test(String(objective || ''));
+  const text = String(objective || '');
+  // Tool-name prefixes like WRITE_FILE, CREATE_FILE, APPLY_PATCH also indicate write intent
+  if (/^(?:WRITE_FILE|CREATE_FILE|APPLY_PATCH)\s/m.test(text)) return true;
+  return /\b(?:create|write|add|implement|generate|build|construct|modify|update|change|edit|patch|replace|refactor|fix|delete|remove|append|prepend|insert|rename)\b/i.test(text);
 }
 
 function expandRepeatedReadFiles(objective, files) {
@@ -130,49 +210,12 @@ function expandRepeatedReadFiles(objective, files) {
   return expanded;
 }
 
-function extractWriteContent(objective, file) {
+export function extractWriteContent(objective, file) {
   if (!objective || !file) return null;
-  const text = String(objective || '');
-  const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-  // Any subsequent instruction word terminates content extraction
-  const INSTRUCTION_WORDS = 'Run|Then|Next|And|Finally|Read|Open|Inspect|Check|Review|Create|Write|Add|Modify|Update|Delete|Remove|Implement|Generate|Build|Construct|Edit|Patch|Replace|Refactor|Fix|Show|Display|Print|Dump|List|Find|Look|Tell|View|Examine|Search|Execute|Compile|Test';
-
-  // Pattern 1: "Create|write|add <file> with:\n<content>" or "with content:\n<content>"
-  const p1 = new RegExp(
-    `(?:create|write|add|implement|generate)\\b[\\s\\S]{0,80}?${escaped}\\s+with\\s*(?:content\\s*)?:\\s*([\\s\\S]*?)(?=\\n\\s*(?:${INSTRUCTION_WORDS})\\b|$)`, 'i'
-  );
-  const m1 = p1.exec(text);
-  if (m1) {
-    let content = m1[1];
-    content = content.replace(new RegExp(`\n\\s*(?:Then|and)\\s+(?:run|execute)\\s*:.*$`, 'i'), '')
-      .replace(new RegExp(`[.;]?\\s+(?:${INSTRUCTION_WORDS})\\b.*$`, 'i'), '')
-      .replace(/\n+\s*$/, '');
-    if (content.trim()) return content.replace(/\n+$/, '');
-  }
-
-  // Pattern 2: "Create|write|add <file> with <content>" followed by transition or end-of-line
-  const p2 = new RegExp(
-    `(?:create|write|add|implement|generate)\\b[\\s\\S]{0,80}?${escaped}\\s+with\\s+([^\\n]+?)(?=[.;]?\\s+(?:${INSTRUCTION_WORDS})\\b|[.;]\\s*$|$)`, 'i'
-  );
-  const m2 = p2.exec(text);
-  if (m2) {
-    let content = m2[1].trim();
-    if (/^content\s*:?\s*/i.test(content)) content = content.replace(/^content\s*:?\s*/i, '');
-    if (content) return content;
-  }
-
-  // Pattern 3: "<file> with content <content>"
-  const p3 = new RegExp(
-    `${escaped}\\s+with\\s+content\\s+([^\\n]+?)(?=[.;]?\\s+(?:${INSTRUCTION_WORDS})\\b|[.;]\\s*$|$)`, 'i'
-  );
-  const m3 = p3.exec(text);
-  if (m3) {
-    let content = m3[1].trim();
-    if (content) return content;
-  }
-
-  return null;
+  const parsed = parsePromptFileLiterals(objective);
+  const record = parsed.files[String(file).replace(/\\/g, '/')];
+  const content = String(record?.content ?? '').trim();
+  return content || null;
 }
 
 export function buildPlan(objective, criteria) {
@@ -180,7 +223,11 @@ export function buildPlan(objective, criteria) {
   const tasks = [];
   const kind = criteria?.taskType || 'CODING';
   const reqFiles = criteria?.requestedFiles || [];
-  const requiredCommands = expandRepeatedCommands(objective, criteria?.requiredCommands || []);
+  const explicitCommands = extractCommands(objective);
+  const requiredCommands = prioritizeValidationCommands(expandRepeatedCommands(
+    objective,
+    explicitCommands.length > 0 ? explicitCommands : (criteria?.requiredCommands || [])
+  ));
   const isReadKind = kind === 'ANALYSIS' || kind === 'SEARCH';
 
   if (isReadKind && reqFiles.length > 0) {
@@ -232,10 +279,33 @@ export function buildPlan(objective, criteria) {
         }));
       }
 
+      // For each write target not already in readFiles, add a READ_FILE task
+      // so the model can read existing content before editing.
+      // Only add when the intent verb is an edit-style verb (not create-style).
+      const EDIT_VERBS = 'append|prepend|insert|modify|update|edit|replace|rename|change|patch|refactor|fix|add';
+      for (const file of writeFiles) {
+        if (readFiles.includes(file)) continue;
+        const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const editPattern = new RegExp(`\\b(?:${EDIT_VERBS})\\b[\\s\\S]{0,80}?${escaped}`, 'i');
+        if (editPattern.test(String(objective || ''))) {
+          const taskId = crypto.randomUUID();
+          readTaskIds.push(taskId);
+          tasks.push(new Task({
+            id: taskId,
+            kind,
+            goal: `Read file: ${file}`,
+            tool: 'READ_FILE',
+            toolArgs: { path: file },
+            dependencies: [],
+            failureNext: 'recovery:' + taskId
+          }));
+        }
+      }
+
       for (const file of writeFiles) {
         // Validate: reject WRITE_FILE without explicit write intent
         const fileWritePattern = new RegExp(
-          `\\b(?:create|write|add|implement|generate|build|construct|modify|update|change|edit|patch|replace|refactor|fix|delete|remove)\\b[\\s\\S]{0,120}?${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i'
+          `\\b(?:create|write|add|implement|generate|build|construct|modify|update|change|edit|patch|replace|refactor|fix|delete|remove|append|prepend|insert|rename|WRITE_FILE|CREATE_FILE|APPLY_PATCH)\\b[\\s\\S]{0,120}?${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i'
         );
         const hasExplicitWriteIntent = fileWritePattern.test(String(objective || ''));
         if (!hasExplicitWriteIntent) {
@@ -259,13 +329,16 @@ export function buildPlan(objective, criteria) {
         const content = extractWriteContent(objective, file);
         const hasContent = content !== null && content.length > 0;
 
-        // Reject tool=null tasks: if no content extracted, mark as generic for LLM reasoning
+        // Even without inline content, keep the write intent concrete so the
+        // planner can constrain the model to produce the content next.
         if (!hasContent) {
-          console.log('[PLANNER_INVALID_TASK_REJECTED]', { file, reason: 'no_write_content', action: 'creating generic REASONING task' });
+          console.log('[PLANNER_INVALID_TASK_REJECTED]', { file, reason: 'no_write_content', action: 'keeping concrete WRITE_FILE task' });
           tasks.push(new Task({
             id: taskId,
             kind,
             goal: `Write file: ${file}`,
+            tool: 'WRITE_FILE',
+            toolArgs: { path: file, file },
             dependencies: readTaskIds.length > 0 ? [...readTaskIds] : [],
             failureNext: 'recovery:' + taskId
           }));

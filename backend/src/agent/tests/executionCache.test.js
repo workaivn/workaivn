@@ -171,12 +171,13 @@ test('Phase 4.15 — ExecutionCache: two-run integration with cache hits', async
 
     // ── Run 1: Create file and run ─────────────────────────────
     const run1Responses = [
+      { content: 'console.log("cache ok")' },
       { done: true, final: 'Run 1 completed successfully.' }
     ];
     const run1 = await runAgentLoop({
       messages: [{
         role: 'user',
-        content: 'Read package.json. Create src/cache-test.js with: console.log("cache ok"). Run node src/cache-test.js'
+        content: 'Read package.json. Create src/cache-test.js with: console.log("cache ok"). Then run: node src/cache-test.js'
       }],
       workspaceRoot,
       maxSteps: 30,
@@ -203,7 +204,7 @@ test('Phase 4.15 — ExecutionCache: two-run integration with cache hits', async
       const run2 = await runAgentLoop({
         messages: [{
           role: 'user',
-          content: 'Read package.json. Run node src/cache-test.js'
+          content: 'Read package.json. Then run: node src/cache-test.js'
         }],
         workspaceRoot,
         maxSteps: 20,

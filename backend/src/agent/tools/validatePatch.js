@@ -5,7 +5,7 @@ import { resolveWorkspacePathSafe, runGit } from "../workspace.js";
 
 const execFileAsync = promisify(execFile);
 
-export async function validatePatchTool({ file, workspaceRoot }) {
+export async function validatePatchTool({ file, workspaceRoot, layout = null }) {
   if (!workspaceRoot) {
     return {
       success: true,
@@ -14,7 +14,7 @@ export async function validatePatchTool({ file, workspaceRoot }) {
   }
 
   try {
-    const resolved = await resolveWorkspacePathSafe(workspaceRoot, file);
+    const resolved = await resolveWorkspacePathSafe(workspaceRoot, file, { layout });
     const checks = [];
     const diffCheck = await runGit(workspaceRoot, ["diff", "--check", "--", resolved.relativePath]);
 

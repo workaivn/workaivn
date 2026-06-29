@@ -1,6 +1,8 @@
 import { TaskStatus } from './plannerTypes.js';
+import { Task } from './task.js';
 import { executeTool } from '../toolExecutor.js';
-import { generateRecoveryPlan, determineRecoveryType } from './recoveryPlanner.js';
+import { generateRecoveryPlan, determineRecoveryType, inferImplementationFromTestContent, buildRecoveryAssertionContext, analyzeValidationFailure, selectBestRecoveryFrame, assertValidRecoveryTaskPath, extractWorkspaceRelativeStacktracePath } from './recoveryPlanner.js';
+import { normalizeWorkspaceRelativePath } from '../workspace.js';
 import { generateId } from './plannerUtils.js';
 import { getTaskTimeoutMs, getMaxAttempts, markTaskProgress, markTaskStall, shouldStallTask, buildTaskTimeoutReason } from './taskTimeout.js';
 import { getTaskPriority, pickNextPlannerTask } from './priorityQueue.js';
@@ -85,13 +87,476 @@ function hasRecoveryBeenAttempted(planner, taskId) {
   return false;
 }
 
-export function tryRecovery(planner, failedTask) {
+function normalizeRecoveryPath(value, workspaceRoot) {
+  return normalizeWorkspaceRelativePath(value, workspaceRoot);
+}
+
+function isGlobLikePath(value = '') {
+  return /[*?]/.test(String(value || ''));
+}
+
+function toRecoveryPathList(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (value instanceof Set) return [...value];
+  if (value instanceof Map) return [...value.keys()];
+  return [value];
+}
+
+function pickLastRecoveryPath(value, workspaceRoot = '') {
+  const list = toRecoveryPathList(value);
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const candidate = normalizeRecoveryPath(list[i], workspaceRoot);
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+function extractRuntimeStacktraceTarget(validationContext = {}, workspaceRoot = '') {
+  const text = [
+    validationContext?.stderr,
+    validationContext?.stdout,
+    validationContext?.output,
+    validationContext?.rawOutput
+  ]
+    .map(value => String(value || ''))
+    .filter(Boolean)
+    .join('\n');
+
+  if (!text.trim()) return null;
+
+  const lines = text.replace(/\r/g, '').split('\n');
+  const patterns = [
+    /(?:at\s+.*?\()?(?:file:\/\/\/?)?((?:\.{1,2}[\\/]|[A-Za-z0-9_.-]+[\\/])*?(?:src|app|backend|frontend|server|client|api|lib|core|controllers?|services?)[\\/][^():*?]+\.(?:js|jsx|ts|tsx|mjs|cjs|py|php|java|jsp|cs|html|css|json))(?::\d+:\d+)?\)?/i,
+    /(?:at\s+.*?\()?(?:file:\/\/\/?)?((?:[A-Za-z]:[\\/]|\/)?[^():*?]+\.(?:js|jsx|ts|tsx|mjs|cjs|py|php|java|jsp|cs|html|css|json))(?::\d+:\d+)?\)?/i
+  ];
+
+  for (const rawLine of lines) {
+    const line = String(rawLine || '').trim();
+    if (!line || /^\[/.test(line)) continue;
+    if (/node:internal|internal\//i.test(line)) continue;
+    if (!/^at\s+/i.test(line) && !/file:\/\//i.test(line) && !/[A-Za-z]:[\\/]/.test(line) && !/[\\/](?:src|app|backend|frontend|server|client|api|lib|core|controllers?|services?)[\\/]/i.test(line)) {
+      continue;
+    }
+    for (const pattern of patterns) {
+      const match = line.match(pattern);
+      if (!match?.[1]) continue;
+      const candidate = extractWorkspaceRelativeStacktracePath(match[1], workspaceRoot);
+      if (!candidate || /(?:^|\/)(?:tests?|__tests__|specs?)(?:\/|$)|(?:^|\/)(?:[^/]+?\.(?:test|spec))\.[jt]sx?$|(?:^|\/)test\.[jt]sx?$|(?:^|\/)spec\.[jt]sx?$|(?:^|\/)src\/test\.[jt]sx?$|(?:^|\/)src\/tests?\.[jt]sx?$/i.test(candidate) || isGlobLikePath(candidate)) continue;
+      if (/node_modules|vendor|dist|build|coverage/i.test(candidate)) continue;
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function getLatestSuccessfulWritePath(planner, workspaceRoot = '') {
+  if (!planner?.executionHistory) return null;
+  const history = planner.executionHistory;
+  const completedTools = Array.isArray(history.completedTools) ? history.completedTools : [];
+  for (let i = completedTools.length - 1; i >= 0; i -= 1) {
+    const entry = completedTools[i] || {};
+    if (entry.tool !== 'WRITE_FILE' && entry.tool !== 'APPLY_PATCH') continue;
+    const candidate = normalizeRecoveryPath(entry.path || entry.target || entry.file, workspaceRoot);
+    if (candidate) return candidate;
+  }
+
+  if (history.writtenFiles instanceof Map) {
+    const writtenFiles = [...history.writtenFiles.keys()];
+    for (let i = writtenFiles.length - 1; i >= 0; i -= 1) {
+      const candidate = normalizeRecoveryPath(writtenFiles[i], workspaceRoot);
+      if (candidate) return candidate;
+    }
+  }
+
+  return null;
+}
+
+function getActiveFailedPhaseTargetFile(planner, failedTask, workspaceRoot = '') {
+  if (!planner || !failedTask || failedTask.tool !== 'RUN_TERMINAL') return null;
+  const visited = new Set();
+  const stack = Array.isArray(failedTask.dependencies) ? [...failedTask.dependencies] : [];
+
+  while (stack.length) {
+    const taskId = stack.pop();
+    if (!taskId || visited.has(taskId)) continue;
+    visited.add(taskId);
+
+    const task = planner.graph.getNode(taskId);
+    if (!task) continue;
+    if (task.tool === 'WRITE_FILE' || task.tool === 'APPLY_PATCH') {
+      const target = task.toolArgs?.path || task.toolArgs?.file || task.toolArgs?.target;
+      const normalized = normalizeRecoveryPath(target, workspaceRoot);
+      if (normalized) return normalized;
+    }
+
+    if (Array.isArray(task.dependencies)) {
+      stack.push(...task.dependencies);
+    }
+  }
+
+  return null;
+}
+
+function resolveRecoveryTargetFile(planner, failedTask, context = {}) {
+  const workspaceRoot = context.workspaceRoot || '';
+  const failureAnalysis = analyzeValidationFailure(context.validationContext || {}, workspaceRoot);
+  const failureType = String(failureAnalysis.failureType || '').trim();
+  const runtimeFailure = /^(ReferenceError|TypeError|SyntaxError|ImportError|Module resolution error|Compilation error|Runtime exception)$/i.test(failureType);
+  const runtimeFrame = runtimeFailure ? selectBestRecoveryFrame(failureAnalysis.stacktraceFrames || []) : null;
+  const runtimeTarget = normalizeRecoveryPath(
+    extractRuntimeStacktraceTarget(context.validationContext || {}, workspaceRoot) ||
+    runtimeFrame?.file ||
+    failureAnalysis.rootCauseFile ||
+    failureAnalysis.referencedImplementationFiles?.[0] ||
+    '',
+    workspaceRoot
+  );
+  const implementationCandidates = [
+    normalizeRecoveryPath(context.implementationModule, workspaceRoot),
+    normalizeRecoveryPath(context.activeFailedPhaseTargetFile, workspaceRoot) || getActiveFailedPhaseTargetFile(planner, failedTask, workspaceRoot),
+    normalizeRecoveryPath(context.latestSuccessfulWritePath, workspaceRoot) || getLatestSuccessfulWritePath(planner, workspaceRoot),
+    pickLastRecoveryPath(context.plannerChangedFiles, workspaceRoot) || pickLastRecoveryPath(planner?.changedFiles, workspaceRoot),
+    normalizeRecoveryPath(context.requiredFiles?.[0] || planner?.requiredFiles?.[0] || '', workspaceRoot)
+  ].filter(Boolean);
+  const implementationTarget = implementationCandidates[0] || null;
+  const changedTarget = pickLastRecoveryPath(context.changedFiles, workspaceRoot) || pickLastRecoveryPath(context.validationContext?.changedFiles, workspaceRoot);
+  const selectedTarget = runtimeTarget || implementationTarget || changedTarget || null;
+  const selectionReason = runtimeTarget
+    ? 'STACKTRACE_ROOT_CAUSE'
+    : failureType === 'AssertionError'
+      ? 'STACKTRACE_ASSERTION'
+      : implementationTarget
+        ? 'IMPLEMENTATION_MODULE'
+        : changedTarget
+          ? 'CHANGED_FILES'
+          : 'NO_TARGET';
+
+  console.log('[RECOVERY_STRATEGY]', {
+    failureClassification: failureType || 'unknown',
+    strategy: runtimeTarget ? 'STACKTRACE_RUNTIME' : (failureType === 'AssertionError' ? 'STACKTRACE_ASSERTION' : 'IMPLEMENTATION_MODULE')
+  });
+
+  console.log('[RECOVERY_TARGET_SELECTION]', {
+    rootCauseFile: runtimeTarget || null,
+    implementationModule: implementationTarget || null,
+    selectedTarget: selectedTarget || null,
+    selectionReason
+  });
+
+  if (runtimeTarget) {
+    return runtimeTarget;
+  }
+
+  return selectedTarget;
+}
+
+function findRepairTargetFile(planner, failedTask, context = {}) {
+  return resolveRecoveryTargetFile(planner, failedTask, context);
+}
+
+function toPathList(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (value instanceof Set) return [...value];
+  if (value instanceof Map) return [...value.keys()];
+  return [value];
+}
+
+function collectPlannerWriteTargets(planner, failedTask, context = {}) {
+  const workspaceRoot = context.workspaceRoot || '';
+  const ownedTargets = new Set();
+  const plannerWriteTargets = new Set();
+
+  const addOwnedTarget = (value) => {
+    const normalized = normalizeRecoveryPath(value, workspaceRoot);
+    if (normalized) {
+      ownedTargets.add(normalized);
+      return normalized;
+    }
+    return null;
+  };
+
+  const addPlannerWriteTarget = (value) => {
+    const normalized = addOwnedTarget(value);
+    if (normalized) {
+      plannerWriteTargets.add(normalized);
+    }
+    return normalized;
+  };
+
+  for (const value of toPathList(context.changedFiles)) addOwnedTarget(value);
+  for (const value of toPathList(context.plannerChangedFiles)) addOwnedTarget(value);
+  addPlannerWriteTarget(context.activeFailedPhaseTargetFile);
+  addPlannerWriteTarget(context.latestSuccessfulWritePath);
+  addPlannerWriteTarget(getActiveFailedPhaseTargetFile(planner, failedTask, workspaceRoot));
+  addPlannerWriteTarget(getLatestSuccessfulWritePath(planner, workspaceRoot));
+
+  for (const task of planner?.graph?.allNodes?.() || []) {
+    if (!task || task.kind === 'RECOVERY') continue;
+    if (task.tool !== 'WRITE_FILE' && task.tool !== 'APPLY_PATCH') continue;
+    addPlannerWriteTarget(task.toolArgs?.path || task.toolArgs?.file || task.toolArgs?.target);
+  }
+
+  for (const value of toPathList(context.plannerWriteTargets)) addPlannerWriteTarget(value);
+
+  return {
+    ownedTargets,
+    plannerWriteTargets
+  };
+}
+
+function evaluateRecoveryOwnership(planner, failedTask, context = {}, rootCauseFile = null) {
+  const { ownedTargets, plannerWriteTargets } = collectPlannerWriteTargets(planner, failedTask, context);
+  const repairTargetFile = normalizeRecoveryPath(context.repairTargetFile, context.workspaceRoot || '') || null;
+  const hasOwnershipEvidence = ownedTargets.size > 0 || plannerWriteTargets.size > 0;
+  const exactOwned = Boolean(rootCauseFile) && ownedTargets.has(rootCauseFile);
+  const firstRuntimeRetry = Boolean(rootCauseFile)
+    && failedTask?.tool === 'RUN_TERMINAL'
+    && plannerWriteTargets.size > 0
+    && !hasRecoveryBeenAttempted(planner, failedTask.id);
+  const owned = exactOwned || firstRuntimeRetry || (!hasOwnershipEvidence && Boolean(rootCauseFile));
+  const mode = exactOwned
+    ? 'EXACT'
+    : firstRuntimeRetry
+      ? 'FIRST_RUNTIME_RETRY'
+      : hasOwnershipEvidence
+        ? 'DEPENDENCY'
+        : 'EXACT';
+  const decision = owned ? 'OWNED' : 'NOT_OWNED';
+
+  console.log('[RECOVERY_OWNERSHIP_CHECK]', {
+    rootCauseFile: rootCauseFile || null,
+    changedFiles: toPathList(context.changedFiles).map(value => normalizeRecoveryPath(value, context.workspaceRoot || '')).filter(Boolean),
+    plannerWriteTargets: [...plannerWriteTargets],
+    repairTargetFile,
+    owned
+  });
+  console.log('[RECOVERY_OWNERSHIP]', {
+    mode,
+    decision
+  });
+
+  return {
+    owned,
+    ownedTargets,
+    plannerWriteTargets,
+    repairTargetFile,
+    mode,
+    decision
+  };
+}
+
+function buildTerminalValidationContext(failedTask, args = {}, result = {}) {
+  const command = String(result?.command || args?.command || failedTask?.toolArgs?.command || '').trim();
+  const stdout = String(result?.stdout || '').replace(/\r/g, '').trim();
+  const stderr = String(result?.stderr || '').replace(/\r/g, '').trim();
+  const assertion = String(result?.assertion || result?.error || '').trim();
+  const expectedValue = String(result?.expectedValue || result?.expected || '').trim();
+  const actualValue = String(result?.actualValue || result?.actual || '').trim();
+  const changedFiles = Array.isArray(result?.changedFiles) ? result.changedFiles.filter(Boolean) : [];
+  return {
+    failedCommand: command,
+    command,
+    exitCode: result?.exitCode,
+    stdout,
+    stderr,
+    assertion,
+    expectedValue,
+    actualValue,
+    changedFiles
+  };
+}
+
+function expandTerminalRecoveryAfterTestRead(planner, task, result = {}) {
+  if (!planner || !task || task.kind !== 'RECOVERY' || task.tool !== 'READ_FILE') return { expanded: false };
+  const taskNode = planner.graph?.getNode?.(task.id);
+  const alreadyHasRecoveryChildren = Boolean(taskNode?.children && planner?.taskMap && [...taskNode.children].some(childId => {
+    const child = planner.taskMap.get(childId);
+    return child && child.kind === 'RECOVERY';
+  }));
+  if (alreadyHasRecoveryChildren) {
+    return { expanded: false, alreadyPlanned: true };
+  }
+  const stage = String(task.toolArgs?.recoveryStage || '').toLowerCase();
+  const isFailingTestRead = stage === 'failing_test' || /failing test/i.test(String(task.goal || ''));
+  if (!isFailingTestRead) return { expanded: false };
+
+  const testPath = String(task.toolArgs?.path || '').trim();
+  if (!testPath || !String(result?.content || '').trim()) return { expanded: false };
+
+  const recoveryAssertionContext = buildRecoveryAssertionContext({
+    testPath,
+    testContent: result.content,
+    validationContext: task.toolArgs?.validationContext || {}
+  });
+  if (!recoveryAssertionContext) {
+    const parentId = findRecoveryParent(planner, task.id);
+    if (parentId) {
+      planner.markRecoveryFailed(parentId, `Could not extract assertion context from failing test: ${testPath}`);
+      console.log('[PLANNER_RECOVERY_ASSERTION_CONTEXT_ABORT]', {
+        recoveryTaskId: task.id,
+        parentId,
+        testPath
+      });
+    }
+    return { expanded: false, aborted: true };
+  }
+
+  const parentId = findRecoveryParent(planner, task.id);
+  const failedTask = parentId ? planner.graph.getNode(parentId) : null;
+  const preferredTarget = normalizeRecoveryPath(task.toolArgs?.repairTargetFile)
+    || resolveRecoveryTargetFile(planner, failedTask, {
+      plannerChangedFiles: planner?.changedFiles,
+      requiredFiles: planner?.requiredFiles,
+      changedFiles: task.toolArgs?.changedFiles || []
+    });
+  const explicitTarget = inferImplementationFromTestContent(testPath, result.content);
+  const implPath = preferredTarget || explicitTarget;
+  if (!implPath) {
+    console.log('[PLANNER_RECOVERY_IMPL_NOT_FOUND]', { recoveryTaskId: task.id, testPath });
+    return { expanded: false };
+  }
+
+  if (preferredTarget && explicitTarget && normalizeRecoveryPath(preferredTarget) !== normalizeRecoveryPath(explicitTarget)) {
+    console.log('[PLANNER_RECOVERY_TARGET_SUSPICIOUS]', {
+      recoveryTaskId: task.id,
+      testPath,
+      preferredTarget,
+      explicitTarget
+    });
+  }
+
+  const failedCommand = String(failedTask?.toolArgs?.command || '').trim();
+
+  const implReadTask = new Task({
+    id: generateId(),
+    kind: 'RECOVERY',
+    goal: `Recovery: read implementation imported by ${testPath}`,
+    tool: 'READ_FILE',
+    toolArgs: {
+      path: implPath,
+      recoveryStage: 'implementation',
+      testPath,
+      recoveryAssertionContext
+    },
+    dependencies: []
+  });
+
+  const repairTask = new Task({
+    id: generateId(),
+    kind: 'RECOVERY',
+    goal: `Recovery: patch implementation after reading ${testPath}`,
+    tool: 'WRITE_FILE',
+    toolArgs: {
+      path: implPath,
+      file: implPath,
+      content: '',
+      testPath,
+      sourceTestPath: testPath,
+      recoveryAssertionContext
+    },
+    dependencies: []
+  });
+
+  const rerunTask = new Task({
+    id: generateId(),
+    kind: 'RECOVERY',
+    goal: `Recovery: run command${failedCommand ? ` ${failedCommand}` : ''}`,
+    tool: 'RUN_TERMINAL',
+    toolArgs: { command: failedCommand },
+    dependencies: []
+  });
+
+  const addedIds = planner.addRecoveryTasks(task.id, [implReadTask, repairTask, rerunTask]);
+  console.log('[PLANNER_RECOVERY_CHAIN_EXPANDED]', {
+    recoveryTaskId: task.id,
+    testPath,
+    implementationPath: implPath,
+    addedIds
+  });
+
+  return { expanded: true, implementationPath: implPath, addedIds };
+}
+
+function expandTerminalRecoveryAfterModuleLoadRead(planner, task, result = {}) {
+  if (!planner || !task || task.kind !== 'RECOVERY' || task.tool !== 'READ_FILE') return { expanded: false };
+  const taskNode = planner.graph?.getNode?.(task.id);
+  const alreadyHasRecoveryChildren = Boolean(taskNode?.children && planner?.taskMap && [...taskNode.children].some(childId => {
+    const child = planner.taskMap.get(childId);
+    return child && child.kind === 'RECOVERY';
+  }));
+  if (alreadyHasRecoveryChildren) {
+    return { expanded: false, alreadyPlanned: true };
+  }
+  const stage = String(task.toolArgs?.recoveryStage || '').toLowerCase();
+  if (stage !== 'module_error' && stage !== 'root_cause') return { expanded: false };
+
+  const implPath = String(task.toolArgs?.path || '').trim();
+  if (!implPath || !String(result?.content || '').trim()) return { expanded: false };
+
+  const parentId = findRecoveryParent(planner, task.id);
+  const failedTask = parentId ? planner.graph.getNode(parentId) : null;
+  const failedCommand = String(task.toolArgs?.failedCommand || failedTask?.toolArgs?.command || '').trim();
+  const repairTask = new Task({
+    id: generateId(),
+    kind: 'RECOVERY',
+    goal: stage === 'module_error'
+      ? `Recovery: repair module export at ${implPath}`
+      : `Recovery: repair source at ${implPath}`,
+    tool: 'WRITE_FILE',
+    toolArgs: {
+      path: implPath,
+      file: implPath,
+      content: '',
+      sourceTestPath: null,
+      failureType: stage === 'module_error' ? 'module_load_error' : 'root_cause_error',
+      stacktrace: task.toolArgs?.validationContext?.stderr || task.toolArgs?.validationContext?.stdout || '',
+      failedCommand
+    },
+    dependencies: []
+  });
+
+  const rerunTask = new Task({
+    id: generateId(),
+    kind: 'RECOVERY',
+    goal: `Recovery: run command${failedCommand ? ` ${failedCommand}` : ''}`,
+    tool: 'RUN_TERMINAL',
+    toolArgs: { command: failedCommand },
+    dependencies: []
+  });
+
+  const addedIds = planner.addRecoveryTasks(task.id, [repairTask, rerunTask]);
+  console.log('[PLANNER_RECOVERY_MODULE_LOAD_EXPANDED]', {
+    recoveryTaskId: task.id,
+    implementationPath: implPath,
+    recoveryStage: stage,
+    addedIds
+  });
+
+  return { expanded: true, implementationPath: implPath, addedIds };
+}
+
+export function tryRecovery(planner, failedTask, context = {}) {
   if (!planner || !failedTask) return { recoveryStarted: false };
 
   // Only one recovery plan per failed task
   if (hasRecoveryBeenAttempted(planner, failedTask.id)) {
-    console.log('[PLANNER_RECOVERY_SKIPPED]', { id: failedTask.id, reason: 'Recovery already attempted' });
-    return { recoveryStarted: false };
+    const retryResult = failedTask.tool === 'RUN_TERMINAL'
+      ? {
+          recoveryStarted: false,
+          recoveryType: 'PROJECT_PREEXISTING_FAILURE',
+          shouldRecover: false,
+          reason: 'RETRY_BUDGET_EXHAUSTED'
+        }
+      : { recoveryStarted: false };
+    console.log('[PLANNER_RECOVERY_SKIPPED]', {
+      id: failedTask.id,
+      reason: 'Recovery already attempted',
+      recoveryType: retryResult.recoveryType || null
+    });
+    return retryResult;
   }
 
   const recoveryType = determineRecoveryType(failedTask);
@@ -101,7 +566,52 @@ export function tryRecovery(planner, failedTask) {
   }
 
   // Generate recovery plan
-  const plan = generateRecoveryPlan(failedTask);
+  const repairTargetFile = failedTask.tool === 'RUN_TERMINAL'
+    ? findRepairTargetFile(planner, failedTask, {
+        ...context,
+        selectedTarget: context.selectedTarget || null,
+        repairTargetFile: context.repairTargetFile || null,
+        plannerChangedFiles: context.plannerChangedFiles || planner?.changedFiles,
+        requiredFiles: context.requiredFiles || planner?.requiredFiles || [],
+        latestSuccessfulWritePath: context.latestSuccessfulWritePath || null,
+        activeFailedPhaseTargetFile: context.activeFailedPhaseTargetFile || null
+      })
+    : null;
+  const ownership = failedTask.tool === 'RUN_TERMINAL' && repairTargetFile
+    ? evaluateRecoveryOwnership(planner, failedTask, {
+        ...context,
+        repairTargetFile,
+        plannerChangedFiles: context.plannerChangedFiles || planner?.changedFiles
+      }, repairTargetFile)
+    : { owned: true, ownedTargets: new Set(), plannerWriteTargets: new Set(), repairTargetFile: null };
+  if (failedTask.tool === 'RUN_TERMINAL' && repairTargetFile && !ownership.owned) {
+    console.log('[RECOVERY_SKIPPED_UNRELATED_FAILURE]', {
+      rootCauseFile: repairTargetFile,
+      recoveryType: 'PROJECT_PREEXISTING_FAILURE'
+    });
+    return {
+      recoveryStarted: false,
+      recoveryType: 'PROJECT_PREEXISTING_FAILURE',
+      shouldRecover: false,
+      reason: 'UNRELATED_STACKTRACE_TARGET',
+      rootCauseFile: repairTargetFile,
+      repairTargetFile,
+      plannerWriteTargets: [...ownership.plannerWriteTargets],
+      ownedTargets: [...ownership.ownedTargets]
+    };
+  }
+  const validatedRepairTargetFile = repairTargetFile
+    ? assertValidRecoveryTaskPath(repairTargetFile, context.workspaceRoot || '', 'try_recovery_target')
+    : null;
+  const plan = generateRecoveryPlan(failedTask, {
+    repairTargetFile: validatedRepairTargetFile,
+    selectedTarget: validatedRepairTargetFile,
+    validationContext: context.validationContext || {},
+    changedFiles: context.changedFiles || [],
+    plannerChangedFiles: context.plannerChangedFiles || [],
+    requiredFiles: context.requiredFiles || [],
+    workspaceRoot: context.workspaceRoot || ''
+  });
   if (!plan || plan.tasks.length === 0) {
     console.log('[PLANNER_RECOVERY_SKIPPED]', { id: failedTask.id, reason: 'Empty recovery plan' });
     return { recoveryStarted: false };
@@ -259,6 +769,24 @@ export function notifyToolExecution(planner, toolName, args, result) {
       planner.executionHistory.recordTask(task.id);
       console.log('[PLANNER_HISTORY_RECORD]', { tool: toolName, taskId: task.id });
     }
+
+    if (isRecovery && toolName === 'READ_FILE') {
+      const expansion = expandTerminalRecoveryAfterTestRead(planner, task, result);
+      if (expansion.expanded) {
+        console.log('[PLANNER_RECOVERY_TEST_READ]', {
+          recoveryTaskId: task.id,
+          implementationPath: expansion.implementationPath
+        });
+      } else {
+        const moduleExpansion = expandTerminalRecoveryAfterModuleLoadRead(planner, task, result);
+        if (moduleExpansion.expanded) {
+          console.log('[PLANNER_RECOVERY_MODULE_LOAD_READ]', {
+            recoveryTaskId: task.id,
+            implementationPath: moduleExpansion.implementationPath
+          });
+        }
+      }
+    }
   } else {
     const error = (result?.error || `Tool ${toolName} failed`).slice(0, 200);
     planner.markFailure(task.id, error);
@@ -287,7 +815,13 @@ export function notifyToolExecution(planner, toolName, args, result) {
           failureReason: memoryState.record?.failureReason || error
         });
       }
-      const recoveryResult = tryRecovery(planner, task);
+      const recoveryResult = tryRecovery(planner, task, {
+        validationContext: buildTerminalValidationContext(task, args, result),
+        changedFiles: Array.isArray(result?.changedFiles) ? result.changedFiles.filter(Boolean) : [],
+        plannerChangedFiles: planner?.changedFiles instanceof Set ? [...planner.changedFiles] : [],
+        requiredFiles: Array.isArray(planner?.requiredFiles) ? planner.requiredFiles : [],
+        latestSuccessfulWritePath: getLatestSuccessfulWritePath(planner)
+      });
       if (recoveryResult.recoveryStarted) {
         return { handled: true, taskId: task.id, status: 'FAILED', recoveryStarted: true, recoveryTaskIds: recoveryResult.recoveryTaskIds };
       }

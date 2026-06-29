@@ -218,3 +218,37 @@ test("runAgentLoop retries and salvages plain text as final response", async () 
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }
 });
+
+test("runAgentLoop stops WRITE content regeneration after the configured retry count", async () => {
+  const workspaceRoot = await createWorkspace();
+  const targetPath = "src/agent/planner/clarificationEngine.js";
+  let callCount = 0;
+
+  try {
+    await fs.mkdir(path.join(workspaceRoot, "src", "agent", "planner"), { recursive: true });
+    const result = await runAgentLoop({
+      messages: [{
+        role: "user",
+        content: `Write file: ${targetPath} and implement analyzeClarification. Then run node --check ${targetPath}`
+      }],
+      workspaceRoot,
+      maxSteps: 12,
+      generateResponse: async () => {
+        callCount += 1;
+        return JSON.stringify({
+          content: "export function analyzeClarification(prompt) { return { needsClarification: false }; }"
+        });
+      }
+    });
+
+    assert.equal(callCount, 3, "WRITE content generation must stop after 3 failed validations");
+    assert.equal(result.success, true);
+    assert.ok(result.changedFiles.includes(targetPath));
+    const written = await fs.readFile(path.join(workspaceRoot, targetPath), "utf8");
+    assert.match(written, /export function analyzeClarification/);
+    assert.match(written, /export default analyzeClarification/);
+    assert.ok(result.toolCalls.some(call => call.tool === "RUN_TERMINAL" && call.success));
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});

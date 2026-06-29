@@ -147,6 +147,43 @@ test('Phase 4.9 inline run command is extracted, planned, and executed', async (
   }
 });
 
+test('Phase 4.19 explicit validation command ignores generic example Run npm test text', () => {
+  const prompt = [
+    'Implement Phase 4.19.',
+    'After implementation run:',
+    '',
+    'npm test -- plannerPhase419',
+    '',
+    'For example, Run npm test should not be treated as a required command.'
+  ].join('\n');
+
+  assert.deepEqual(extractCommands(prompt), ['npm test -- plannerPhase419']);
+});
+
+test('Phase 4.19 only explicit structured commands are extracted, no generic npm test from bare Run npm test', () => {
+  const prompt = [
+    'Run npm test.',
+    'After implementation run:',
+    '',
+    'npm test -- plannerPhase419'
+  ].join('\n');
+
+  const commands = extractCommands(prompt);
+  assert.deepEqual(commands, ['npm test -- plannerPhase419']);
+
+  const { tasks } = buildPlan(prompt, {
+    taskType: 'CODING',
+    taskMode: 'write_and_run',
+    requiredCommands: commands,
+    requestedFiles: []
+  });
+
+  assert.deepEqual(
+    tasks.filter(task => task.tool === 'RUN_TERMINAL').map(task => task.toolArgs.command),
+    ['npm test -- plannerPhase419']
+  );
+});
+
 test('Phase 4.9 failed validation still synthesizes final text and reports failed command', async () => {
   const root = await createFailingValidationWorkspace();
   const prompt = 'Read package.json.\n\nThen run:\n\nnpm test\n\nDo not modify any files. Planner must estimate cost before executing tasks.';

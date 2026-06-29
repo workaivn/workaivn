@@ -385,8 +385,22 @@ export function expandPlannerTasks(planner, { goal, projectType, entryFiles, sca
       }
     }
 
-    // Create RUN_TERMINAL tasks — keep duplicates until ExecutionMemory decides reuse
+    // Create RUN_TERMINAL tasks — skip if a task for the same command already exists
+    const existingCommands = new Set(
+      planner.graph.allNodes()
+        .filter(n => n.tool === 'RUN_TERMINAL')
+        .map(n => String(n.toolArgs?.command || '').trim().toLowerCase())
+    );
     for (const cmd of commands) {
+      const cmdKey = String(cmd || '').trim().toLowerCase();
+      if (existingCommands.has(cmdKey)) {
+        console.log('[PLANNER_TASK_SKIP_DUPLICATE]', {
+          tool: 'RUN_TERMINAL',
+          command: cmd,
+          reason: 'already exists in planner graph'
+        });
+        continue;
+      }
       const taskId = crypto.randomUUID();
       const deps = generateTaskIds.length > 0 ? [...generateTaskIds] : [];
       const task = new Task({
@@ -400,6 +414,7 @@ export function expandPlannerTasks(planner, { goal, projectType, entryFiles, sca
       });
       planner.addTask(task);
       expanded.push(task);
+      existingCommands.add(cmdKey);
       console.log('[PLANNER_TASK_INJECTED]', {
         taskId: task.id,
         tool: 'RUN_TERMINAL',

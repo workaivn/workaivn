@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { resolveWorkspacePathSafe } from "./workspace.js";
+import { isSameCommand, matchValidationCommand } from "./validationCommandMatcher.js";
 const DEBUG = () => process.env.DEBUG_AGENT === "true" || process.env.WORKAI_AGENT_DEBUG === "true";
 
 const MEANINGFUL_EXTENSIONS = new Set([
@@ -11,6 +12,14 @@ const MEANINGFUL_EXTENSIONS = new Set([
 
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
+}
+
+function normalizeGatePath(value) {
+  return String(value || "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .toLowerCase()
+    .trim();
 }
 
 function isMeaningfulFile(file) {
@@ -30,45 +39,13 @@ function classifyLayer(file) {
 }
 
 function getValidationMatch(command) {
-  const cmd = String(command || "").trim();
-  const rules = [
-    { rule: "npm-test", rx: /^npm\s+(?:--silent|-s\s+)?test\b/i },
-    { rule: "npm-run", rx: /^npm\s+(?:--silent|-s\s+)?run\s+[A-Za-z0-9:_\-]+\b/i },
-    { rule: "npm-build", rx: /^npm\s+(?:--silent|-s\s+)?run\s+build\b/i },
-
-    { rule: "pnpm-test", rx: /^pnpm\s+(?:--silent|-s\s+)?test\b/i },
-    { rule: "pnpm-run", rx: /^pnpm\s+(?:--silent|-s\s+)?run\s+[A-Za-z0-9:_\-]+\b/i },
-    { rule: "pnpm-build", rx: /^pnpm\s+(?:--silent|-s\s+)?build\b/i },
-
-    { rule: "yarn-test", rx: /^yarn\s+(?:--silent|-s\s+)?test\b/i },
-    { rule: "yarn-run", rx: /^yarn\s+(?:--silent|-s\s+)?run\s+[A-Za-z0-9:_\-]+\b/i },
-    { rule: "yarn-build", rx: /^yarn\s+(?:--silent|-s\s+)?build\b/i },
-
-    { rule: "node-check", rx: /\bnode\s+--check\b/i },
-    { rule: "node-file", rx: /^node\s+[^\s]+\.m?js\b/i },
-
-    { rule: "python-script", rx: /^python\s+[^-\s][^\n]*\.py\b/i },
-    { rule: "python3-script", rx: /^python3\s+[^-\s][^\n]*\.py\b/i },
-    { rule: "pytest", rx: /\bpytest\b/i },
-    { rule: "python-m-pytest", rx: /^python\s+-m\s+pytest\b/i },
-
-    { rule: "cargo-test", rx: /\bcargo\s+test\b/i },
-    { rule: "cargo-check", rx: /\bcargo\s+check\b/i },
-    { rule: "go-test", rx: /\bgo\s+test\b/i },
-    { rule: "dotnet-test", rx: /\bdotnet\s+test\b/i },
-    { rule: "dotnet-build", rx: /\bdotnet\s+build\b/i },
-    { rule: "mvn-test", rx: /\bmvn\s+test\b/i },
-    { rule: "gradle-test", rx: /\bgradle\w*\s+test\b/i },
-    { rule: "gradle-build", rx: /\bgradle\w*\s+build\b/i },
-
-    { rule: "flutter-test", rx: /^flutter\s+test\b/i },
-    { rule: "flutter-analyze", rx: /^flutter\s+analy[sz]e\b/i },
-    { rule: "dart-test", rx: /^dart\s+test\b/i }
-  ];
-  for (const { rule, rx } of rules) {
-    if (rx.test(cmd)) return { matched: true, rule };
-  }
-  return { matched: false, rule: "" };
+  const summary = matchValidationCommand({
+    terminalCommands: [{ command, success: true, result: { exitCode: 0 } }]
+  });
+  return {
+    matched: summary.validationPassed,
+    rule: summary.matchedCommands[0]?.matchType || (summary.validationPassed ? "heuristic" : "")
+  };
 }
 
 function isValidationCommand(command) {
@@ -134,6 +111,7 @@ export async function evaluateQualityGate(input = {}) {
       checks: [{ id: "qa_final", passed: !!String(finalText || "").trim(), message: "Final answer must be present." }],
       failures: String(finalText || "").trim() ? [] : ["No final text"],
       feedback: String(finalText || "").trim() ? "Quality gate passed." : "No final text",
+      validationSummary: null,
       evidence: { filesChanged: [], filesRead: [], layers: [] }
     };
     if (DEBUG()) console.log("[QUALITY_GATE][OUTPUT]", { passed: out.passed, score: out.score, failures: out.failures });
@@ -227,6 +205,7 @@ export async function evaluateQualityGate(input = {}) {
         ...(!answersObjective ? ["Final does not answer the requested question."] : [])
       ],
       feedback: passed ? "Quality gate passed." : "Quality gate failed: ensure requested files are read and provide a final answer.",
+      validationSummary: null,
       evidence: {
         filesRead: unique(successfulReads.map(call => call.result?.file || call.args?.path)),
         terminalCommands: terminalCalls.map(call => call.args?.command).filter(Boolean),
@@ -246,9 +225,32 @@ export async function evaluateQualityGate(input = {}) {
     call.success && ["READ_FILE", "LIST_FILES", "SEARCH_CODE", "SEARCH_SYMBOL"].includes(call.tool)
   );
   const terminalCalls = toolCalls.filter(call => call.tool === "RUN_TERMINAL");
-  const successfulCommands = terminalCalls.filter(call => call.success && isValidationCommand(call.args?.command));
+  const validationSummary = matchValidationCommand({
+    requiredCommands,
+    terminalCommands: terminalCalls,
+    projectContext: workspaceRoot,
+    packageManager: criteria.packageManager || ""
+  });
+  const successfulCommands = validationSummary.hasRequiredCommands
+    ? terminalCalls.filter(call =>
+      call.success === true &&
+      (call.result?.exitCode === 0 || call.result?.exitCode === undefined || call.result?.exitCode === null) &&
+      validationSummary.matchedCommands.some(match =>
+        isSameCommand(match.executedCommand, String(call.args?.command || call.result?.command || ""))
+      )
+    )
+    : terminalCalls.filter(call => call.success && isValidationCommand(call.args?.command));
   const successfulValidations = toolCalls.filter(call => call.tool === "VALIDATE_PATCH" && call.success);
   const failedValidations = toolCalls.filter(call => call.tool === "VALIDATE_PATCH" && !call.success);
+  const approvedWriteTargets = new Set(
+    [
+      ...(criteria.requestedFiles || []),
+      ...(criteria.plannerWriteTargets || [])
+    ]
+      .map(normalizeGatePath)
+      .filter(Boolean)
+  );
+  const changedFileTargets = unique(changedFiles).map(normalizeGatePath).filter(Boolean);
   const packageJsonInspected = successfulReads.some(call =>
     /(^|\/)package\.json$/i.test(call.result?.file || call.args?.path || "")
   );
@@ -314,7 +316,12 @@ export async function evaluateQualityGate(input = {}) {
     // Emit VALIDATION_MATCH debug for each terminal command
     const validationMatches = terminalCalls.map(c => {
       const cmd = c.args?.command || "";
-      const m = getValidationMatch(cmd);
+      const m = validationSummary.hasRequiredCommands
+        ? {
+            matched: validationSummary.matchedCommands.some(match => isSameCommand(match.executedCommand, cmd)),
+            rule: validationSummary.matchedCommands.some(match => isSameCommand(match.executedCommand, cmd)) ? "required" : ""
+          }
+        : getValidationMatch(cmd);
       console.log("[VALIDATION_MATCH]", { command: cmd, matched: m.matched, rule: m.rule });
       return { command: cmd, matched: m.matched, rule: m.rule };
     });
@@ -353,14 +360,17 @@ export async function evaluateQualityGate(input = {}) {
 
     check(
       "patch_validation",
-      (meaningfulFiles.length === 0) || (
-        successfulValidations.length > 0 &&
-        failedValidations.length === 0
+      (changedFileTargets.length === 0) || (
+        validationSummary.validationPassed === true &&
+        changedFileTargets.every(file => approvedWriteTargets.has(file))
       ),
       "Changed files must pass patch validation.",
       {
-        passed: successfulValidations.map(call => call.args?.file),
-        failed: failedValidations.map(call => call.args?.file)
+        requestedFiles: criteria.requestedFiles || [],
+        plannerWriteTargets: criteria.plannerWriteTargets || [],
+        changedFiles: changedFileTargets,
+        validationPassed: validationSummary.validationPassed,
+        matchedValidationCommands: validationSummary.matchedCommands.map(match => match.executedCommand)
       }
     );
 
@@ -393,8 +403,8 @@ export async function evaluateQualityGate(input = {}) {
         for (const cmd of requiredCommands) {
           const matched = terminalCalls.some(c =>
             c.success &&
-            String(c.args?.command || "").trim() === cmd &&
-            (c.result?.exitCode === 0 || c.result?.exitCode === undefined)
+            (c.result?.exitCode === 0 || c.result?.exitCode === undefined || c.result?.exitCode === null) &&
+            validationSummary.matchedCommands.some(match => isSameCommand(match.executedCommand, String(c.args?.command || c.result?.command || "")) && isSameCommand(match.requiredCommand, cmd))
           );
           check(
             `required_command_${cmd.replace(/[^a-zA-Z0-9]/g, '_')}`,
@@ -518,6 +528,7 @@ export async function evaluateQualityGate(input = {}) {
     feedback: failures.length
       ? `Quality gate failed:\n- ${failures.join("\n- ")}`
       : "Quality gate passed.",
+    validationSummary,
     evidence: {
       meaningfulFiles,
       filesChanged: unique(changedFiles),
@@ -530,7 +541,9 @@ export async function evaluateQualityGate(input = {}) {
   try {
     const filesRead = unique(successfulReads.map(call => call.result?.file || call.args?.path));
     const terminalCommands = terminalCalls.map(call => call.args?.command).filter(Boolean);
-    const matchedValidationCommands = terminalCommands.filter(cmd => getValidationMatch(cmd).matched);
+    const matchedValidationCommands = validationSummary.hasRequiredCommands
+      ? validationSummary.matchedCommands.map(match => match.executedCommand)
+      : terminalCommands.filter(cmd => getValidationMatch(cmd).matched);
     const reasoning = {
       taskType,
       taskClass: criteria.taskClass || null,

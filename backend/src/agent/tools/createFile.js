@@ -2,13 +2,13 @@ import fs from "fs/promises";
 import pathModule from "path";
 import { resolveWorkspacePathSafe } from "../workspace.js";
 
-export async function createFileTool({ path, content = "", activeFiles = [], workspaceRoot }) {
+export async function createFileTool({ path, content = "", activeFiles = [], workspaceRoot, layout = null }) {
   if (!String(path || "").trim()) {
     return { success: false, error: "CREATE_FILE requires path" };
   }
   if (workspaceRoot) {
     try {
-      const resolved = await resolveWorkspacePathSafe(workspaceRoot, path, { allowMissing: true });
+      const resolved = await resolveWorkspacePathSafe(workspaceRoot, path, { allowMissing: true, layout });
       try {
         const stat = await fs.stat(resolved.absolutePath);
         if (stat && stat.isFile()) {

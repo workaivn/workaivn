@@ -3,10 +3,10 @@ import path from "path";
 import { resolveWorkspacePathSafe, listWorkspaceFiles } from "../workspace.js";
 const DEBUG = () => process.env.DEBUG_AGENT === "true" || process.env.WORKAI_AGENT_DEBUG === "true";
 
-export async function readFileTool({ path, activeFiles = [], workspaceRoot }) {
+export async function readFileTool({ path, activeFiles = [], workspaceRoot, layout = null }) {
   if (workspaceRoot) {
     try {
-      const resolved = await resolveWorkspacePathSafe(workspaceRoot, path);
+      const resolved = await resolveWorkspacePathSafe(workspaceRoot, path, { layout });
       const content = await fs.readFile(resolved.absolutePath, "utf8");
       if (DEBUG()) console.log("[READ_FILE]", { path: resolved.relativePath, length: content.length });
       return {

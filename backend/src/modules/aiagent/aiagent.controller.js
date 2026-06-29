@@ -27,11 +27,21 @@ const FALLBACK_ERROR_KEYWORDS = [
 ];
 
 function isFallbackError(message) {
+  if (message instanceof FallbackError) return true;
+  if (message && typeof message === "object" && String(message.name || "").toLowerCase() === "fallbackerror") return true;
   const lower = String(message ?? "").toLowerCase();
   return FALLBACK_ERROR_KEYWORDS.some(kw => lower.includes(kw));
 }
 
 const FATAL_ERROR_CODES = new Set(["NO_CREDIT", "MODEL_NOT_FOUND"]);
+
+export class FallbackError extends Error {
+  constructor(message = "Fallback error") {
+    super(message);
+    this.name = "FallbackError";
+    this.code = "FALLBACK_ERROR";
+  }
+}
 
 function classifyProviderError(message) {
   const lower = String(message ?? "").toLowerCase();
@@ -289,6 +299,7 @@ async function executeAgentRun({
   run.toolCalls = [];
   run.executionEvents = [];
   run.diffSummary = { stat: "", numstat: "" };
+  run.plannerMetrics = {};
   await run.save();
 
   if (process.env.DEBUG_AGENT === "true" || process.env.WORKAI_AGENT_DEBUG === "true") {
@@ -380,6 +391,7 @@ async function executeAgentRun({
     run.toolCalls = [];
     run.executionEvents = [];
     run.diffSummary = { stat: "", numstat: "" };
+    run.plannerMetrics = {};
     run.qualityGate = {
       passed: !!finalText,
       score: finalText ? 100 : 0,
@@ -510,6 +522,20 @@ async function executeAgentRun({
     sanitizedChanged = filtered;
   }
 
+  let sanitizedValidated = Array.isArray(result.validatedFiles) ? result.validatedFiles : [];
+  if (workspace?.rootPath) {
+    const filtered = [];
+    for (const f of sanitizedValidated) {
+      try {
+        await resolveWorkspacePathSafe(workspace.rootPath, f);
+        filtered.push(f);
+      } catch {
+        // drop
+      }
+    }
+    sanitizedValidated = filtered;
+  }
+
   // Recompute diff summary strictly from sanitized files within workspace
   let sanitizedDiff = result.diffSummary || {};
   if (workspace?.rootPath) {
@@ -517,13 +543,12 @@ async function executeAgentRun({
   }
 
   // Respect needs_continue status for timeouts/continuations
+  const completionResult = deriveRunCompletionResult(result);
   run.status = result.status === "error"
     ? "error"
     : (result.status === "needs_continue"
       ? "needs_continue"
-      : result.qualityGate?.passed === true
-        ? "completed"
-        : "needs_revision");
+      : completionResult.finalStatus);
   run.outputText = result.final || "";
   run.stopReason = result.stopReason || run.stopReason || null;
   run.rawResponse = {
@@ -534,15 +559,18 @@ async function executeAgentRun({
     ? result.error || "Agent implementation needs revision"
     : null;
   run.changedFiles = sanitizedChanged;
+  run.validatedFiles = sanitizedValidated;
   run.toolCalls = result.toolCalls || [];
   run.executionEvents = result.events || [];
   run.diffSummary = sanitizedDiff;
+  run.plannerMetrics = result.plannerMetrics || {};
   run.qualityGate = result.qualityGate || {};
   run.acceptanceCriteria = result.acceptanceCriteria || {};
   run.currentStep = result.history?.length || 0;
   run.currentTool = "";
   run.executionSummary = {
     changedFileCount: run.changedFiles.length,
+    validatedFileCount: run.validatedFiles.length,
     toolCallCount: run.toolCalls.length,
     eventCount: run.executionEvents.length,
     final: result.final || "",
@@ -554,12 +582,12 @@ async function executeAgentRun({
   run.completedAt = new Date();
   await run.save();
   console.log('[RUN_COMPLETION]', {
-    savedStatus: run.status,
-    savedSuccess: run.status === "completed" && run.qualityGate?.passed === true
+    savedStatus: completionResult.savedStatus,
+    savedSuccess: completionResult.savedSuccess
   });
 
   return {
-    success: run.status === "completed" && run.qualityGate?.passed === true,
+    success: completionResult.savedSuccess,
     error: run.errorMessage,
     run
   };
@@ -569,6 +597,22 @@ function taskStatusForRun(run) {
   if (run.status === "completed") return "completed";
   if (run.status === "error") return "error";
   return "needs_revision";
+}
+
+export function deriveRunCompletionResult(result = {}) {
+  const qualityGatePassed = result.qualityGate?.passed === true;
+  const completionResult = result.completionResult || {
+    plannerCompleted: result.status === "completed",
+    validationPassed: qualityGatePassed,
+    qualityGatePassed,
+    finalStatus: qualityGatePassed ? "completed" : "needs_revision",
+    success: result.status === "completed" && qualityGatePassed
+  };
+  return {
+    ...completionResult,
+    savedStatus: completionResult.finalStatus,
+    savedSuccess: completionResult.success
+  };
 }
 
 /**
@@ -1346,6 +1390,7 @@ export async function getAgentRun(req, res) {
         terminalCommands,
         toolCalls,
         executionEvents,
+        plannerMetrics: run.plannerMetrics || {},
         errors,
         qualityGate: run.qualityGate || {},
         outputText: run.outputText || "",

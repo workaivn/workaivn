@@ -29,7 +29,7 @@ const TASK_TYPE_PATTERNS = {
 };
 
 const WRITE_INTENT_PATTERNS = [
-  /\b(?:create|build|implement|make|add|update|modify|edit|replace|write|fix|patch|change|rename|delete|remove|refactor|develop)\b/i,
+  /\b(?:create|build|implement|make|add|update|modify|edit|replace|write|fix|patch|change|rename|delete|remove|refactor|develop|append|prepend|insert)\b/i,
   /\blanding\s+page\b/i,
   /\b(?:dashboard|login|crud|feature|api|component|page|screen|form)\b/i
 ];
@@ -201,6 +201,7 @@ export function buildAcceptanceCriteria(prompt = "") {
   const requestedFiles = (() => {
     const files = new Set();
     const text = objective;
+    const isScriptInstruction = /\b(?:add|set|update|modify|change)\s+(?:npm\s+)?script\b/i.test(text);
     const FILE_RX = /\b([A-Za-z0-9_./\\-]+\.(?:json|js|jsx|mjs|cjs|ts|tsx|css|scss|html|md|txt|yml|yaml))\b/gi;
     let m;
     while ((m = FILE_RX.exec(text)) !== null) {
@@ -208,6 +209,11 @@ export function buildAcceptanceCriteria(prompt = "") {
         .replace(/\\\\/g, "/")
         .replace(/\\/g, "/")
         .replace(/^\.\//, "");
+      // Script values like "node src/app.js" should not be promoted to workspace file targets.
+      // Those are validation/runtime commands, not files the planner should edit.
+      if (isScriptInstruction && /[\\/]/.test(fp) && !/(^|\/)package\.json$/i.test(fp)) {
+        continue;
+      }
       files.add(fp);
     }
     return [...files];

@@ -21,6 +21,7 @@ import { searchSymbolTool }
 
 import { validatePatchTool }
   from "./tools/validatePatch.js";
+import { normalizeWorkspaceRelativePath } from "./workspace.js";
 
 const tools = {
 
@@ -48,6 +49,42 @@ const tools = {
 
 };
 
+function normalizeToolArgs(toolName, args = {}, context = {}) {
+  const workspaceRoot = String(context?.workspaceRoot || "").trim();
+  const normalizedArgs = { ...(args || {}) };
+
+  const pathKeysByTool = {
+    READ_FILE: ["path"],
+    WRITE_FILE: ["path", "file", "target"],
+    APPLY_PATCH: ["path", "file", "target"],
+    VALIDATE_PATCH: ["path", "file", "target"],
+    CREATE_FILE: ["path", "file", "target"],
+    DELETE_FILE: ["path", "file", "target"]
+  };
+
+  const keys = pathKeysByTool[toolName] || [];
+  for (const key of keys) {
+    if (normalizedArgs[key] == null) continue;
+    const candidate = normalizeWorkspaceRelativePath(normalizedArgs[key], workspaceRoot);
+    if (!candidate) {
+      throw new Error("File path escapes selected workspace and must be relative to the selected workspace");
+    }
+    normalizedArgs[key] = candidate;
+  }
+
+  if (normalizedArgs.path == null && normalizedArgs.file != null) {
+    normalizedArgs.path = normalizedArgs.file;
+  }
+  if (normalizedArgs.file == null && normalizedArgs.path != null) {
+    normalizedArgs.file = normalizedArgs.path;
+  }
+  if (normalizedArgs.target == null && normalizedArgs.path != null) {
+    normalizedArgs.target = normalizedArgs.path;
+  }
+
+  return normalizedArgs;
+}
+
 export async function executeTool(
   toolName,
   args,
@@ -70,12 +107,14 @@ export async function executeTool(
     const normalizedContext = Array.isArray(context)
       ? { activeFiles: context }
       : context;
+    const normalizedArgs = normalizeToolArgs(toolName, args, normalizedContext);
 
     const result = await tool({
-      ...args,
+      ...normalizedArgs,
       activeFiles: normalizedContext.activeFiles || [],
       workspaceId: normalizedContext.workspaceId,
-      workspaceRoot: normalizedContext.workspaceRoot
+      workspaceRoot: normalizedContext.workspaceRoot,
+      layout: normalizedContext.layout || null
     });
 
     return result;
