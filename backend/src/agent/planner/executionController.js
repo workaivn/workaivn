@@ -2,13 +2,16 @@ import { TaskStatus } from './plannerTypes.js';
 import { Task } from './task.js';
 import { executeTool } from '../toolExecutor.js';
 import { generateRecoveryPlan, determineRecoveryType, inferImplementationFromTestContent, buildRecoveryAssertionContext, analyzeValidationFailure, selectBestRecoveryFrame, assertValidRecoveryTaskPath, extractWorkspaceRelativeStacktracePath } from './recoveryPlanner.js';
+import { evaluateExecutionStrategy } from '../strategy/index.js';
 import { normalizeWorkspaceRelativePath } from '../workspace.js';
 import { generateId } from './plannerUtils.js';
 import { getTaskTimeoutMs, getMaxAttempts, markTaskProgress, markTaskStall, shouldStallTask, buildTaskTimeoutReason } from './taskTimeout.js';
 import { getTaskPriority, pickNextPlannerTask } from './priorityQueue.js';
+import { truncateRunText } from '../runPayload.js';
 
 const WRITE_TOOLS = new Set(['APPLY_PATCH', 'WRITE_FILE']);
 const READ_TOOLS = new Set(['READ_FILE', 'LIST_FILES', 'SEARCH_CODE', 'SEARCH_SYMBOL']);
+const RECOVERY_TARGET_MISMATCH_BLOCKED = '__RECOVERY_TARGET_MISMATCH_BLOCKED__';
 
 function _goalHasWriteIntent(goal) {
   return /\b(?:create|write|add|implement|generate|build|construct|modify|update|change|edit|patch|replace|refactor|fix|delete|remove)\b/i.test(String(goal || ''));
@@ -31,13 +34,22 @@ function _toolMatchesGoal(toolName, goal) {
   return false;
 }
 
-function findMatchingTask(planner, toolName, includeSuccess = false) {
+function findMatchingTask(planner, toolName, includeSuccess = false, preferredTaskId = null) {
   if (!planner) return null;
   const all = planner.graph.allNodes();
   if (all.length === 0) return null;
   const validStatuses = includeSuccess
     ? [TaskStatus.PENDING, TaskStatus.READY, TaskStatus.SUCCESS, TaskStatus.RECOVERING]
     : [TaskStatus.PENDING, TaskStatus.READY];
+
+  if (preferredTaskId) {
+    const preferred = planner.graph.getNode(preferredTaskId);
+    if (preferred && validStatuses.includes(preferred.status)) {
+      if (preferred.tool === toolName) return preferred;
+      if (preferred.tool === 'WRITE_FILE' && toolName === 'APPLY_PATCH') return preferred;
+    }
+  }
+
   // Prefer exact tool match
   const exact = all.filter(t =>
     validStatuses.includes(t.status) && t.tool === toolName
@@ -66,8 +78,14 @@ function findMatchingTask(planner, toolName, includeSuccess = false) {
   return null;
 }
 
-function findRecoveryTask(planner, toolName) {
+function findRecoveryTask(planner, toolName, preferredTaskId = null) {
   if (!planner) return null;
+  if (preferredTaskId) {
+    const preferred = planner.graph.getNode(preferredTaskId);
+    if (preferred && preferred.kind === 'RECOVERY' && preferred.tool === toolName) {
+      return preferred;
+    }
+  }
   const all = planner.graph.allNodes();
   const recovery = all.filter(t =>
     t.kind === 'RECOVERY' &&
@@ -213,16 +231,34 @@ function resolveRecoveryTargetFile(planner, failedTask, context = {}) {
     '',
     workspaceRoot
   );
+  const preservedTarget = normalizeRecoveryPath(
+    context.activeFailedPhaseTargetFile ||
+    context.repairTargetFile ||
+    context.selectedTarget ||
+    getActiveFailedPhaseTargetFile(planner, failedTask, workspaceRoot) ||
+    '',
+    workspaceRoot
+  );
+
+  if (preservedTarget && runtimeTarget && runtimeTarget !== preservedTarget) {
+    console.log('[RECOVERY_TARGET_MISMATCH_BLOCKED]', {
+      expected: preservedTarget,
+      actual: runtimeTarget,
+      recoveryTaskId: failedTask?.id || null
+    });
+    return RECOVERY_TARGET_MISMATCH_BLOCKED;
+  }
+
   const implementationCandidates = [
     normalizeRecoveryPath(context.implementationModule, workspaceRoot),
-    normalizeRecoveryPath(context.activeFailedPhaseTargetFile, workspaceRoot) || getActiveFailedPhaseTargetFile(planner, failedTask, workspaceRoot),
+    preservedTarget,
     normalizeRecoveryPath(context.latestSuccessfulWritePath, workspaceRoot) || getLatestSuccessfulWritePath(planner, workspaceRoot),
     pickLastRecoveryPath(context.plannerChangedFiles, workspaceRoot) || pickLastRecoveryPath(planner?.changedFiles, workspaceRoot),
     normalizeRecoveryPath(context.requiredFiles?.[0] || planner?.requiredFiles?.[0] || '', workspaceRoot)
   ].filter(Boolean);
   const implementationTarget = implementationCandidates[0] || null;
   const changedTarget = pickLastRecoveryPath(context.changedFiles, workspaceRoot) || pickLastRecoveryPath(context.validationContext?.changedFiles, workspaceRoot);
-  const selectedTarget = runtimeTarget || implementationTarget || changedTarget || null;
+  const selectedTarget = runtimeTarget || preservedTarget || implementationTarget || changedTarget || null;
   const selectionReason = runtimeTarget
     ? 'STACKTRACE_ROOT_CAUSE'
     : failureType === 'AssertionError'
@@ -310,26 +346,23 @@ function collectPlannerWriteTargets(planner, failedTask, context = {}) {
 function evaluateRecoveryOwnership(planner, failedTask, context = {}, rootCauseFile = null) {
   const { ownedTargets, plannerWriteTargets } = collectPlannerWriteTargets(planner, failedTask, context);
   const repairTargetFile = normalizeRecoveryPath(context.repairTargetFile, context.workspaceRoot || '') || null;
-  const hasOwnershipEvidence = ownedTargets.size > 0 || plannerWriteTargets.size > 0;
-  const exactOwned = Boolean(rootCauseFile) && ownedTargets.has(rootCauseFile);
-  const firstRuntimeRetry = Boolean(rootCauseFile)
-    && failedTask?.tool === 'RUN_TERMINAL'
-    && plannerWriteTargets.size > 0
-    && !hasRecoveryBeenAttempted(planner, failedTask.id);
-  const owned = exactOwned || firstRuntimeRetry || (!hasOwnershipEvidence && Boolean(rootCauseFile));
-  const mode = exactOwned
-    ? 'EXACT'
-    : firstRuntimeRetry
-      ? 'FIRST_RUNTIME_RETRY'
-      : hasOwnershipEvidence
-        ? 'DEPENDENCY'
-        : 'EXACT';
+  const requestedFiles = new Set(toPathList(context.requiredFiles).map(value => normalizeRecoveryPath(value, context.workspaceRoot || '')).filter(Boolean));
+  const packageJsonRequested = requestedFiles.has('package.json');
+  const exactOwned = Boolean(rootCauseFile) && (
+    ownedTargets.has(rootCauseFile) ||
+    plannerWriteTargets.has(rootCauseFile) ||
+    requestedFiles.has(rootCauseFile) ||
+    (packageJsonRequested && rootCauseFile === 'package.json')
+  );
+  const owned = exactOwned;
+  const mode = exactOwned ? 'EXACT' : 'OUTSIDE_REQUESTED_SCOPE';
   const decision = owned ? 'OWNED' : 'NOT_OWNED';
 
   console.log('[RECOVERY_OWNERSHIP_CHECK]', {
     rootCauseFile: rootCauseFile || null,
     changedFiles: toPathList(context.changedFiles).map(value => normalizeRecoveryPath(value, context.workspaceRoot || '')).filter(Boolean),
     plannerWriteTargets: [...plannerWriteTargets],
+    requestedFiles: [...requestedFiles],
     repairTargetFile,
     owned
   });
@@ -350,11 +383,11 @@ function evaluateRecoveryOwnership(planner, failedTask, context = {}, rootCauseF
 
 function buildTerminalValidationContext(failedTask, args = {}, result = {}) {
   const command = String(result?.command || args?.command || failedTask?.toolArgs?.command || '').trim();
-  const stdout = String(result?.stdout || '').replace(/\r/g, '').trim();
-  const stderr = String(result?.stderr || '').replace(/\r/g, '').trim();
-  const assertion = String(result?.assertion || result?.error || '').trim();
-  const expectedValue = String(result?.expectedValue || result?.expected || '').trim();
-  const actualValue = String(result?.actualValue || result?.actual || '').trim();
+  const stdout = truncateRunText(String(result?.stdout || '').replace(/\r/g, '').trim(), 'recovery.validationContext.stdout');
+  const stderr = truncateRunText(String(result?.stderr || '').replace(/\r/g, '').trim(), 'recovery.validationContext.stderr');
+  const assertion = truncateRunText(String(result?.assertion || result?.error || '').trim(), 'recovery.validationContext.assertion');
+  const expectedValue = truncateRunText(String(result?.expectedValue || result?.expected || '').trim(), 'recovery.validationContext.expectedValue');
+  const actualValue = truncateRunText(String(result?.actualValue || result?.actual || '').trim(), 'recovery.validationContext.actualValue');
   const changedFiles = Array.isArray(result?.changedFiles) ? result.changedFiles.filter(Boolean) : [];
   return {
     failedCommand: command,
@@ -541,6 +574,55 @@ function expandTerminalRecoveryAfterModuleLoadRead(planner, task, result = {}) {
 export function tryRecovery(planner, failedTask, context = {}) {
   if (!planner || !failedTask) return { recoveryStarted: false };
 
+  const strategyDecision = evaluateExecutionStrategy({
+    failedTask,
+    validationResult: context.validationContext || {},
+    plannerMetadata: {
+      parallelAllowed: planner?.parallelMode !== false,
+      requiredCommands: context.requiredFiles || planner?.requiredCommands || []
+    },
+    workspaceMetadata: {
+      workspaceRoot: context.workspaceRoot || '',
+      readOnly: context.readOnly === true || false,
+      packageManagerAvailable: context.packageManagerAvailable !== false,
+      frameworkRunnable: context.frameworkRunnable !== false,
+      terminalAvailable: context.terminalAvailable !== false,
+      packageEditable: context.packageEditable !== false,
+      frameworkSetupAllowed: context.frameworkSetupAllowed === true,
+      validationRequired: context.validationRequired !== false
+    },
+    projectScan: context.projectScan || {},
+    requiredCommands: context.requiredCommands || planner?.requiredCommands || []
+  });
+  console.log('[EXECUTION_STRATEGY_DECISION_APPLIED]', {
+    taskId: failedTask.id,
+    decision: strategyDecision.decision,
+    owner: strategyDecision.owner,
+    retryAllowed: strategyDecision.retryAllowed,
+    setupRequired: strategyDecision.setupRequired,
+    packageRequired: strategyDecision.packageRequired,
+    commandRequired: strategyDecision.commandRequired,
+    recoveryRequired: strategyDecision.recoveryRequired,
+    reason: strategyDecision.reason
+  });
+
+  if (strategyDecision.owner === 'MODEL' && strategyDecision.retryAllowed) {
+    return {
+      recoveryStarted: false,
+      shouldRetryModel: true,
+      retryAllowed: true,
+      strategyDecision
+    };
+  }
+  if (strategyDecision.decision === 'Block' && failedTask.tool !== 'RUN_TERMINAL') {
+    return {
+      recoveryStarted: false,
+      shouldRecover: false,
+      reason: strategyDecision.reason,
+      strategyDecision
+    };
+  }
+
   // Only one recovery plan per failed task
   if (hasRecoveryBeenAttempted(planner, failedTask.id)) {
     const retryResult = failedTask.tool === 'RUN_TERMINAL'
@@ -562,7 +644,7 @@ export function tryRecovery(planner, failedTask, context = {}) {
   const recoveryType = determineRecoveryType(failedTask);
   if (!recoveryType) {
     console.log('[PLANNER_RECOVERY_SKIPPED]', { id: failedTask.id, tool: failedTask.tool, reason: 'No recovery strategy available' });
-    return { recoveryStarted: false };
+    return { recoveryStarted: false, strategyDecision };
   }
 
   // Generate recovery plan
@@ -577,6 +659,14 @@ export function tryRecovery(planner, failedTask, context = {}) {
         activeFailedPhaseTargetFile: context.activeFailedPhaseTargetFile || null
       })
     : null;
+  if (repairTargetFile === RECOVERY_TARGET_MISMATCH_BLOCKED) {
+    return {
+      recoveryStarted: false,
+      shouldRecover: false,
+      reason: 'RECOVERY_TARGET_MISMATCH_BLOCKED',
+      strategyDecision
+    };
+  }
   const ownership = failedTask.tool === 'RUN_TERMINAL' && repairTargetFile
     ? evaluateRecoveryOwnership(planner, failedTask, {
         ...context,
@@ -597,7 +687,8 @@ export function tryRecovery(planner, failedTask, context = {}) {
       rootCauseFile: repairTargetFile,
       repairTargetFile,
       plannerWriteTargets: [...ownership.plannerWriteTargets],
-      ownedTargets: [...ownership.ownedTargets]
+      ownedTargets: [...ownership.ownedTargets],
+      strategyDecision
     };
   }
   const validatedRepairTargetFile = repairTargetFile
@@ -614,7 +705,7 @@ export function tryRecovery(planner, failedTask, context = {}) {
   });
   if (!plan || plan.tasks.length === 0) {
     console.log('[PLANNER_RECOVERY_SKIPPED]', { id: failedTask.id, reason: 'Empty recovery plan' });
-    return { recoveryStarted: false };
+    return { recoveryStarted: false, strategyDecision };
   }
 
   // Mark task as RECOVERING and add recovery tasks
@@ -622,7 +713,7 @@ export function tryRecovery(planner, failedTask, context = {}) {
   planner.markRecovering(failedTask.id);
   const addedIds = planner.addRecoveryTasks(failedTask.id, plan.tasks);
 
-  return { recoveryStarted: true, recoveryTaskIds: addedIds, recoveryPlan: plan };
+  return { recoveryStarted: true, recoveryTaskIds: addedIds, recoveryPlan: plan, strategyDecision };
 }
 
 function handleStall(planner, toolName) {
@@ -708,12 +799,13 @@ function parseScriptName(command) {
   return null;
 }
 
-export function notifyToolExecution(planner, toolName, args, result) {
+export function notifyToolExecution(planner, toolName, args, result, preferredTaskId = null) {
   if (!planner) return { handled: false };
 
   // Check if this is a recovery task before checking regular tasks
-  const recoveryTask = findRecoveryTask(planner, toolName);
-  const task = recoveryTask || findMatchingTask(planner, toolName, false);
+  const resultTaskId = preferredTaskId || result?.taskId || result?.plannerTaskId || null;
+  const recoveryTask = findRecoveryTask(planner, toolName, resultTaskId);
+  const task = recoveryTask || findMatchingTask(planner, toolName, false, resultTaskId);
   if (!task) {
     // Phase 4.11: Stall detected — tool doesn't match any ready task
     return handleStall(planner, toolName);
@@ -763,6 +855,22 @@ export function notifyToolExecution(planner, toolName, args, result) {
     planner.markSuccess(task.id, { tool: toolName, args, result });
     const kind = isRecovery ? 'RECOVERY' : task.kind;
     console.log('[PLANNER_TASK_SUCCESS]', { id: task.id, kind, tool: toolName });
+    if (toolName === 'WRITE_FILE') {
+      const finalizedPayload = {
+        taskId: task.id,
+        path: String(args?.path || args?.file || task?.toolArgs?.path || task?.toolArgs?.file || '').trim(),
+        status: 'SUCCESS',
+        reason: result?.changed === false || result?.alreadyUpToDate === true || result?.cached === true ? 'no_change' : 'written'
+      };
+      if (planner.executionStateRegistry?.logOnce) {
+        planner.executionStateRegistry.logOnce('WRITE_TASK_FINALIZED', finalizedPayload, {
+          taskId: task.id,
+          path: finalizedPayload.path
+        });
+      } else {
+        console.log('[WRITE_TASK_FINALIZED]', finalizedPayload);
+      }
+    }
     // Phase 4.12: Record successful tool execution in planner history
     if (planner.executionHistory) {
       planner.executionHistory.recordTool(toolName, args, result, task);

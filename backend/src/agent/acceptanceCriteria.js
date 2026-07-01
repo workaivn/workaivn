@@ -97,7 +97,7 @@ export function classifyTaskType(prompt) {
 function findMatchedKeywords(objective, taskClass) {
   const text = String(objective || '');
   const keywordMap = {
-    UI_BUILD: ['landing page', 'homepage', 'hero', 'ui', 'dashboard', 'admin page', 'component', 'react page', 'vue page', 'flutter page', 'tailwind', 'css', 'layout', 'responsive', 'theme', 'navigation', 'card', 'button', 'banner', 'marketing page'],
+    UI_BUILD: ['landing page', 'homepage', 'hero', 'dashboard', 'admin page', 'component', 'react page', 'vue page', 'flutter page', 'tailwind', 'css', 'layout', 'responsive', 'theme', 'navigation', 'card', 'button', 'banner', 'marketing page'],
     BUGFIX: ['fix', 'bug', 'patch', 'error', 'crash', 'broken', 'not working', 'failed'],
     REFACTOR: ['refactor', 'restructure', 'clean up', 'reorganize', 'rewrite'],
     CONFIG_CHANGE: ['config', 'setup', 'install', 'environment', 'env variable'],
@@ -158,8 +158,9 @@ function classifyTaskClass(objective, taskType) {
 
   // UI_BUILD — explicit UI/page/component keywords
   const uiPatterns = [
+    /\b(?:create|build|design|implement|develop|redesign)\b[\s\S]{0,80}\b(?:ui|frontend|page|component|screen|dashboard|admin\s+page|layout|form|card|button|navbar|navigation|css|tailwind|responsive|theme)\b/i,
     /\blanding\s+page\b/, /\bhomepage\b/, /\bhero\b/,
-    /\b(?:^|\s)UI\b/, /\bdashboard\b/, /\badmin\s+page\b/,
+    /\bdashboard\b/, /\badmin\s+page\b/,
     /\.(?:jsx|tsx|css|scss)\b/,
     /\bReact\s+page\b/, /\bVue\s+page\b/,
     /\bFlutter\s+page\b/, /\bTailwind\b/,

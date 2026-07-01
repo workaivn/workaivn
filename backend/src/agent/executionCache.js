@@ -140,7 +140,6 @@ export function createExecutionCache() {
         const existing = await fs.readFile(absPath, 'utf8');
         if (existing === String(content || '')) {
           stats.writeFile.skipped++;
-          console.log('[WRITE_SKIPPED_NO_CHANGE]', { path: key });
           return { skipped: true };
         }
       } catch {

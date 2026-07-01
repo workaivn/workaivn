@@ -1,3 +1,9 @@
+import {
+  buildWriteValidationPolicy,
+  classifyWriteTargetRole,
+  validateGeneratedContentWithPolicy
+} from "../workspace.js";
+
 const FILE_HEADER_OPS = new Set([
   'WRITE_FILE',
   'CREATE_FILE',
@@ -100,6 +106,26 @@ function extractCommandsFromText(text = '') {
   const lines = source.split('\n');
   const marker = /^(?:[-*]\s*)?(?:after\s+implementation\s+run|then\s+run\s+exactly|then\s+run|run\s+exactly\s+this\s+command|run\s+exactly|only\s+execute(?:\s+the\s+command)?|finally\s+run|run|execute|validation|test)\s*:?\s*(.*)$/i;
   const direct = /^(?:[-*]\s*)?(?:npm(?:\s+run)?\s+[A-Za-z0-9:_-]+(?:\s+--\s*.*)?|npm\s+test(?:\s+--\s*.*)?|pnpm(?:\s+run)?\s+[A-Za-z0-9:_-]+(?:\s+--\s*.*)?|pnpm\s+test(?:\s+--\s*.*)?|yarn(?:\s+run)?\s+[A-Za-z0-9:_-]+(?:\s+--\s*.*)?|yarn\s+test(?:\s+--\s*.*)?|node\s+--test\s+.+|node\s+(?:-e|--eval)\s+.+|node\s+[^\n.]+\.(?:m?js|cjs)|python3?\s+[^\n.]+\.py|pytest\b[^\n]*|go\s+test\b[^\n]*|cargo\s+(?:test|check)\b[^\n]*|dotnet\s+(?:test|build)\b[^\n]*|mvn\s+test\b[^\n]*|gradle\w*\s+(?:test|build)\b[^\n]*|flutter\s+(?:test|analy[sz]e)\b[^\n]*|dart\s+test\b[^\n]*)$/i;
+  const shellFenceRx = /^```(?:bash|sh|shell|zsh|powershell|pwsh|cmd)?\s*$/i;
+  const blockedCommandRx = /\b(?:do not|preserve deterministic|return|prompt|planner|validation|quality gate)\b/i;
+  const allowedPrefixes = new Set([
+    "npm", "yarn", "pnpm", "npx", "node", "bun", "deno",
+    "python", "python3", "pytest", "vitest", "jest", "mocha",
+    "tsc", "eslint", "git", "go", "cargo", "dotnet", "mvn",
+    "gradle", "flutter", "dart"
+  ]);
+
+  function isValidShellCommand(candidate) {
+    const cleaned = String(candidate || '').replace(/[.;,]\s*$/, '').trim();
+    if (!cleaned) return false;
+    if (/^\d+[.)]\s+[A-Z]/.test(cleaned)) return false;
+    if (/^\d+[.)]\s+/.test(cleaned)) return false;
+    if (blockedCommandRx.test(cleaned)) return false;
+    if (/^(?:[-*]\s*)/.test(cleaned)) return false;
+    if (/^(?:expected observations|planner creates|run_file_metadata|plannerDebugSnapshot)/i.test(cleaned)) return false;
+    const firstToken = cleaned.split(/\s+/)[0].toLowerCase();
+    return allowedPrefixes.has(firstToken);
+  }
 
   function add(cmd) {
     const cleaned = String(cmd || '')
@@ -115,17 +141,46 @@ function extractCommandsFromText(text = '') {
   }
 
   function addIfCommand(candidate) {
-    const cleaned = String(candidate || '').replace(/[.;,]\s*$/, '').trim();
+    const cleaned = String(candidate || '')
+      .split('\n')[0]
+      .replace(/[.;,]\s*$/, '')
+      .trim();
     if (!cleaned) return false;
     if (!direct.test(cleaned)) return false;
+    if (/^\d+[.)]\s+[A-Z]/.test(cleaned)) return false;
+    if (/^\d+[.)]\s+/.test(cleaned)) return false;
+    if (blockedCommandRx.test(cleaned)) return false;
+    if (/^(?:[-*]\s*)/.test(cleaned)) return false;
+    if (/^(?:do not|preserve deterministic|return|expected|planner creates|quality gate|run_file_metadata|plannerDebugSnapshot)/i.test(cleaned)) return false;
+    const firstToken = cleaned.split(/\s+/)[0].toLowerCase();
+    if (!allowedPrefixes.has(firstToken)) return false;
     add(cleaned);
     return true;
   }
 
+  function isNumberedInstructionLine(trimmed) {
+    return /^\d+[.)]\s+/.test(trimmed) || /^[ivxlcdm]+\.\s+/i.test(trimmed);
+  }
+
   let expectCommand = false;
+  let inShellFence = false;
   for (const line of lines) {
     const trimmed = String(line || '').trim();
     if (!trimmed) {
+      continue;
+    }
+
+    if (shellFenceRx.test(trimmed)) {
+      inShellFence = !inShellFence;
+      continue;
+    }
+
+    if (inShellFence) {
+      addIfCommand(trimmed);
+      continue;
+    }
+
+    if (isNumberedInstructionLine(trimmed)) {
       continue;
     }
 
@@ -148,7 +203,7 @@ function extractCommandsFromText(text = '') {
 
     if (expectCommand) {
       if (direct.test(trimmed)) {
-        add(trimmed);
+        addIfCommand(trimmed);
         expectCommand = false;
         continue;
       }
@@ -160,7 +215,7 @@ function extractCommandsFromText(text = '') {
     }
   }
 
-  return commands;
+  return commands.filter(isValidShellCommand);
 }
 
 function isBoundaryLine(trimmed) {
@@ -196,7 +251,10 @@ export function validatePromptLiteralContent({
   content = '',
   prompt = '',
   operation = 'write',
-  commands = []
+  commands = [],
+  projectContext = {},
+  packageJson = null,
+  detectedTestFramework = null
 } = {}) {
   const targetPath = normalizePathKey(path);
   const text = String(content || '');
@@ -214,25 +272,26 @@ export function validatePromptLiteralContent({
     return { success: false, error: 'Extracted content looks like planner directives' };
   }
 
-  const lowerPath = targetPath.toLowerCase();
-  const lowerPrompt = String(prompt || '').toLowerCase();
-  const hasAddIntent = /\badd\b/.test(lowerPrompt);
-
-  if (/\.(?:test|spec)\.js$/.test(lowerPath)) {
-    if (!/(node:test|\btest\s*\(|\bassert\b)/i.test(trimmed)) {
-      return { success: false, error: 'Test file content is missing node:test/test/assert markers' };
-    }
-  } else if (/\.(?:m?js|cjs)$/.test(lowerPath) && hasAddIntent) {
-    if (!/(?:function\s+add\b|const\s+add\b|export\s+(?:default\s+)?(?:function|const|class|let|var)?\s*add\b|export\s+\{[^}]*\badd\b[^}]*\})/i.test(trimmed)) {
-      return { success: false, error: 'Implementation content is missing required symbol(s): add' };
-    }
-  }
-
   if (operation === 'append' && !trimmed.length) {
     return { success: false, error: 'Append content is empty' };
   }
 
-  return { success: true, content: trimmed, path: targetPath };
+  const role = classifyWriteTargetRole(targetPath, projectContext);
+  const policy = buildWriteValidationPolicy({
+    targetPath,
+    role,
+    projectContext,
+    explicitPromptRequirements: commands,
+    packageJson,
+    detectedTestFramework: detectedTestFramework || 'generic-js-test',
+    prompt
+  });
+  const validation = validateGeneratedContentWithPolicy(trimmed, policy);
+  if (!validation.success) {
+    return validation;
+  }
+
+  return { success: true, content: trimmed, path: targetPath, policy };
 }
 
 export function parsePromptFileLiterals(prompt = '') {

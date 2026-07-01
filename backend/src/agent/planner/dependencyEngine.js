@@ -47,6 +47,12 @@ export function unlockChildren(graph, taskId) {
       child.status = TaskStatus.READY;
       child.touch();
       console.log('[DEPENDENCY_RELEASED]', { id: childId, kind: child.kind, goal: (child.goal || '').substring(0, 80) });
+      if (child.tool === 'RUN_TERMINAL') {
+        console.log('[RUN_TERMINAL_READY]', {
+          taskId: child.id,
+          command: child.toolArgs?.command || null
+        });
+      }
     }
   }
 }
@@ -104,6 +110,12 @@ export function updateReadyStates(graph) {
       node.status = TaskStatus.READY;
       node.touch();
       console.log('[DEPENDENCY_READY]', { id: node.id, kind: node.kind, goal: (node.goal || '').substring(0, 80) });
+      if (node.tool === 'RUN_TERMINAL') {
+        console.log('[RUN_TERMINAL_READY]', {
+          taskId: node.id,
+          command: node.toolArgs?.command || null
+        });
+      }
       transitions.ready++;
     }
   }

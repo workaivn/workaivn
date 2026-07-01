@@ -18,6 +18,7 @@ router.post("/tasks/:taskId/run", controller.runTask);
 router.post("/tasks/:taskId/run-multiple", controller.runTaskMultiple);
 router.get("/tasks/:taskId/runs", controller.getTaskRuns);
 router.post("/tasks/:taskId/compare", controller.compareRuns);
+router.get("/agent-runs", controller.getAgentRuns);
 router.post("/runs/:runId/continue", controller.continueAgentRun);
 router.get("/agent-runs/:runId", controller.getAgentRun);
 router.post("/agent-runs/:runId/cancel", controller.cancelAgentRun);

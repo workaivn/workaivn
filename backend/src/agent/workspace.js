@@ -4,6 +4,17 @@ import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { fileURLToPath } from "url";
+import { parse as parseJavaScript } from "@babel/parser";
+import {
+  FrameworkAdapter,
+  buildGenerationHints,
+  detectFramework
+} from "./framework/frameworkAdapter.js";
+import { validateStructuralContent } from "./writeCoordinator/validationDelta.js";
+
+export { FrameworkAdapter };
+
+const frameworkLogDedupe = new Set();
 
 const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
@@ -20,6 +31,14 @@ const IGNORED_DIRECTORIES = new Set([
   "build",
   "coverage"
 ]);
+
+function logFrameworkEvent(eventName, payload = {}, taskId = null, pathValue = "", framework = "") {
+  const key = [eventName, taskId || "", String(pathValue || ""), String(framework || "")].join("::");
+  if (frameworkLogDedupe.has(key)) return false;
+  frameworkLogDedupe.add(key);
+  console.log(`[${eventName}]`, payload);
+  return true;
+}
 const BLOCKED_FILE_NAMES = new Set([
   ".env",
   ".env.local",
@@ -280,6 +299,171 @@ function collectNearbyFiles(files = [], targetPath = "", limit = 8) {
   return [...new Set([...sameDir, ...sameStem])].slice(0, limit);
 }
 
+const TEST_ONLY_SYMBOLS = new Set(["it", "describe", "test", "expect", "beforeEach", "afterEach", "before", "after", "strict"]);
+const FRAMEWORK_MODULE_TOKENS = new Set(["strict", "assert"]);
+const PLACEHOLDER_RX = /\b(?:TODO|FIXME|TBD|PLACEHOLDER|REPLACE_ME|YOUR_CODE_HERE|XXX)\b/i;
+
+export function classifyWriteTargetRole(targetPath = "", projectContext = {}) {
+  const normalized = toPosixPath(targetPath).toLowerCase();
+  if (!normalized) return "unknown";
+  if (/^package\.json$/i.test(normalized)) return "package";
+  if (/\.(?:md|markdown|rst)$/i.test(normalized)) return "markdown";
+  if (/\.(?:json|jsonc|json5)$/i.test(normalized)) return "json";
+  if (/(?:^|\/)(?:tests?|__tests__|specs?)(?:\/|$)/.test(normalized)) return "test";
+  if (/(?:^|\/)(?:tests?|__tests__)(?:\/|$)/.test(normalized)) return "test";
+  if (/\.(?:test|spec)\.(?:m?js|cjs|jsx|tsx|ts)$/.test(normalized)) return "test";
+  if (/^(?:\.?(?:eslintrc|prettierrc|babelrc|editorconfig)|tsconfig|vite\.config|jest\.config|mocha\.config|webpack\.config|rollup\.config|eslint\.config|next\.config)(?:\.[A-Za-z0-9]+)?$/i.test(path.posix.basename(normalized))) {
+    return "config";
+  }
+  if (/^(?:\.?env(?:\..+)?)$/i.test(path.posix.basename(normalized))) return "config";
+  if (projectContext?.projectType === "json") return "json";
+  return "implementation";
+}
+
+function extractExplicitImplementationSymbols(text = "") {
+  const source = String(text || "");
+  const symbols = new Set();
+  const patterns = [
+    /\b(?:implement|create|add|write|build|make|generate|modify|update|change|fix|replace|append|prepend|insert|rename)\b(?:\s+(?:the|a|an))?\s+([A-Za-z_$][\w$]*(?:\s*[\/,&+]\s*[A-Za-z_$][\w$]*){1,12})/gi
+  ];
+
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(source)) !== null) {
+      const raw = String(match[1] || "");
+      if (/\.[A-Za-z0-9]{1,8}\b/.test(raw) || /(?:^|\/)(?:src|app|backend|frontend|server|client|api)\//i.test(raw)) {
+        continue;
+      }
+      for (const token of raw.split(/\s*(?:\/|,|&|\+|\band\b)\s*/i)) {
+        const cleaned = token.trim().replace(/[.;:]+$/g, "");
+        if (!cleaned) continue;
+        if (/[\\/\.]/.test(cleaned)) continue;
+        if (/^(?:src|app|backend|frontend|server|client|api|tests?|specs?|package|json)$/i.test(cleaned)) continue;
+        if (/^[A-Za-z_$][\w$]*$/.test(cleaned)) {
+          symbols.add(cleaned);
+        }
+      }
+    }
+  }
+
+  return [...symbols];
+}
+
+function isTestConstructSymbol(symbol = "") {
+  return TEST_ONLY_SYMBOLS.has(String(symbol || "").trim());
+}
+
+function isFrameworkModuleToken(symbol = "") {
+  return FRAMEWORK_MODULE_TOKENS.has(String(symbol || "").trim());
+}
+
+function sanitizeValidationSymbols(symbols = []) {
+  return [...new Set(
+    (Array.isArray(symbols) ? symbols : [])
+      .map(value => String(value || "").trim())
+      .filter(Boolean)
+      .filter(symbol => !isTestConstructSymbol(symbol))
+      .filter(symbol => !isFrameworkModuleToken(symbol))
+      .filter(symbol => !/^(?:src|app|backend|frontend|server|client|api|tests?|specs?|package|json)$/i.test(symbol))
+  )];
+}
+
+function extractRoleSpecificRequirements({
+  role = "implementation",
+  prompt = "",
+  existingTargetContent = ""
+} = {}) {
+  const source = [String(prompt || ""), String(existingTargetContent || "")]
+    .filter(Boolean)
+    .join("\n");
+  const symbols = sanitizeValidationSymbols([
+    ...extractExplicitImplementationSymbols(source),
+    ...extractRequiredSymbolsFromText(source)
+  ]);
+
+  if (role === "test") {
+    return {
+      mustReference: symbols,
+      mustExport: [],
+      mustContainAny: [],
+      mustContainAll: [],
+      rejectPlaceholders: true
+    };
+  }
+
+  if (role === "package" || role === "json" || role === "markdown") {
+    return {
+      mustReference: [],
+      mustExport: [],
+      mustContainAny: [],
+      mustContainAll: [],
+      rejectPlaceholders: true
+    };
+  }
+
+  return {
+    mustReference: [],
+    mustExport: symbols,
+    mustContainAny: [],
+    mustContainAll: [],
+    rejectPlaceholders: true
+  };
+}
+
+// Framework detection and validation now live in framework/frameworkAdapter.js.
+
+export function buildWriteValidationPolicy({
+  targetPath = "",
+  role = "unknown",
+  projectContext = {},
+  explicitPromptRequirements = null,
+  packageJson = null,
+  detectedTestFramework = "generic-js-test",
+  prompt = "",
+  existingTargetContent = ""
+} = {}) {
+  const resolvedRole = role !== "unknown" ? role : classifyWriteTargetRole(targetPath, projectContext);
+  const source = [
+    Array.isArray(explicitPromptRequirements) && explicitPromptRequirements.length > 0
+      ? explicitPromptRequirements.join("\n")
+      : "",
+    String(prompt || ""),
+    String(existingTargetContent || "")
+  ].filter(Boolean).join("\n");
+
+  const roleRequirements = extractRoleSpecificRequirements({
+    role: resolvedRole,
+    prompt: source,
+    existingTargetContent
+  });
+  const language = detectLanguageFromPath(targetPath);
+  const moduleSystem = (
+    projectContext?.moduleSystem ||
+    projectContext?.detectedModuleSystem ||
+    projectContext?.moduleSystemHint ||
+    "unknown"
+  );
+
+  const policy = {
+    targetPath: toPosixPath(targetPath),
+    role: resolvedRole,
+    language,
+    moduleSystem,
+    testFramework: detectedTestFramework || "generic-js-test",
+    mustParse: resolvedRole !== "markdown",
+    mustCompile: false,
+    mustExport: roleRequirements.mustExport || [],
+    mustReference: roleRequirements.mustReference || [],
+    mustContainAny: roleRequirements.mustContainAny || [],
+    mustContainAll: roleRequirements.mustContainAll || [],
+    allowExtraSymbols: true,
+    rejectPlaceholders: roleRequirements.rejectPlaceholders !== false,
+    packageJson: packageJson || null
+  };
+
+  return policy;
+}
+
 export async function buildWriteContext({
   workspaceRoot,
   targetPath = "",
@@ -288,13 +472,16 @@ export async function buildWriteContext({
   prompt = "",
   requiredSymbols = [],
   workspaceFiles = null,
-  nearbyFiles = null
+  nearbyFiles = null,
+  taskId = null
 } = {}) {
   const root = workspaceRoot ? getWorkspaceRoot(workspaceRoot) : "";
   const files = Array.isArray(workspaceFiles) && workspaceFiles.length > 0
     ? workspaceFiles.map(value => toPosixPath(value))
     : (root ? await listWorkspaceFiles(root, { limit: 5000 }).catch(() => []) : []);
   const normalizedTarget = toPosixPath(targetPath);
+  const targetPrompt = String(prompt || "");
+  const packageJson = root ? await readJsonIfExists(path.join(root, "package.json")) : null;
   const existingContent = existingTargetContent !== null
     ? String(existingTargetContent)
     : (root && normalizedTarget
@@ -319,11 +506,64 @@ export async function buildWriteContext({
   }
 
   const graph = extractReferenceGraphFromContent(existingContent || "", language);
+  const isTestLikeTarget = /(?:^|\/)(?:__tests__|tests?)\/|(?:^|\/).+\.(?:test|spec)\.[jt]sx?$|(?:^|\/)(?:test|spec)\.[jt]sx?$/i.test(normalizedTarget);
+  const frameworkDetection = isTestLikeTarget
+    ? detectFramework({
+        packageJson,
+        projectScan: scan,
+        nearbyFiles: nearbyStyles
+      })
+    : { framework: "generic-js-test", source: "skipped", evidence: { reason: "not_test_file" } };
+  if (isTestLikeTarget) {
+    logFrameworkEvent("FRAMEWORK_DETECTED", {
+      targetPath: normalizedTarget,
+      framework: frameworkDetection.framework,
+      source: frameworkDetection.source
+    }, taskId, normalizedTarget, frameworkDetection.framework);
+    if (frameworkDetection.availability) {
+      console.log("[TEST_FRAMEWORK_AVAILABILITY]", {
+        taskId: taskId || null,
+        targetPath: normalizedTarget,
+        framework: frameworkDetection.availability.framework,
+        runnable: frameworkDetection.availability.runnable,
+        source: frameworkDetection.availability.source,
+        reason: frameworkDetection.availability.reason,
+        validationCommand: frameworkDetection.availability.validationCommand || null
+      });
+    }
+  } else {
+    logFrameworkEvent("FRAMEWORK_DETECTION_SKIPPED", {
+      targetPath: normalizedTarget,
+      reason: "not_test_file"
+    }, taskId, normalizedTarget, "generic-js-test");
+  }
+  const validationPolicy = buildWriteValidationPolicy({
+    targetPath: normalizedTarget,
+    role: classifyWriteTargetRole(normalizedTarget, { projectType }),
+    projectContext: {
+      projectType,
+      moduleSystem: await detectWorkspaceModuleSystem(root, normalizedTarget, {
+        layout: scan,
+        workspaceFiles: files
+      }).catch(() => "unknown")
+    },
+    explicitPromptRequirements: sanitizeValidationSymbols([
+      ...extractExplicitImplementationSymbols(targetPrompt),
+      ...extractRequiredSymbolsFromText(existingContent || "")
+    ]),
+    packageJson,
+    detectedTestFramework: frameworkDetection.framework,
+    prompt: targetPrompt,
+    existingTargetContent: existingContent || "",
+    projectScan: scan
+  });
+  const validationSymbols = validationPolicy.role === "test"
+    ? validationPolicy.mustReference
+    : validationPolicy.mustExport;
   const inferredRequiredSymbols = [
     ...new Set([
       ...(Array.isArray(requiredSymbols) ? requiredSymbols : []),
-      ...extractRequiredSymbolsFromText(prompt),
-      ...extractRequiredSymbolsFromText(existingContent || "")
+      ...(Array.isArray(validationSymbols) ? validationSymbols : [])
     ].map(value => String(value || "").trim()).filter(Boolean))
   ];
 
@@ -334,11 +574,19 @@ export async function buildWriteContext({
     projectScan: scan || projectScan || {},
     projectType,
     detectedLanguage: language,
+    moduleSystem: validationPolicy.moduleSystem,
+    detectedTestFramework: frameworkDetection.framework,
+    detectedTestFrameworkSource: frameworkDetection.source,
+    detectedTestFrameworkAvailability: frameworkDetection.availability || null,
+    packageJson,
+    fileRole: validationPolicy.role,
     referenceGraph: graph,
+    validationPolicy,
     requiredSymbols: inferredRequiredSymbols,
+    validationSource: targetPrompt,
     nearbyFiles: nearby,
     nearbyStyleConventions: nearbyStyles,
-    prompt: String(prompt || "")
+    prompt: targetPrompt
   };
 }
 
@@ -588,14 +836,17 @@ export async function normalizeGeneratedModuleContent({
   targetPath = "",
   content = "",
   layout = null,
-  workspaceFiles = null
+  workspaceFiles = null,
+  writeContext: providedWriteContext = null
 } = {}) {
   return validateGeneratedWriteContent({
     workspaceRoot,
     targetPath,
     content,
     projectScan: layout,
-    workspaceFiles
+    workspaceFiles,
+    writeContext: providedWriteContext || undefined,
+    policySource: providedWriteContext ? "coordinator" : null
   });
 }
 
@@ -713,7 +964,287 @@ function validateClarificationEngineContent({ content = "", writeContext = {} } 
   return null;
 }
 
+function parseJavaScriptSource(content = "", { sourceType = "unambiguous" } = {}) {
+  try {
+    return parseJavaScript(String(content || ""), {
+      sourceType,
+      allowReturnOutsideFunction: true,
+      plugins: [
+        "jsx",
+        "typescript",
+        "classProperties",
+        "classPrivateProperties",
+        "classPrivateMethods",
+        "dynamicImport",
+        "importMeta",
+        "topLevelAwait"
+      ]
+    });
+  } catch {
+    return null;
+  }
+}
+
+function collectExportedSymbolsFromAst(ast) {
+  const symbols = new Set();
+  if (!ast?.program?.body) return [];
+
+  const collectNode = (node) => {
+    if (!node) return;
+    if (node.type === "Identifier" && node.name) {
+      symbols.add(node.name);
+      return;
+    }
+    if (node.type === "VariableDeclaration") {
+      for (const declaration of node.declarations || []) {
+        collectNode(declaration.id);
+      }
+      return;
+    }
+    if ((node.type === "FunctionDeclaration" || node.type === "ClassDeclaration") && node.id?.name) {
+      symbols.add(node.id.name);
+    }
+  };
+
+  for (const node of ast.program.body) {
+    if (node.type === "ExportNamedDeclaration") {
+      collectNode(node.declaration);
+      for (const specifier of node.specifiers || []) {
+        const exported = specifier.exported?.name || specifier.exported?.value;
+        if (exported) symbols.add(String(exported));
+      }
+      continue;
+    }
+
+    if (node.type === "ExportDefaultDeclaration") {
+      const declaration = node.declaration;
+      if (declaration?.type === "Identifier" && declaration.name) {
+        symbols.add(declaration.name);
+      } else if (declaration?.id?.name) {
+        symbols.add(declaration.id.name);
+      }
+      continue;
+    }
+
+    if (node.type === "ExpressionStatement" && node.expression?.type === "AssignmentExpression") {
+      const left = node.expression.left;
+      const right = node.expression.right;
+      if (left?.type === "MemberExpression" && !left.computed) {
+        const objectName = left.object?.name;
+        const propertyName = left.property?.name;
+        if (objectName === "exports" && propertyName) {
+          symbols.add(propertyName);
+        }
+        if (objectName === "module" && left.property?.name === "exports" && right?.type === "ObjectExpression") {
+          for (const prop of right.properties || []) {
+            if (prop?.type === "ObjectProperty" || prop?.type === "Property") {
+              const key = prop.key?.name || prop.key?.value;
+              if (key) symbols.add(String(key));
+            } else if (prop?.type === "ObjectMethod" && prop.key?.name) {
+              symbols.add(prop.key.name);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return [...symbols];
+}
+
+function hasPlaceholderText(content = "") {
+  const text = String(content || "");
+  return PLACEHOLDER_RX.test(text) || /\b(?:your code here|replace me|insert code here)\b/i.test(text);
+}
+
+function buildFrameworkValidationError(frameworkValidation = {}) {
+  const parts = [];
+  if (Array.isArray(frameworkValidation.illegalImports) && frameworkValidation.illegalImports.length > 0) {
+    parts.push(`Illegal import: ${frameworkValidation.illegalImports.join(", ")}`);
+  }
+  if (Array.isArray(frameworkValidation.illegalCalls) && frameworkValidation.illegalCalls.length > 0) {
+    parts.push(`Illegal call: ${frameworkValidation.illegalCalls.map(n => `${n}()`).join(", ")}`);
+  }
+  if (Array.isArray(frameworkValidation.repairInstructions) && frameworkValidation.repairInstructions.length > 0) {
+    parts.push(frameworkValidation.repairInstructions.join(". "));
+  }
+  if (parts.length === 0) {
+    return frameworkValidation.reason || "FRAMEWORK_VALIDATION_FAIL";
+  }
+  return parts.join(". ");
+}
+
+export function validateGeneratedContentWithPolicy(content, policy = {}, frameworkAvailability = null) {
+  const nextContent = String(content ?? "");
+  const resolvedPolicy = policy && typeof policy === "object" ? policy : {};
+  const role = String(resolvedPolicy.role || "unknown");
+  const language = String(resolvedPolicy.language || detectLanguageFromPath(resolvedPolicy.targetPath || ""));
+  const mustParse = resolvedPolicy.mustParse !== false;
+  const mustExport = Array.isArray(resolvedPolicy.mustExport) ? sanitizeValidationSymbols(resolvedPolicy.mustExport) : [];
+  const mustReference = Array.isArray(resolvedPolicy.mustReference) ? sanitizeValidationSymbols(resolvedPolicy.mustReference) : [];
+  const mustContainAny = Array.isArray(resolvedPolicy.mustContainAny) ? [...new Set(resolvedPolicy.mustContainAny.map(value => String(value || "").trim()).filter(Boolean))] : [];
+  const mustContainAll = Array.isArray(resolvedPolicy.mustContainAll) ? [...new Set(resolvedPolicy.mustContainAll.map(value => String(value || "").trim()).filter(Boolean))] : [];
+
+  if (!nextContent.trim()) {
+    return { success: false, error: "WRITE_FILE requires non-empty content", policy: resolvedPolicy };
+  }
+
+  if (resolvedPolicy.rejectPlaceholders !== false && hasPlaceholderText(nextContent)) {
+    return { success: false, error: "Generated content contains placeholder text", policy: resolvedPolicy };
+  }
+
+  if (language === "json" || role === "package") {
+    if (mustParse) {
+      try {
+        JSON.parse(nextContent);
+      } catch (error) {
+        return { success: false, error: `Generated JSON content is invalid: ${error.message}`, policy: resolvedPolicy };
+      }
+    }
+    return { success: true, content: nextContent, policy: resolvedPolicy };
+  }
+
+  if (language === "markdown") {
+    return { success: true, content: nextContent, policy: resolvedPolicy };
+  }
+
+  if (language === "javascript" || language === "typescript") {
+    const ast = parseJavaScriptSource(nextContent, { sourceType: "unambiguous" });
+    if (mustParse && !ast) {
+      return { success: false, error: "Generated content could not be parsed as JavaScript", policy: resolvedPolicy };
+    }
+
+    const exportedSymbols = ast ? collectExportedSymbolsFromAst(ast) : [];
+    if (mustExport.length > 0) {
+      const missingExports = mustExport.filter(symbol => !exportedSymbols.includes(symbol) && !new RegExp(`\\b${String(symbol).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(nextContent));
+      if (missingExports.length > 0) {
+        return {
+          success: false,
+          error: `Generated content is missing required export(s): ${missingExports.join(", ")}`,
+          policy: resolvedPolicy
+        };
+      }
+    }
+
+    let frameworkValidation = null;
+
+    if (role === "test") {
+      frameworkValidation = FrameworkAdapter.validateFramework(nextContent, resolvedPolicy.testFramework, frameworkAvailability);
+      if (frameworkValidation && frameworkValidation.success === false) {
+        const errorMsg = buildFrameworkValidationError(frameworkValidation);
+        return {
+          success: false,
+          error: errorMsg,
+          reason: frameworkValidation.reason || "framework_mismatch",
+          suggestion: frameworkValidation.suggestion || null,
+          frameworkValidation,
+          policy: resolvedPolicy
+        };
+      }
+    }
+
+    if (mustReference.length > 0) {
+      const missingReferences = mustReference.filter(symbol => !new RegExp(`\\b${String(symbol).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(nextContent));
+      if (missingReferences.length > 0) {
+        return {
+          success: false,
+          error: `Generated content is missing required reference(s): ${missingReferences.join(", ")}`,
+          policy: resolvedPolicy
+        };
+      }
+    }
+
+    if (mustContainAll.length > 0) {
+      const missingTokens = mustContainAll.filter(token => !nextContent.includes(token));
+      if (missingTokens.length > 0) {
+        return {
+          success: false,
+          error: `Generated content is missing required content: ${missingTokens.join(", ")}`,
+          policy: resolvedPolicy
+        };
+      }
+    }
+
+    if (mustContainAny.length > 0) {
+      const hasAny = mustContainAny.some(token => nextContent.includes(token));
+      if (!hasAny) {
+        return {
+          success: false,
+          error: `Generated content is missing required test construct(s): ${mustContainAny.join(", ")}`,
+          policy: resolvedPolicy
+        };
+      }
+    }
+
+    return { success: true, content: nextContent, policy: resolvedPolicy, exportedSymbols, frameworkValidation };
+  }
+
+  if (mustExport.length > 0) {
+    const missingExports = mustExport.filter(symbol => !new RegExp(`\\b${String(symbol).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(nextContent));
+    if (missingExports.length > 0) {
+      return {
+        success: false,
+        error: `Generated content is missing required export(s): ${missingExports.join(", ")}`,
+        policy: resolvedPolicy
+      };
+    }
+  }
+
+  if (mustReference.length > 0) {
+    const missingReferences = mustReference.filter(symbol => !new RegExp(`\\b${String(symbol).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(nextContent));
+    if (missingReferences.length > 0) {
+      return {
+        success: false,
+        error: `Generated content is missing required reference(s): ${missingReferences.join(", ")}`,
+        policy: resolvedPolicy
+      };
+    }
+  }
+
+  if (mustContainAll.length > 0) {
+    const missingTokens = mustContainAll.filter(token => !nextContent.includes(token));
+    if (missingTokens.length > 0) {
+      return {
+        success: false,
+        error: `Generated content is missing required content: ${missingTokens.join(", ")}`,
+        policy: resolvedPolicy
+      };
+    }
+  }
+
+  if (mustContainAny.length > 0) {
+    const hasAny = mustContainAny.some(token => nextContent.includes(token));
+    if (!hasAny) {
+      return {
+        success: false,
+        error: `Generated content is missing required test construct(s): ${mustContainAny.join(", ")}`,
+        policy: resolvedPolicy
+      };
+    }
+  }
+
+  let frameworkValidation = null;
+
+  if (role === "test") {
+    frameworkValidation = FrameworkAdapter.validateFramework(nextContent, resolvedPolicy.testFramework, frameworkAvailability);
+    if (frameworkValidation && !frameworkValidation.success) {
+      const errorMsg = buildFrameworkValidationError(frameworkValidation);
+      return {
+        success: false,
+        error: errorMsg,
+        reason: frameworkValidation.reason || "framework_mismatch",
+        suggestion: frameworkValidation.suggestion,
+        frameworkValidation,
+        policy: resolvedPolicy
+      };
+    }
+  }
+
+  return { success: true, content: nextContent, policy: resolvedPolicy, frameworkValidation };
+}
+
 export async function validateGeneratedWriteContent({
+  task = null,
   workspaceRoot,
   targetPath = "",
   content = "",
@@ -722,48 +1253,117 @@ export async function validateGeneratedWriteContent({
   requiredSymbols = [],
   prompt = "",
   workspaceFiles = null,
-  nearbyFiles = null
+  nearbyFiles = null,
+  validationSource = null,
+  writeContext: providedWriteContext = null,
+  frameworkHintsEmitted = false,
+  policySource = null,
+  coordinatorValidationFileSet = null,
+  frameworkAvailability = null
 } = {}) {
-  const writeContext = await buildWriteContext({
-    workspaceRoot,
-    targetPath,
-    existingTargetContent,
-    projectScan,
-    requiredSymbols,
-    prompt,
-    workspaceFiles,
-    nearbyFiles
-  });
+  // WriteCoordinator owns ValidationPolicy creation. The Executor (validation step)
+  // must CONSUME the already-built writeContext instead of rebuilding it, so that
+  // framework detection + policy construction happen exactly once per write task.
+  const reuseContext = !!providedWriteContext;
+  const writeContext = reuseContext
+    ? providedWriteContext
+    : await buildWriteContext({
+        workspaceRoot,
+        targetPath,
+        existingTargetContent,
+        projectScan,
+        requiredSymbols,
+        prompt,
+        workspaceFiles,
+        nearbyFiles,
+        taskId: task?.id || null
+      });
 
   const nextContent = String(content ?? "");
-  const language = writeContext.detectedLanguage;
-  const projectType = writeContext.projectType;
-  const required = Array.isArray(writeContext.requiredSymbols) ? writeContext.requiredSymbols : [];
+  const policy = writeContext.validationPolicy || buildWriteValidationPolicy({
+    targetPath,
+    role: classifyWriteTargetRole(targetPath, { projectType: writeContext.projectType }),
+    projectContext: {
+      projectType: writeContext.projectType,
+      moduleSystem: writeContext.moduleSystem || "unknown"
+    },
+    prompt: writeContext.prompt || prompt || "",
+    existingTargetContent: writeContext.existingTargetContent || "",
+    packageJson: writeContext.packageJson || null,
+    detectedTestFramework: writeContext.detectedTestFramework || "generic-js-test"
+  });
+  const contextSource = String(writeContext.validationSource || writeContext.prompt || "");
+  const normalizedTargetPath = String(targetPath || "").replace(/\\/g, "/");
+  if (reuseContext) {
+    // Policy was already built by the WriteCoordinator (or single-file generator).
+    // Reuse it instead of rebuilding — emit a REUSED marker so callers can verify
+    // the Executor never reconstructs ValidationPolicy when one already exists.
+    console.log("[WRITE_VALIDATION_POLICY_REUSED]", {
+      taskId: task?.id || null,
+      targetPath: normalizedTargetPath,
+      role: policy.role,
+      framework: policy.testFramework || "generic-js-test",
+      source: policySource || "reused"
+    });
+  } else {
+    const validationLog = {
+      taskId: task?.id || null,
+      targetPath: normalizedTargetPath,
+      role: policy.role,
+      language: policy.language,
+      moduleSystem: policy.moduleSystem,
+      testFramework: policy.testFramework,
+      mustExport: [...(policy.mustExport || [])],
+      mustReference: [...(policy.mustReference || [])],
+      mustContainAny: [...(policy.mustContainAny || [])],
+      mustContainAll: [...(policy.mustContainAll || [])],
+      rejectPlaceholders: policy.rejectPlaceholders !== false,
+      source: validationSource || (contextSource ? "target_prompt" : "unknown")
+    };
+    console.log("[WRITE_VALIDATION_POLICY]", validationLog);
+  }
+  // FrameworkGenerationHints must only be constructed inside prompt construction.
+  // When the coordinator prompt already emitted hints (frameworkHintsEmitted=true),
+  // do NOT regenerate them here — only log the rule metadata once, without
+  // triggering a second [FRAMEWORK_GENERATION_HINTS] emission.
+  if (policy.role === "test") {
+    const rulesLog = {
+      targetPath: normalizedTargetPath,
+      framework: policy.testFramework || "generic-js-test"
+    };
+    if (!frameworkHintsEmitted) {
+      rulesLog.hints = buildGenerationHints(policy.testFramework || "generic-js-test", frameworkAvailability || writeContext.detectedTestFrameworkAvailability || null);
+    }
+    console.log("[FRAMEWORK_RULES]", rulesLog);
+  }
 
-  if (!nextContent.trim()) {
+  const policyValidation = validateGeneratedContentWithPolicy(nextContent, policy, writeContext.detectedTestFrameworkAvailability || frameworkAvailability || null);
+  if (!policyValidation.success) {
+    if (policy.role === "test") {
+      console.log("[WRITE_TEST_FRAMEWORK_VALIDATION_FAILED]", {
+        targetPath: String(targetPath || "").replace(/\\/g, "/"),
+        testFramework: policy.testFramework || "generic-js-test",
+        reason: policyValidation.reason || policyValidation.error || "Test framework validation failed",
+        suggestion: policyValidation.suggestion || policyValidation.frameworkValidation?.suggestion || null
+      });
+    }
     return {
       success: false,
-      error: "WRITE_FILE requires non-empty content",
-      writeContext
+      error: policyValidation.error,
+      writeContext,
+      policy,
+      reason: policyValidation.reason || null,
+      suggestion: policyValidation.suggestion || null,
+      frameworkValidation: policyValidation.frameworkValidation || null
     };
   }
 
-  if (required.length > 0) {
-    const missingSymbols = required.filter(symbol => !new RegExp(`\\b${String(symbol).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(nextContent));
-    if (missingSymbols.length > 0) {
-      return {
-        success: false,
-        error: `Generated content is missing required symbol(s): ${missingSymbols.join(", ")}`,
-        writeContext
-      };
-    }
-  }
-
-  if (containsLanguageConflict(nextContent, language)) {
+  if (containsLanguageConflict(nextContent, policy.language)) {
     return {
       success: false,
-      error: `Generated content is incompatible with the detected ${language || projectType || "project"} language`,
-      writeContext
+      error: `Generated content is incompatible with the detected ${policy.language || writeContext.projectType || "project"} language`,
+      writeContext,
+      policy
     };
   }
 
@@ -775,7 +1375,41 @@ export async function validateGeneratedWriteContent({
     return clarificationValidation;
   }
 
-  if (language === "javascript" || language === "typescript") {
+  const structuralValidation = validateStructuralContent({
+    targetPath,
+    content: nextContent,
+    previousContent: writeContext.existingTargetContent || existingTargetContent || "",
+    role: policy.role || classifyWriteTargetRole(targetPath, { projectType: writeContext.projectType }),
+    requiredExports: policy.mustExport || [],
+    requiredReferences: policy.mustReference || [],
+    frameworkValidation: policyValidation.frameworkValidation || null
+  });
+  console.log("[WRITE_CONTENT_STRUCTURAL_CHECK]", {
+    targetPath: String(targetPath || "").replace(/\\/g, "/"),
+    role: policy.role || classifyWriteTargetRole(targetPath, { projectType: writeContext.projectType }),
+    success: structuralValidation.success,
+    reason: structuralValidation.reason || null,
+    retryMode: structuralValidation.retryMode || null,
+    hasExecutableBody: structuralValidation.hasExecutableBody === true,
+    hasTestSignal: structuralValidation.hasTestSignal === true
+  });
+  if (!structuralValidation.success) {
+    console.log("[WRITE_CONTENT_STRUCTURAL_REJECTED]", {
+      targetPath: String(targetPath || "").replace(/\\/g, "/"),
+      reason: structuralValidation.reason || "structural_validation_failed"
+    });
+    return {
+      success: false,
+      error: structuralValidation.reason || "Structural validation failed",
+      writeContext,
+      policy,
+      reason: structuralValidation.reason || null,
+      suggestion: structuralValidation.details?.framework || null,
+      frameworkValidation: policyValidation.frameworkValidation || null
+    };
+  }
+
+  if (policy.language === "javascript" || policy.language === "typescript") {
     const moduleSystem = await detectWorkspaceModuleSystem(workspaceRoot, targetPath, {
       layout: projectScan,
       workspaceFiles
@@ -789,6 +1423,7 @@ export async function validateGeneratedWriteContent({
             success: false,
             error: "Generated CommonJS content is incompatible with the detected ESM module system",
             writeContext,
+            policy,
             moduleSystem
           };
         }
@@ -796,8 +1431,10 @@ export async function validateGeneratedWriteContent({
           success: true,
           content: transformed,
           writeContext,
+          policy,
           moduleSystem,
-          transformed: transformed !== nextContent
+          transformed: transformed !== nextContent,
+          frameworkValidation: policyValidation.frameworkValidation || null
         };
       }
     } else if (moduleSystem === "commonjs") {
@@ -806,6 +1443,7 @@ export async function validateGeneratedWriteContent({
           success: false,
           error: "Generated ESM content is incompatible with the detected CommonJS module system",
           writeContext,
+          policy,
           moduleSystem
         };
       }
@@ -815,8 +1453,10 @@ export async function validateGeneratedWriteContent({
       success: true,
       content: nextContent,
       writeContext,
+      policy,
       moduleSystem: moduleSystem || "unknown",
-      transformed: false
+      transformed: false,
+      frameworkValidation: policyValidation.frameworkValidation || null
     };
   }
 
@@ -824,9 +1464,11 @@ export async function validateGeneratedWriteContent({
     success: true,
     content: nextContent,
     writeContext,
-    language,
-    projectType,
-    transformed: false
+    policy,
+    language: policy.language,
+    projectType: writeContext.projectType,
+    transformed: false,
+    frameworkValidation: policyValidation.frameworkValidation || null
   };
 }
 

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { Task } from './task.js';
 import { parsePromptFileLiterals } from './promptLiteralParser.js';
+import { createBootstrapTaskGraph } from '../projectIntelligence/index.js';
 
 function prioritizeValidationCommands(commands = []) {
   const specific = [];
@@ -19,6 +20,94 @@ function prioritizeValidationCommands(commands = []) {
 
   return [...specific, ...others, ...generic];
 }
+
+function uniqueCommands(commands = []) {
+  return prioritizeValidationCommands([...new Set((Array.isArray(commands) ? commands : []).map(cmd => String(cmd || '').trim()).filter(Boolean))]);
+}
+
+function inferValidationPlan(objective, criteria = {}, bootstrapProfile = null) {
+  const text = String(objective || '');
+  const wantsTests = /\b(?:test|tests|testing|validation)\b/i.test(text);
+  const packageJson = criteria?.workspaceState?.packageJson || null;
+  const projectScan = criteria?.projectScan || {};
+  const packageScripts = packageJson?.scripts || {};
+  const doNotModifyPackageJson = /do\s+not\s+modify\s+package\.json/i.test(text);
+
+  const explicitCommands = uniqueCommands([
+    ...(Array.isArray(criteria?.requiredCommands) ? criteria.requiredCommands : []),
+    ...(Array.isArray(projectScan?.testCommands) ? projectScan.testCommands : []),
+    ...(Array.isArray(projectScan?.buildCommands) ? projectScan.buildCommands : [])
+  ]);
+  if (explicitCommands.length > 0) {
+    console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'explicit_or_scan', command: explicitCommands[0], commands: explicitCommands });
+    return { commands: explicitCommands, validationBlockedReason: null, packageJsonTestSetupRequired: false, packageJsonTestSetupSkipped: false };
+  }
+
+  if (wantsTests) {
+    if (packageScripts.test) {
+      console.log('[PACKAGE_JSON_TEST_SETUP_SKIPPED]', { reason: 'test_script_already_present', script: packageScripts.test });
+      console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'package_json_script', command: 'npm test' });
+      return { commands: ['npm test'], validationBlockedReason: null, packageJsonTestSetupRequired: false, packageJsonTestSetupSkipped: true };
+    }
+    if (packageScripts.build) {
+      console.log('[PACKAGE_JSON_TEST_SETUP_REQUIRED]', { reason: 'explicit_tests_requested_without_test_script', canModifyPackageJson: !doNotModifyPackageJson });
+      console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'package_json_build', command: 'npm run build' });
+      return { commands: ['npm run build'], validationBlockedReason: null, packageJsonTestSetupRequired: !doNotModifyPackageJson, packageJsonTestSetupSkipped: doNotModifyPackageJson };
+    }
+    if (Array.isArray(projectScan?.buildCommands) && projectScan.buildCommands.length > 0) {
+      console.log('[PACKAGE_JSON_TEST_SETUP_REQUIRED]', { reason: 'explicit_tests_requested_without_runnable_test_framework', canModifyPackageJson: !doNotModifyPackageJson });
+      console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'project_scan_build_commands', command: projectScan.buildCommands[0] });
+      return { commands: [String(projectScan.buildCommands[0]).trim()].filter(Boolean), validationBlockedReason: null, packageJsonTestSetupRequired: !doNotModifyPackageJson, packageJsonTestSetupSkipped: doNotModifyPackageJson };
+    }
+    if (bootstrapProfile?.validationCommands && bootstrapProfile.validationCommands.length > 0) {
+      console.log('[PACKAGE_JSON_TEST_SETUP_SKIPPED]', { reason: 'bootstrap_profile_validation_only', profile: bootstrapProfile.id || null });
+      console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'bootstrap_profile', command: bootstrapProfile.validationCommands[0] });
+      return { commands: [bootstrapProfile.validationCommands[0]], validationBlockedReason: null, packageJsonTestSetupRequired: false, packageJsonTestSetupSkipped: true };
+    }
+
+    console.log('[PACKAGE_JSON_TEST_SETUP_REQUIRED]', { reason: 'explicit_tests_requested_but_no_runnable_framework', canModifyPackageJson: !doNotModifyPackageJson });
+    console.log('[PACKAGE_JSON_TEST_SETUP_SKIPPED]', { reason: doNotModifyPackageJson ? 'package_json_modification_forbidden' : 'no_package_json_script_available' });
+    console.log('[VALIDATION_COMMAND_BLOCKED]', { reason: 'no_runnable_test_framework', objective: text.slice(0, 200) });
+    return { commands: [], validationBlockedReason: 'NO_RUNNABLE_TEST_FRAMEWORK', packageJsonTestSetupRequired: !doNotModifyPackageJson, packageJsonTestSetupSkipped: true };
+  }
+
+  const buildCommands = uniqueCommands(projectScan?.buildCommands || bootstrapProfile?.buildCommands || []);
+  if (buildCommands.length > 0) {
+    console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'build_commands', command: buildCommands[0], commands: buildCommands });
+    return { commands: buildCommands, validationBlockedReason: null, packageJsonTestSetupRequired: false, packageJsonTestSetupSkipped: false };
+  }
+
+  console.log('[VALIDATION_COMMAND_BLOCKED]', { reason: 'no_validation_command_available', objective: text.slice(0, 200) });
+  return { commands: [], validationBlockedReason: null, packageJsonTestSetupRequired: false, packageJsonTestSetupSkipped: false };
+}
+
+function isNumberedInstructionLine(trimmed) {
+  return /^\d+[.)]\s+/.test(trimmed) || /^[ivxlcdm]+\.\s+/i.test(trimmed);
+}
+
+function isShellFenceLine(trimmed) {
+  return /^```(?:bash|sh|shell|zsh|powershell|pwsh|cmd)?\s*$/i.test(trimmed);
+}
+
+function isValidShellCommand(candidate) {
+  const cleaned = String(candidate || '').replace(/[.;,]\s*$/, '').trim();
+  if (!cleaned) return false;
+  if (/^\d+[.)]\s+[A-Z]/.test(cleaned)) return false;
+  if (/^\d+[.)]\s+/.test(cleaned)) return false;
+  if (/\b(?:do not|preserve deterministic|return|prompt|planner|validation|quality gate)\b/i.test(cleaned)) return false;
+  if (/^(?:[-*]\s*)/.test(cleaned)) return false;
+  if (/^(?:expected observations|planner creates|run_file_metadata|plannerDebugSnapshot)/i.test(cleaned)) return false;
+  if (/^[#*>-]/.test(cleaned)) return false;
+  const token = cleaned.split(/\s+/)[0].toLowerCase();
+  return [
+    'npm', 'yarn', 'pnpm', 'npx', 'node', 'bun', 'deno',
+    'git', 'python', 'python3', 'pytest', 'vitest', 'jest',
+    'mocha', 'tsc', 'eslint', 'go', 'cargo', 'dotnet', 'mvn',
+    'gradle', 'flutter', 'dart'
+  ].includes(token);
+}
+
+export { isValidShellCommand };
 
 export function extractCommands(text) {
   const commands = [];
@@ -46,17 +135,32 @@ export function extractCommands(text) {
   function addIfCommand(candidate) {
     const cleaned = String(candidate || '').replace(/[.;,]\s*$/, '').trim();
     if (!cleaned) return false;
-    if (!direct.test(cleaned)) return false;
+    if (!direct.test(cleaned) || !isValidShellCommand(cleaned)) return false;
     add(cleaned);
     return true;
   }
 
   let expectCommand = false;
+  let inShellFence = false;
   let suppressDirectCommands = false;
   for (const line of lines) {
     const trimmed = String(line || '').trim();
     if (!trimmed) {
       if (!expectCommand) suppressDirectCommands = false;
+      continue;
+    }
+
+    if (isShellFenceLine(trimmed)) {
+      inShellFence = !inShellFence;
+      continue;
+    }
+
+    if (inShellFence) {
+      addIfCommand(trimmed);
+      continue;
+    }
+
+    if (isNumberedInstructionLine(trimmed)) {
       continue;
     }
 
@@ -91,7 +195,7 @@ export function extractCommands(text) {
 
     if (expectCommand) {
       if (direct.test(trimmed)) {
-        add(trimmed);
+        addIfCommand(trimmed);
         expectCommand = false;
         continue;
       }
@@ -111,7 +215,7 @@ export function extractCommands(text) {
     }
   }
 
-  return prioritizeValidationCommands(commands);
+  return prioritizeValidationCommands(commands.filter(isValidShellCommand));
 }
 
 export function expandRepeatedCommands(objective, commands = []) {
@@ -159,6 +263,12 @@ export function classifyReadWriteFiles(objective, files) {
 
   for (const file of files) {
     const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const normalizedFile = String(file || '').replace(/\\/g, '/').toLowerCase();
+    if (/(^|\/)package\.json$/.test(normalizedFile) && /do\s+not\s+modify\s+package\.json(?:\s+unless\s+absolutely\s+necessary)?/i.test(text)) {
+      if (!readFiles.includes(file)) readFiles.push(file);
+      console.log('[PLANNER_PROTECTED_PACKAGE_JSON_READ_ONLY]', { file });
+      continue;
+    }
     const readPattern = new RegExp(
       `\\b(?:${READ_WORDS.join('|')})\\b[\\s\\S]{0,120}?${escaped}`, 'i'
     );
@@ -197,6 +307,22 @@ function hasWriteIntent(objective) {
   return /\b(?:create|write|add|implement|generate|build|construct|modify|update|change|edit|patch|replace|refactor|fix|delete|remove|append|prepend|insert|rename)\b/i.test(text);
 }
 
+function getDeterministicValidationCommands(criteria = {}) {
+  const candidates = [
+    ...(Array.isArray(criteria?.requiredCommands) ? criteria.requiredCommands : []),
+    ...(Array.isArray(criteria?.testCommands) ? criteria.testCommands : []),
+    ...(Array.isArray(criteria?.projectScan?.testCommands) ? criteria.projectScan.testCommands : [])
+  ];
+  const normalized = candidates
+    .map(cmd => String(cmd || '').trim())
+    .filter(Boolean)
+    .filter(isValidShellCommand);
+  if (normalized.length > 0) {
+    return prioritizeValidationCommands([...new Set(normalized)]);
+  }
+  return [];
+}
+
 function expandRepeatedReadFiles(objective, files) {
   const text = String(objective || '');
   const expanded = [];
@@ -220,13 +346,59 @@ export function extractWriteContent(objective, file) {
 
 export function buildPlan(objective, criteria) {
   if (!objective) return { tasks: [] };
+  const bootstrapProfile = criteria?.bootstrapProfile || null;
+  const requestedFiles = Array.isArray(criteria?.requestedFiles) ? criteria.requestedFiles.filter(Boolean) : [];
+  const validationPlan = inferValidationPlan(objective, criteria, bootstrapProfile);
+  const explicitCommands = extractCommands(objective);
+  const fallbackCommands = getDeterministicValidationCommands(criteria);
+  if (bootstrapProfile?.id && bootstrapProfile.resolvedBy !== 'fallback' && criteria?.bootstrapEnabled !== false && requestedFiles.length === 0) {
+    if (bootstrapProfile.canBootstrap === false) {
+      console.log('[BOOTSTRAP_PROFILE_UNSUPPORTED]', {
+        profile: bootstrapProfile.id,
+        label: bootstrapProfile.label || bootstrapProfile.id
+      });
+      return {
+        tasks: [new Task({
+          id: crypto.randomUUID(),
+          kind: criteria?.taskType || 'CODING',
+          goal: `Unsupported framework plan: ${bootstrapProfile.id}`,
+          dependencies: []
+        })],
+        bootstrapProfileId: bootstrapProfile.id,
+        unsupported: true,
+        validationCommands: validationPlan.commands,
+        validationBlockedReason: validationPlan.validationBlockedReason,
+        packageJsonTestSetupRequired: validationPlan.packageJsonTestSetupRequired,
+        packageJsonTestSetupSkipped: validationPlan.packageJsonTestSetupSkipped
+      };
+    }
+    const bootstrapGraph = createBootstrapTaskGraph(bootstrapProfile, {
+      objective,
+      projectIntent: criteria?.projectIntent || {},
+      workspaceState: criteria?.workspaceState || {},
+      criteria
+    });
+    if (bootstrapGraph?.tasks?.length > 0) {
+      console.log('[BOOTSTRAP_TASK_GRAPH_CREATED]', {
+        profile: bootstrapGraph.profileId,
+        taskCount: bootstrapGraph.tasks.length,
+        validationSkipped: bootstrapGraph.validationSkipped || []
+      });
+      return {
+        tasks: bootstrapGraph.tasks,
+        validationCommands: validationPlan.commands,
+        validationBlockedReason: validationPlan.validationBlockedReason,
+        packageJsonTestSetupRequired: validationPlan.packageJsonTestSetupRequired,
+        packageJsonTestSetupSkipped: validationPlan.packageJsonTestSetupSkipped
+      };
+    }
+  }
   const tasks = [];
   const kind = criteria?.taskType || 'CODING';
   const reqFiles = criteria?.requestedFiles || [];
-  const explicitCommands = extractCommands(objective);
   const requiredCommands = prioritizeValidationCommands(expandRepeatedCommands(
     objective,
-    explicitCommands.length > 0 ? explicitCommands : (criteria?.requiredCommands || [])
+    explicitCommands.length > 0 ? explicitCommands : (validationPlan.commands.length > 0 ? validationPlan.commands : fallbackCommands)
   ));
   const isReadKind = kind === 'ANALYSIS' || kind === 'SEARCH';
 
@@ -410,6 +582,22 @@ export function buildPlan(objective, criteria) {
     }));
   }
 
+  if (validationPlan.validationBlockedReason) {
+    console.log('[PLANNER_VALIDATION_TASK_BLOCKED]', {
+      reason: validationPlan.validationBlockedReason,
+      taskType: kind,
+      objective: String(objective || '').slice(0, 200)
+    });
+  } else if (requiredCommands.length > 0) {
+    console.log('[PLANNER_VALIDATION_TASK_ADDED]', { commands: requiredCommands });
+  }
+
   console.log('[PLANNER_CREATE]', { taskCount: tasks.length, tasks: tasks.map(t => ({ id: t.id, kind: t.kind, tool: t.tool, goal: t.goal.substring(0, 80) })) });
-  return { tasks };
+  return {
+    tasks,
+    validationCommands: requiredCommands,
+    validationBlockedReason: validationPlan.validationBlockedReason,
+    packageJsonTestSetupRequired: validationPlan.packageJsonTestSetupRequired,
+    packageJsonTestSetupSkipped: validationPlan.packageJsonTestSetupSkipped
+  };
 }

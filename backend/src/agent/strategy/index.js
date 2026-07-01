@@ -1,0 +1,11 @@
+export { EXECUTION_DECISIONS, createExecutionDecision } from './ExecutionDecision.js';
+export { classifyExecutionFailure } from './FailureClassifier.js';
+export { resolveExecutionConstraints } from './ConstraintReasoner.js';
+export { reasonAboutModelCapability } from './CapabilityReasoner.js';
+export { resolveValidationStrategy } from './ValidationStrategy.js';
+export { resolveFrameworkStrategy } from './FrameworkStrategy.js';
+export { resolvePackageStrategy } from './PackageStrategy.js';
+export { resolveCommandStrategy } from './CommandStrategy.js';
+export { resolveRetryStrategy } from './RetryStrategy.js';
+export { resolveRecoveryStrategy } from './RecoveryStrategy.js';
+export { evaluateExecutionStrategy } from './ExecutionStrategyEngine.js';

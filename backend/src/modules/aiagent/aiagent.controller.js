@@ -1,12 +1,15 @@
 import AiProvider from "../../models/AiProvider.js";
+import mongoose from "mongoose";
 import AiAgent from "../../models/AiAgent.js";
 import AgentTask from "../../models/AgentTask.js";
 import AgentRun from "../../models/AgentRun.js";
 import AgentPromptTemplate from "../../models/AgentPromptTemplate.js";
 import { providerRegistry } from "../../services/adapters/index.js";
+import { createProviderRouter } from "../../agent/providers/index.js";
 import { getDiffSummary } from "../../agent/workspace.js";
 import { resolveWorkspacePathSafe } from "../../agent/workspace.js";
 import { runAgentLoop } from "../../agent/runAgentLoop.js";
+import { sanitizeRunPayload } from "../../agent/runPayload.js";
 import { buildAcceptanceCriteria } from "../../agent/acceptanceCriteria.js";
 import { getWorkspaceByPublicId } from "../workspace/workspace.service.js";
 import { isRemoteWorkspaceMode } from "../../agent/workspace.js";
@@ -58,6 +61,15 @@ function normalizeTaskType(value) {
   return "CODING";
 }
 
+function buildProviderRequestFromAgent(agent = {}) {
+  const providerId = agent.providerId?.code || agent.providerId?.id || agent.providerId || agent.providerCode || null;
+  return {
+    providerId: providerId ? String(providerId) : null,
+    model: agent.modelName || agent.model || null,
+    providers: [agent].filter(Boolean)
+  };
+}
+
 export { isFallbackError, autoGenerateResponse };
 
 async function getAutoFallbackAgents() {
@@ -74,14 +86,21 @@ const MAX_INVALID_JSON_RETRIES = 2;
 
 async function autoGenerateResponse(messages, fallbackAgents, attemptsRef) {
   let invalidJsonCount = 0;
+  const providerRouter = createProviderRouter({
+    adapterRegistry: providerRegistry,
+    allowFallback: false
+  });
 
   while (fallbackAgents.length > 0) {
     const current = fallbackAgents[0];
-    const currentAdapter = providerRegistry.getAdapter(current.providerId.code);
 
-    // Skip unconfigured providers
-    if (!(await currentAdapter.isConfigured())) {
-      const configError = currentAdapter.getConfigError();
+    // Skip unconfigured providers through the router health path
+    const selection = await providerRouter.selectProvider({
+      ...buildProviderRequestFromAgent(current),
+      providers: [current]
+    });
+    if (!selection.provider || !selection.adapter) {
+      const configError = selection.providerErrors?.[0]?.error?.message || selection.providerErrors?.[0]?.error?.type || "not_configured";
       console.log("[AutoAgent] %s not configured: %s", current.name, configError);
       attemptsRef.push({
         provider: current.name,
@@ -98,15 +117,16 @@ async function autoGenerateResponse(messages, fallbackAgents, attemptsRef) {
 
     try {
       console.log("[AutoAgent] trying %s (%s)", current.name, current.modelName);
-      const response = await currentAdapter.run({
-        modelName: current.modelName,
+      const response = await providerRouter.generate({
+        ...buildProviderRequestFromAgent(current),
         messages,
         temperature: 0,
-        maxTokens: current.maxTokens
+        maxTokens: current.maxTokens,
+        purpose: "code_generation"
       });
 
       if (!response.success) {
-        const errMsg = response.error || "Unknown provider error";
+        const errMsg = response.error?.message || response.error?.type || "Unknown provider error";
         const health = classifyProviderError(errMsg);
         console.log("[AutoAgent] failed: %s - %s [%s]", current.name, errMsg, health);
         attemptsRef.push({
@@ -122,7 +142,7 @@ async function autoGenerateResponse(messages, fallbackAgents, attemptsRef) {
         continue;
       }
 
-      const text = response.output || response.content || response.text || response.outputText || "";
+      const text = response.normalizedText || response.text || "";
 
       // Empty response check
       if (!text.trim()) {
@@ -278,6 +298,10 @@ async function executeAgentRun({
   }
 
   const isConfigured = isAutoMode ? true : await adapter.isConfigured();
+  const providerRouter = createProviderRouter({
+    adapterRegistry: providerRegistry,
+    allowFallback: false
+  });
 
   if (!isConfigured) {
     const error = adapter.getConfigError();
@@ -359,11 +383,12 @@ async function executeAgentRun({
       finalText = String(directMatch[1]).split(/\r?\n/)[0].trim();
     } else {
       // Single provider call (no auto fallback storm), plain answer mode
-      const response = await adapter.run({
-        modelName: effectiveAgent.modelName,
+      const response = await providerRouter.generate({
+        ...buildProviderRequestFromAgent(effectiveAgent),
         messages: [{ role: "user", content: run.inputPrompt }],
         temperature: 0,
-        maxTokens: effectiveAgent.maxTokens
+        maxTokens: effectiveAgent.maxTokens,
+        purpose: "final_summary"
       });
       if (!response.success) {
         // On provider failure for CHAT, return needs_revision with error
@@ -380,7 +405,7 @@ async function executeAgentRun({
         await run.save();
         return { success: false, error: run.errorMessage, run };
       }
-      finalText = String(response.output || response.content || response.text || response.outputText || "").trim();
+      finalText = String(response.normalizedText || response.text || "").trim();
     }
 
     run.status = "completed";
@@ -463,7 +488,7 @@ async function executeAgentRun({
     onEvent: (event) => {
       onEvent(event);
     },
-    generateResponse: async ({ messages }) => {
+    generateResponse: async ({ messages, maxTokens, maxTokensCapOverride, purpose }) => {
       if (isAutoMode) {
         // Always pass a fresh list per response to prevent cross-run leakage
         return autoGenerateResponse(messages, [...fallbackAgents], autoAttempts);
@@ -472,31 +497,26 @@ async function executeAgentRun({
         console.log("[AgentRun] calling provider adapter.run provider=%s model=%s messages=%d",
           effectiveAgent.providerId.code, effectiveAgent.modelName, messages.length);
       }
-      let response;
-      try {
-        response = await adapter.run({
-          modelName: effectiveAgent.modelName,
-          messages,
-          temperature: 0,
-          maxTokens: effectiveAgent.maxTokens,
-          modelCallTimeout: policy.modelCallTimeoutMs
-        });
-        console.error("[ADAPTER_RESULT]", response);
-      } catch (err) {
-        console.error("[AgentRun] provider error:", err?.response?.data || err?.response?.status || err?.message || err);
-        throw err;
-      }
+      const response = await providerRouter.generate({
+        ...buildProviderRequestFromAgent(effectiveAgent),
+        messages,
+        temperature: 0,
+        maxTokens: Number(maxTokens || effectiveAgent.maxTokens || 0) || effectiveAgent.maxTokens,
+        maxTokensCapOverride,
+        purpose,
+        timeoutMs: policy.modelCallTimeoutMs
+      });
 
       if (!response.success) {
-        const error = response?.errorDetails || response;
+        const error = response?.error || response;
         console.error(
           "[AgentRun] provider error:",
-          error?.response?.data || error?.response?.status || error?.message || error
+          error?.raw?.response?.data || error?.raw?.response?.status || error?.message || error
         );
-        throw new Error(response.error || "AI provider execution failed");
+        throw new Error(response.error?.message || response.error?.type || "AI provider execution failed");
       }
 
-      const text = response.output || response.content || response.text || response.outputText || "";
+      const text = response.normalizedText || response.text || "";
       if (DEBUG()) console.log("[AgentRun] provider OK outputLength=%d", text.length);
       return text;
     }
@@ -536,6 +556,34 @@ async function executeAgentRun({
     sanitizedValidated = filtered;
   }
 
+  let sanitizedVerifiedExisting = Array.isArray(result.verifiedExistingFiles) ? result.verifiedExistingFiles : [];
+  if (workspace?.rootPath) {
+    const filtered = [];
+    for (const f of sanitizedVerifiedExisting) {
+      try {
+        await resolveWorkspacePathSafe(workspace.rootPath, f);
+        filtered.push(f);
+      } catch {
+        // drop
+      }
+    }
+    sanitizedVerifiedExisting = filtered;
+  }
+
+  let sanitizedPlannerReadFiles = Array.isArray(result.plannerReadFiles) ? result.plannerReadFiles : [];
+  if (workspace?.rootPath) {
+    const filtered = [];
+    for (const f of sanitizedPlannerReadFiles) {
+      try {
+        await resolveWorkspacePathSafe(workspace.rootPath, f);
+        filtered.push(f);
+      } catch {
+        // drop
+      }
+    }
+    sanitizedPlannerReadFiles = filtered;
+  }
+
   // Recompute diff summary strictly from sanitized files within workspace
   let sanitizedDiff = result.diffSummary || {};
   if (workspace?.rootPath) {
@@ -544,37 +592,46 @@ async function executeAgentRun({
 
   // Respect needs_continue status for timeouts/continuations
   const completionResult = deriveRunCompletionResult(result);
+  const sanitizedResult = sanitizeRunPayload(result, { field: 'run.result' });
   run.status = result.status === "error"
     ? "error"
     : (result.status === "needs_continue"
       ? "needs_continue"
       : completionResult.finalStatus);
-  run.outputText = result.final || "";
+  run.outputText = String(sanitizedResult.final || "");
   run.stopReason = result.stopReason || run.stopReason || null;
-  run.rawResponse = {
+  run.rawResponse = sanitizeRunPayload({
     success: result.success,
     error: result.error || null
-  };
+  }, { field: 'run.rawResponse' });
   run.errorMessage = run.status !== "completed"
     ? result.error || "Agent implementation needs revision"
     : null;
-  run.changedFiles = sanitizedChanged;
-  run.validatedFiles = sanitizedValidated;
-  run.toolCalls = result.toolCalls || [];
-  run.executionEvents = result.events || [];
-  run.diffSummary = sanitizedDiff;
-  run.plannerMetrics = result.plannerMetrics || {};
-  run.qualityGate = result.qualityGate || {};
-  run.acceptanceCriteria = result.acceptanceCriteria || {};
+  run.changedFiles = sanitizeRunPayload(sanitizedChanged, { field: 'run.changedFiles' }) || [];
+  run.validatedFiles = sanitizeRunPayload(sanitizedValidated, { field: 'run.validatedFiles' }) || [];
+  run.verifiedExistingFiles = sanitizeRunPayload(sanitizedVerifiedExisting, { field: 'run.verifiedExistingFiles' }) || [];
+  run.plannerReadFiles = sanitizeRunPayload(sanitizedPlannerReadFiles, { field: 'run.plannerReadFiles' }) || [];
+  run.toolCalls = sanitizeRunPayload(result.toolCalls || [], { field: 'run.toolCalls' }) || [];
+  run.executionEvents = sanitizeRunPayload(result.events || [], { field: 'run.executionEvents' }) || [];
+  run.diffSummary = sanitizeRunPayload(sanitizedDiff, { field: 'run.diffSummary' }) || {};
+  run.plannerMetrics = sanitizeRunPayload(result.plannerMetrics || {}, { field: 'run.plannerMetrics' }) || {};
+  run.plannerDebugSnapshot = sanitizeRunPayload(result.plannerDebugSnapshot || null, { field: 'run.plannerDebugSnapshot' }) || null;
+  run.qualityGate = sanitizeRunPayload(result.qualityGate || {}, { field: 'run.qualityGate' }) || {};
+  run.acceptanceCriteria = sanitizeRunPayload(result.acceptanceCriteria || {}, { field: 'run.acceptanceCriteria' }) || {};
   run.currentStep = result.history?.length || 0;
   run.currentTool = "";
   run.executionSummary = {
     changedFileCount: run.changedFiles.length,
     validatedFileCount: run.validatedFiles.length,
+    verifiedExistingFileCount: run.verifiedExistingFiles.length,
+    plannerReadFileCount: run.plannerReadFiles.length,
     toolCallCount: run.toolCalls.length,
     eventCount: run.executionEvents.length,
-    final: result.final || "",
-    qualityScore: result.qualityGate?.score || 0
+    final: String(sanitizedResult.final || ""),
+    qualityScore: result.qualityGate?.score || 0,
+    originalPlannerTasks: sanitizeRunPayload(result.plannerDebugSnapshot?.originalPlannerTasks || null, { field: 'run.executionSummary.originalPlannerTasks' }) || [],
+    originalTaskGraph: sanitizeRunPayload(result.plannerDebugSnapshot?.originalTaskGraph || null, { field: 'run.executionSummary.originalTaskGraph' }) || null,
+    initialPlannerGraphSnapshot: sanitizeRunPayload(result.plannerDebugSnapshot?.initialPlannerGraphSnapshot || null, { field: 'run.executionSummary.initialPlannerGraphSnapshot' }) || null
   };
   if (isAutoMode && autoAttempts.length > 0) {
     run.autoFailover = { attempts: autoAttempts };
@@ -914,6 +971,61 @@ export async function getTaskRuns(req, res) {
 }
 
 /**
+ * Get recent AgentRun records, optionally scoped to a task.
+ * Read-only list view used by the planner debug UI.
+ */
+export async function getAgentRuns(req, res) {
+  try {
+    const { taskId } = req.query;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    const match = {};
+    if (taskId) {
+      match.taskId = mongoose.Types.ObjectId.isValid(taskId)
+        ? new mongoose.Types.ObjectId(taskId)
+        : taskId;
+    }
+
+    const runs = await AgentRun.aggregate([
+      { $match: match },
+      { $sort: { _id: -1 } },
+      { $limit: limit },
+      {
+        $project: {
+          _id: 1,
+          taskId: 1,
+          status: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          hasPlannerDebugSnapshot: {
+            $cond: [{ $ifNull: ["$plannerDebugSnapshot", false] }, true, false]
+          }
+        }
+      }
+    ]).allowDiskUse(true);
+
+    return res.json({
+      success: true,
+      data: runs.map(run => ({
+        id: run._id?.toString?.() || String(run._id || ""),
+        taskId: run.taskId?.toString?.() || String(run.taskId || ""),
+        status: run.status || "pending",
+        success: run.status === "completed",
+        createdAt: run.createdAt || null,
+        updatedAt: run.updatedAt || null,
+        hasPlannerDebugSnapshot: !!run.hasPlannerDebugSnapshot
+      }))
+    });
+  } catch (error) {
+    console.error("getAgentRuns error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch agent runs",
+      error: error.message
+    });
+  }
+}
+
+/**
  * Get all Prompt Templates
  */
 export async function getPromptTemplates(req, res) {
@@ -1189,19 +1301,20 @@ export async function runAgentPrompt(req, res) {
           fallbackAgents: isAutoMode ? [...fallbackAgents] : null,
           onEvent: (event) => {
             if (abortController.signal.aborted) return;
-            const update = { $push: { executionEvents: event }, $set: {} };
-            if (event.step !== undefined) update.$set.currentStep = event.step;
-            if (event.tool) update.$set.currentTool = event.tool;
+            const sanitizedEvent = sanitizeRunPayload(event, { field: 'run.executionEvents' });
+            const update = { $push: { executionEvents: sanitizedEvent }, $set: {} };
+            if (sanitizedEvent.step !== undefined) update.$set.currentStep = sanitizedEvent.step;
+            if (sanitizedEvent.tool) update.$set.currentTool = sanitizedEvent.tool;
             // Persist snapshots for UI between steps
-            if (event.type === "debug" && event.section === "RUN_STATE") {
-              if (Array.isArray(event.filesRead)) update.$set.filesRead = event.filesRead;
-              if (Array.isArray(event.filesChanged)) update.$set.changedFiles = event.filesChanged;
-              update.$set.patchesApplied = event.patchesApplied ?? undefined;
-              update.$set.terminalCommands = event.terminalCommands ?? undefined;
-              update.$set.outputText = event.finalTextPreview ? String(event.finalTextPreview) : undefined;
+            if (sanitizedEvent.type === "debug" && sanitizedEvent.section === "RUN_STATE") {
+              if (Array.isArray(sanitizedEvent.filesRead)) update.$set.filesRead = sanitizedEvent.filesRead;
+              if (Array.isArray(sanitizedEvent.filesChanged)) update.$set.changedFiles = sanitizedEvent.filesChanged;
+              update.$set.patchesApplied = sanitizedEvent.patchesApplied ?? undefined;
+              update.$set.terminalCommands = sanitizedEvent.terminalCommands ?? undefined;
+              update.$set.outputText = sanitizedEvent.finalTextPreview ? String(sanitizedEvent.finalTextPreview) : undefined;
             }
-            if (event.type === "debug" && event.section === "MODEL_RAW_RESPONSE" && event.preview) {
-              update.$set.lastModelResponsePreview = event.preview;
+            if (sanitizedEvent.type === "debug" && sanitizedEvent.section === "MODEL_RAW_RESPONSE" && sanitizedEvent.preview) {
+              update.$set.lastModelResponsePreview = sanitizedEvent.preview;
             }
             if (Object.keys(update.$set).length === 0) delete update.$set;
             AgentRun.findByIdAndUpdate(run._id, update).catch(() => {});
@@ -1305,7 +1418,12 @@ export async function continueAgentRun(req, res) {
  */
 export async function getAgentRun(req, res) {
   try {
-    const run = await AgentRun.findById(req.params.runId)
+    const { runId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(runId)) {
+      return res.status(400).json({ success: false, error: "Invalid runId" });
+    }
+
+    const run = await AgentRun.findById(runId)
       .populate("agentId", "name code modelName");
 
     if (!run) {
@@ -1391,6 +1509,7 @@ export async function getAgentRun(req, res) {
         toolCalls,
         executionEvents,
         plannerMetrics: run.plannerMetrics || {},
+        plannerDebugSnapshot: run.plannerDebugSnapshot || null,
         errors,
         qualityGate: run.qualityGate || {},
         outputText: run.outputText || "",

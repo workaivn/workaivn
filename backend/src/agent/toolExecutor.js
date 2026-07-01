@@ -114,7 +114,8 @@ export async function executeTool(
       activeFiles: normalizedContext.activeFiles || [],
       workspaceId: normalizedContext.workspaceId,
       workspaceRoot: normalizedContext.workspaceRoot,
-      layout: normalizedContext.layout || null
+      layout: normalizedContext.layout || null,
+      writeContext: normalizedContext.writeContext || null
     });
 
     return result;

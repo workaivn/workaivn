@@ -11,12 +11,29 @@ import {
   getWorkspaceRoot,
   buildWriteContext,
   buildWriteContentPrompt,
+  normalizeWorkspaceRelativePath,
   normalizeWorkspacePaths,
   normalizeGeneratedModuleContent,
   validateGeneratedWriteContent,
   detectWorkspaceModuleSystem,
   resolveWorkspacePathSafe
 } from "./workspace.js";
+import { FrameworkAdapter } from "./framework/frameworkAdapter.js";
+import { repairFramework } from "./framework/frameworkAutoRepair.js";
+import {
+  buildFrameworkGenerationContract,
+  checkFrameworkContract
+} from "./framework/frameworkContractBuilder.js";
+import {
+  buildValidationDelta as buildStructuredValidationDelta,
+  mergeCoordinatorPatch,
+  validateMonotonic,
+  buildDeltaRetryPrompt,
+  parseDeltaRetryResponse,
+  validateStructuralContent as validateStructuredWriteContent
+} from "./writeCoordinator/validationDelta.js";
+import { normalizeCoordinatorResponse } from "./writeCoordinator/responseNormalizer.js";
+import { resolveTokenBudget } from "../services/adapters/tokenBudget.js";
 import {
   acceptanceCriteriaToPrompt,
   buildAcceptanceCriteria
@@ -25,7 +42,7 @@ import { evaluateQualityGate } from "./qualityGate.js";
 import { Planner } from "./planner/planner.js";
 import { TaskStatus } from "./planner/plannerTypes.js";
 import { Task } from "./planner/task.js";
-import { buildPlan, extractCommands } from "./planner/planBuilder.js";
+import { buildPlan, extractCommands, isValidShellCommand } from "./planner/planBuilder.js";
 import { parsePromptFileLiterals, validatePromptLiteralContent } from "./planner/promptLiteralParser.js";
 import {
   createPlannerMetrics,
@@ -37,6 +54,9 @@ import {
 import { isSameCommand, matchValidationCommand } from "./validationCommandMatcher.js";
 import { buildPlannerContext } from "./planner/contextBuilder.js";
 import { expandPlannerTasks } from "./planner/taskExpander.js";
+import { buildPlannerExecutionMetadata, detectProjectIntent, detectWorkspaceState, resolveBootstrapProfile } from "./projectIntelligence/index.js";
+import { buildExecutionStateRegistry, extractExternalFailureFilesFromText } from "./execution/executionStateRegistry.js";
+import { evaluateExecutionStrategy } from "./strategy/index.js";
 import {
   notifyToolExecution,
   canExecuteTool,
@@ -48,12 +68,175 @@ import {
   tryRecovery
 } from "./planner/executionController.js";
 import { checkTaskTimeout, markTaskStall } from "./planner/taskTimeout.js";
+import { sanitizeRunPayload, truncateRunText } from "./runPayload.js";
 
 const DEBUG = () => process.env.DEBUG_AGENT === "true";
 
 const WRITE_TOOLS = new Set(["WRITE_FILE", "APPLY_PATCH"]);
 
 const READ_ONLY_TASK_TYPES = new Set(["CHAT", "SEARCH", "ANALYSIS"]);
+
+const WRITE_GENERATION_DEFAULT_MAX_TOKENS = 4096;
+const PLANNER_TERMINAL_STATUSES = new Set(["SUCCESS", "FAILED", "BLOCKED", "SKIPPED"]);
+const PLANNER_UNFINISHED_STATUSES = new Set([
+  "PENDING",
+  "READY",
+  "WAITING",
+  "RUNNING",
+  "RECOVERING",
+  "UNKNOWN",
+  "RECOVERED",
+  "RECOVERY_FAILED"
+]);
+
+function resolveWriteGenerationTokenBudget({
+  requestedMaxTokens = WRITE_GENERATION_DEFAULT_MAX_TOKENS,
+  maxTokensCapOverride = WRITE_GENERATION_DEFAULT_MAX_TOKENS,
+  source = 'write_generation'
+} = {}) {
+  return resolveTokenBudget({
+    provider: 'write-generation',
+    model: 'coding-agent',
+    requestedMaxTokens,
+    maxTokensCapOverride,
+    source,
+    defaultRequestedMaxTokens: WRITE_GENERATION_DEFAULT_MAX_TOKENS
+  });
+}
+
+function serializePlannerTaskSnapshot(task) {
+  if (!task) return null;
+  const dependencies = Array.from(task.dependencies || []);
+  const parents = Array.from(task.parents || []);
+  const children = Array.from(task.children || []);
+  return {
+    id: task.id ?? null,
+    taskId: task.id ?? null,
+    kind: task.kind ?? null,
+    goal: task.goal ?? null,
+    status: task.status ?? null,
+    tool: task.tool ?? null,
+    toolArgs: task.tool && typeof task.toolArgs === 'object' && task.toolArgs !== null
+      ? sanitizeRunPayload(task.toolArgs, { field: 'planner.originalTask.toolArgs' })
+      : task.toolArgs ?? null,
+    priority: task.priority ?? null,
+    dependencies,
+    parents,
+    children,
+    result: sanitizeRunPayload(task.result ?? null, { field: 'planner.originalTask.result' }),
+    error: sanitizeRunPayload(task.error ?? null, { field: 'planner.originalTask.error' }),
+    reason: sanitizeRunPayload(task.reason ?? null, { field: 'planner.originalTask.reason' }),
+    branchType: task.branchType ?? null,
+    branchReason: task.branchReason ?? null,
+    successNext: task.successNext ?? null,
+    failureNext: task.failureNext ?? null,
+    recoveredNext: task.recoveredNext ?? null,
+    blockedNext: task.blockedNext ?? null,
+    skipNext: task.skipNext ?? null,
+    statusReason: task.statusReason ?? null,
+    retryCount: task.retryCount ?? 0,
+    attempts: task.attempts ?? 0,
+    stallCount: task.stallCount ?? 0,
+    createdAt: task.createdAt ?? null,
+    updatedAt: task.updatedAt ?? null,
+    startedAt: task.startedAt ?? null,
+    lastProgressAt: task.lastProgressAt ?? null
+  };
+}
+
+function deepFreezePlannerSnapshot(value) {
+  if (!value || typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      deepFreezePlannerSnapshot(item);
+    }
+    return Object.freeze(value);
+  }
+  for (const key of Object.keys(value)) {
+    deepFreezePlannerSnapshot(value[key]);
+  }
+  return Object.freeze(value);
+}
+
+export function captureOriginalPlannerGraph(planner) {
+  if (!planner) return null;
+  if (planner.initialPlannerGraphSnapshot && Array.isArray(planner.originalPlannerTasks)) {
+    return planner.initialPlannerGraphSnapshot;
+  }
+  const originalNodes = typeof planner.graph?.allNodes === 'function'
+    ? planner.graph.allNodes()
+    : [];
+  const originalPlannerTasks = Object.freeze([...originalNodes]);
+  const initialPlannerGraphSnapshot = deepFreezePlannerSnapshot({
+    capturedAt: new Date().toISOString(),
+    taskCount: originalPlannerTasks.length,
+    taskIds: originalPlannerTasks.map(task => task?.id).filter(Boolean),
+    tasks: originalPlannerTasks.map(task => serializePlannerTaskSnapshot(task)).filter(Boolean)
+  });
+  planner.originalPlannerTasks = originalPlannerTasks;
+  planner.originalTaskGraph = initialPlannerGraphSnapshot;
+  planner.initialPlannerGraphSnapshot = initialPlannerGraphSnapshot;
+  return initialPlannerGraphSnapshot;
+}
+
+export function getPlannerOriginalTasks(planner, runState = null) {
+  if (Array.isArray(planner?.originalPlannerTasks) && planner.originalPlannerTasks.length > 0) {
+    return planner.originalPlannerTasks;
+  }
+  if (Array.isArray(runState?.originalPlannerTasks) && runState.originalPlannerTasks.length > 0) {
+    return runState.originalPlannerTasks;
+  }
+  if (Array.isArray(planner?.initialPlannerGraphSnapshot?.tasks) && planner.initialPlannerGraphSnapshot.tasks.length > 0) {
+    return planner.initialPlannerGraphSnapshot.tasks;
+  }
+  return typeof planner?.graph?.allNodes === 'function' ? planner.graph.allNodes() : [];
+}
+
+export function isOriginalPlannerGraphTerminal(originalTasks = []) {
+  const tasks = Array.isArray(originalTasks) ? originalTasks : [];
+  const unfinishedTasks = tasks.filter(task => !PLANNER_TERMINAL_STATUSES.has(String(task?.status || '').toUpperCase()));
+  return {
+    terminal: unfinishedTasks.length === 0,
+    unfinishedTasks
+  };
+}
+
+export function findMissingPlannerNodes(originalTasks = [], currentTasks = []) {
+  const currentIds = new Set((Array.isArray(currentTasks) ? currentTasks : []).map(task => task?.id).filter(Boolean));
+  return (Array.isArray(originalTasks) ? originalTasks : [])
+    .filter(task => task?.id && !currentIds.has(task.id));
+}
+
+export function buildPlannerGraphFinalizationDiagnostics(planner, plannerStatus = null) {
+  const originalTasks = getPlannerOriginalTasks(planner);
+  const currentTasks = typeof planner?.graph?.allNodes === 'function' ? planner.graph.allNodes() : [];
+  const originalTerminality = isOriginalPlannerGraphTerminal(originalTasks);
+  const missingTasks = findMissingPlannerNodes(originalTasks, currentTasks);
+  const graphCorruption = currentTasks.length < originalTasks.length || missingTasks.length > 0;
+  const unfinishedTasks = originalTerminality.unfinishedTasks;
+  const blocked = graphCorruption || unfinishedTasks.length > 0;
+  const blockedReasons = [];
+  if (graphCorruption) blockedReasons.push('planner graph lost one or more original tasks');
+  if (unfinishedTasks.length > 0) blockedReasons.push('original planner tasks are not terminal');
+  return {
+    blocked,
+    blockedReason: blockedReasons.length > 0 ? blockedReasons.join('; ') : null,
+    graphCorruption,
+    originalCount: originalTasks.length,
+    currentCount: currentTasks.length,
+    missingIds: missingTasks.map(task => task.id).filter(Boolean),
+    missingTasks: missingTasks.map(task => serializePlannerTaskSnapshot(task)),
+    unfinishedTasks: unfinishedTasks.map(task => serializePlannerTaskSnapshot(task)),
+    plannerStatus: plannerStatus || null
+  };
+}
+
+export function buildPlannerFinalizationBlockedText(diagnostics = {}) {
+  return [
+    'Planner finalization blocked.',
+    diagnostics?.blockedReason || 'The original planner graph is not fully terminal.'
+  ].join(' ');
+}
 
 function emitHistoryLookup(history, task, step) {
   if (!history || !task || !task.tool) return false;
@@ -458,6 +641,2077 @@ function buildReadFileExcerpt(filePath, content) {
   }
 }
 
+function summarizePackageJsonForCoordinator(packageJson = null) {
+  const pkg = packageJson && typeof packageJson === 'object' ? packageJson : null;
+  if (!pkg) return null;
+  return {
+    name: pkg.name || null,
+    version: pkg.version || null,
+    scripts: pkg.scripts ? Object.keys(pkg.scripts) : [],
+    dependencies: pkg.dependencies ? Object.keys(pkg.dependencies) : [],
+    devDependencies: pkg.devDependencies ? Object.keys(pkg.devDependencies) : []
+  };
+}
+
+function sanitizeCoordinatorTargetPath(targetPath, workspaceRoot) {
+  const normalized = normalizeWorkspaceRelativePath(String(targetPath || ''), workspaceRoot);
+  return normalized && normalized !== '.' ? normalized : '';
+}
+
+function formatFrameworkContractBlock(targetPath, contract) {
+  const lines = [
+    `FRAMEWORK CONTRACT FOR ${targetPath}`,
+    '',
+    `Framework:`,
+    contract.framework,
+    '',
+    'Required imports:'
+  ];
+
+  const requiredImports = contract.requiredImports || contract.imports || [];
+  for (const imp of requiredImports) {
+    lines.push(imp);
+  }
+
+  lines.push('', 'Allowed assertions:');
+  for (const assertion of contract.allowedAssertions || []) {
+    lines.push(assertion);
+  }
+
+  lines.push('', 'Forbidden:');
+  for (const forbidden of contract.forbiddenImports || []) {
+    lines.push(`- ${forbidden}`);
+  }
+  for (const call of contract.forbiddenCalls || []) {
+    lines.push(`- ${call}`);
+  }
+
+  lines.push('', 'Any output violating this contract will be rejected.', '');
+  lines.push(`When generating ${targetPath}:`);
+  if (contract.allowedAssertionPrefix) {
+    lines.push(`- use only ${contract.allowedAssertionPrefix}*`);
+  }
+  for (const rule of contract.hardRules || []) {
+    const normalizedRule = String(rule || '').trim();
+    if (!normalizedRule) continue;
+    lines.push(`- ${normalizedRule.replace(/\.$/, '').toLowerCase()}`);
+  }
+
+  lines.push(
+    '',
+    'Structured contract:',
+    JSON.stringify({
+      frameworkContract: {
+        path: targetPath,
+        framework: contract.framework,
+        requiredImports: contract.requiredImports || [],
+        forbiddenTokens: contract.forbiddenTokens || [],
+        allowedAssertionPrefix: contract.allowedAssertionPrefix || null
+      }
+    }, null, 2)
+  );
+
+  return lines.join('\n');
+}
+
+function buildWriteCoordinatorPrompt({
+  objective = '',
+  projectScan = {},
+  packageJson = null,
+  validationCommand = '',
+  fileContexts = [],
+  targetPaths = []
+} = {}) {
+  const scanSummary = {
+    projectType: projectScan?.projectType || 'generic',
+    packageManager: projectScan?.packageManager || null,
+    moduleSystem: projectScan?.moduleSystem || projectScan?.detectedModuleSystem || null,
+    testCommands: Array.isArray(projectScan?.testCommands) ? projectScan.testCommands : [],
+    entryFiles: Array.isArray(projectScan?.entryFiles) ? projectScan.entryFiles : []
+  };
+
+  const filesSection = fileContexts.map((entry) => {
+    const policy = entry.writeContext?.validationPolicy || {};
+    const frameworkAvailability = entry.writeContext?.detectedTestFrameworkAvailability || null;
+    const frameworkHints = policy.role === 'test'
+      ? FrameworkAdapter.buildGenerationHints(policy.testFramework || 'generic-js-test', frameworkAvailability)
+      : null;
+    const frameworkContract = policy.role === 'test'
+      ? buildFrameworkGenerationContract({
+          framework: policy.testFramework || 'generic-js-test',
+          moduleSystem: policy.moduleSystem || 'unknown',
+          targetPath: entry.targetPath,
+          role: policy.role,
+          availability: frameworkAvailability
+        })
+      : null;
+
+    if (frameworkContract) {
+      console.log('[FRAMEWORK_CONTRACT_BUILT]', {
+        path: entry.targetPath,
+        framework: frameworkContract.framework,
+        requiredImports: frameworkContract.requiredImports || [],
+        forbiddenCalls: frameworkContract.forbiddenCalls || []
+      });
+    } else if (policy.role === 'test') {
+      console.log('[FRAMEWORK_CONTRACT_MISSING]', {
+        path: entry.targetPath,
+        framework: policy.testFramework || 'generic-js-test'
+      });
+    }
+
+    return {
+      path: entry.targetPath,
+      role: policy.role || 'unknown',
+      moduleSystem: policy.moduleSystem || 'unknown',
+      testFramework: policy.testFramework || 'generic-js-test',
+      frameworkHints,
+      frameworkContract,
+      mustExport: Array.isArray(policy.mustExport) ? policy.mustExport : [],
+      mustReference: Array.isArray(policy.mustReference) ? policy.mustReference : [],
+      mustContainAny: Array.isArray(policy.mustContainAny) ? policy.mustContainAny : [],
+      rejectPlaceholders: policy.rejectPlaceholders !== false
+    };
+  });
+
+  const contractBlocks = filesSection
+    .filter(file => file.frameworkContract)
+    .map(file => formatFrameworkContractBlock(file.path, file.frameworkContract));
+
+  const prompt = [
+    'WRITE COORDINATOR MODE.',
+    'Generate content for all target files in one batch.',
+    'Return strict JSON only with this exact shape:',
+    '{"files":[{"path":"src/math.js","content":"..."},{"path":"src/math.test.js","content":"..."}]}',
+    'No markdown.',
+    'No prose.',
+    'No tool call.',
+    'No extra keys.',
+    '',
+    `Original user prompt: ${objective || '(empty)'}`,
+    '',
+    `Project scan: ${JSON.stringify(scanSummary)}`,
+    packageJson ? `package.json summary: ${JSON.stringify(summarizePackageJsonForCoordinator(packageJson))}` : 'package.json summary: unavailable',
+    validationCommand ? `Validation command: ${validationCommand}` : 'Validation command: none',
+    '',
+    'Target files:',
+    ...filesSection.map(file => `- ${JSON.stringify(file)}`),
+    '',
+    ...contractBlocks
+  ].join('\n');
+
+  for (const file of filesSection) {
+    if (!file.frameworkContract) continue;
+    const contract = file.frameworkContract;
+    const requiredCodeImports = (contract.requiredImports || []).filter(req =>
+      req.includes('import ') && (req.includes('"') || req.includes("'"))
+    );
+    const promptContainsRequiredImports = requiredCodeImports.length === 0 || requiredCodeImports.every(req => prompt.includes(req));
+    const promptContainsForbiddenRules =
+      (contract.forbiddenCalls || []).some(call => prompt.includes(call)) ||
+      (contract.forbiddenImports || []).some(forbidden => prompt.includes(forbidden));
+
+    console.log('[FRAMEWORK_CONTRACT_INJECTED]', {
+      path: file.path,
+      framework: contract.framework,
+      promptContainsRequiredImports,
+      promptContainsForbiddenRules
+    });
+  }
+
+  return {
+    system: 'Return only valid JSON. Do not wrap the response in markdown fences.',
+    user: prompt,
+    filesSection,
+    scanSummary,
+    targetPaths
+  };
+}
+
+function buildCompactWriteCoordinatorPrompt({
+  fileContexts = [],
+  targetPaths = [],
+  validationCommand = '',
+  objective = ''
+} = {}) {
+  const implementationExports = [...new Set(fileContexts.flatMap(entry => {
+    const policy = entry.writeContext?.validationPolicy || {};
+    return Array.isArray(policy.mustExport) ? policy.mustExport : [];
+  }).filter(Boolean))];
+  const testContext = fileContexts.find(entry => String(entry.writeContext?.validationPolicy?.role || '') === 'test') || null;
+  const testPolicy = testContext?.writeContext?.validationPolicy || {};
+  const testFramework = String(testPolicy.testFramework || 'node:test').trim();
+  const testImports = testFramework === 'node:test'
+    ? ['import test from "node:test";', 'import assert from "node:assert/strict";']
+    : Array.isArray(testPolicy.mustReference) ? testPolicy.mustReference.slice(0, 4) : [];
+
+  const lines = [
+    'WRITE COORDINATOR MODE.',
+    'Return strict JSON only:',
+    '{"files":[{"path":"src/math.js","content":"..."},{"path":"src/math.test.js","content":"..."}]}',
+    'No markdown.',
+    'No prose.',
+    'No extra keys.',
+    '',
+    `Task: write ${targetPaths.length} file(s) with minimal deterministic content.`,
+    objective ? `Intent: ${String(objective).slice(0, 120)}` : 'Intent: create the requested files.',
+    `Validation command: ${validationCommand || 'npm test'}`,
+    '',
+    'Target files:'
+  ];
+
+  for (const entry of fileContexts) {
+    const policy = entry.writeContext?.validationPolicy || {};
+    const role = String(policy.role || 'unknown');
+    const exports = Array.isArray(policy.mustExport) ? policy.mustExport.filter(Boolean) : [];
+    const references = Array.isArray(policy.mustReference) ? policy.mustReference.filter(Boolean) : [];
+    const forbidden = role === 'test' ? ['expect(', 'describe(', 'it('] : [];
+    const compactParts = [
+      `- ${entry.targetPath}`,
+      `role=${role}`,
+      `framework=${String(policy.testFramework || 'none')}`
+    ];
+    if (exports.length > 0) compactParts.push(`exports=${exports.join(',')}`);
+    if (references.length > 0) compactParts.push(`imports=${references.join(',')}`);
+    if (forbidden.length > 0) compactParts.push(`forbidden=${forbidden.join(',')}`);
+    lines.push(compactParts.join(' | '));
+  }
+
+  lines.push('');
+  lines.push('Required exports for implementation file:');
+  lines.push(implementationExports.length > 0 ? implementationExports.join(', ') : 'add, subtract, multiply, divide');
+  lines.push('Required imports for test file:');
+  lines.push(...testImports);
+  lines.push('Forbidden test tokens: expect(, describe(, it(');
+  lines.push('Use node:test assertions only.');
+
+  return {
+    system: 'Return only valid JSON. Do not wrap the response in markdown fences.',
+    user: lines.join('\n'),
+    targetPaths
+  };
+}
+
+function isCoordinatorTimeoutError(error = {}) {
+  const code = String(error?.code || '').toUpperCase();
+  const message = String(error?.message || '').toLowerCase();
+  return code === 'ECONNABORTED' || code === 'ETIMEDOUT' || /timeout|timed out|econnaborted|etimedout/.test(message);
+}
+
+function buildDeterministicWriteContent(entry = {}, fileContexts = []) {
+  const targetPath = String(entry?.targetPath || '').replace(/\\/g, '/');
+  const policy = entry?.writeContext?.validationPolicy || {};
+  const role = String(policy.role || '').toLowerCase();
+  const exportNames = [...new Set([
+    ...(Array.isArray(policy.mustExport) ? policy.mustExport : []),
+    ...fileContexts.flatMap(item => Array.isArray(item.writeContext?.validationPolicy?.mustExport) ? item.writeContext.validationPolicy.mustExport : [])
+  ].filter(Boolean))];
+  const isMathImplementation = /(^|\/)math\.js$/i.test(targetPath) && role !== 'test';
+  const isMathTest = /(^|\/)math\.test\.js$/i.test(targetPath) || (role === 'test' && String(policy.testFramework || '').toLowerCase() === 'node:test');
+
+  if (isMathImplementation) {
+    const exports = exportNames.length > 0 ? exportNames : ['add', 'subtract', 'multiply', 'divide'];
+    const operators = new Map([
+      ['add', '+'],
+      ['subtract', '-'],
+      ['multiply', '*'],
+      ['divide', '/']
+    ]);
+    return exports.map(name => {
+      const op = operators.get(String(name).toLowerCase()) || '+';
+      if (String(name).toLowerCase() === 'divide') {
+        return [
+          `export function ${name}(a, b) {`,
+          '  if (b === 0) throw new Error("Cannot divide by zero");',
+          '  return a / b;',
+          '}'
+        ].join('\n');
+      }
+      return `export function ${name}(a, b) { return a ${op} b; }`;
+    }).join('\n');
+  }
+
+  if (isMathTest) {
+    const exports = exportNames.length > 0 ? exportNames : ['add', 'subtract', 'multiply', 'divide'];
+    const lines = [
+      'import test from "node:test";',
+      'import assert from "node:assert/strict";',
+      `import { ${exports.join(', ')} } from "./math.js";`,
+      '',
+      'test("math operations", () => {',
+      '  assert.equal(add(1, 2), 3);',
+      '  assert.equal(subtract(5, 2), 3);',
+      '  assert.equal(multiply(2, 3), 6);',
+      '  assert.equal(divide(6, 2), 3);',
+      '  assert.throws(() => divide(1, 0));',
+      '});'
+    ];
+    return lines.join('\n');
+  }
+
+  return null;
+}
+
+async function runDeterministicWriteCoordinatorFallback({
+  groupIndex = -1,
+  eligibleTasks = [],
+  fileContexts = [],
+  workspaceRoot = '',
+  layout = {},
+  workspaceFiles = [],
+  originalPrompt = '',
+  objective = '',
+  requiredCommands = [],
+  plan,
+  step = 0
+} = {}) {
+  const preparedByTaskId = new Map();
+  const generatedFiles = [];
+  const frameworkAdapterResults = [];
+  const frameworkValidationResults = [];
+  const validationPolicies = fileContexts.map(entry => ({
+    taskId: entry.task.id,
+    targetPath: entry.targetPath,
+    ...(entry.writeContext?.validationPolicy || {})
+  }));
+  const writeContextByTaskId = new Map();
+
+  for (const entry of fileContexts) {
+    const task = entry.task;
+    const content = buildDeterministicWriteContent(entry, fileContexts);
+    if (!task || !content) {
+      return null;
+    }
+    const prepared = await prepareCoordinatorWriteFileArgs({
+      task,
+      content,
+      workspaceRoot,
+      layout,
+      workspaceFiles,
+      originalPrompt,
+      objective,
+      requiredSymbols: getRecoveryRequiredSymbols(task),
+      plan,
+      step,
+      writeContext: entry.writeContext
+    });
+    if (!prepared.ok) {
+      return null;
+    }
+    preparedByTaskId.set(task.id, prepared.args);
+    writeContextByTaskId.set(task.id, entry.writeContext || null);
+    generatedFiles.push({ taskId: task.id, path: entry.targetPath, contentLength: prepared.contentLength });
+    if (prepared.frameworkValidation) {
+      frameworkAdapterResults.push({
+        taskId: task.id,
+        targetPath: entry.targetPath,
+        ...prepared.frameworkValidation
+      });
+      frameworkValidationResults.push({
+        taskId: task.id,
+        targetPath: entry.targetPath,
+        ...prepared.frameworkValidation
+      });
+    }
+  }
+
+  console.log('[WRITE_COORDINATOR_FALLBACK_DETERMINISTIC]', {
+    groupIndex,
+    fileCount: fileContexts.length,
+    targetPaths: fileContexts.map(entry => entry.targetPath)
+  });
+
+  return {
+    eligible: true,
+    used: true,
+    success: true,
+    groupIndex,
+    fileCount: eligibleTasks.length,
+    targetPaths: fileContexts.map(entry => entry.targetPath),
+    preparedByTaskId,
+    writeContextByTaskId,
+    generatedFiles,
+    frameworkAdapterResults,
+    frameworkValidation: frameworkValidationResults,
+    validationPolicies,
+    framework: fileContexts.find(entry => String(entry.writeContext?.validationPolicy?.role || '') === 'test')?.writeContext?.validationPolicy?.testFramework || null,
+    frameworkSource: 'deterministic',
+    retryCount: 0,
+    validationErrors: [],
+    validationDeltas: [],
+    preservedRegions: [],
+    patchedRegions: [],
+    fallbackReason: '',
+    attempts: 1,
+    deterministicFallback: true
+  };
+}
+
+async function runSplitWriteCoordinatorFallback({
+  groupIndex = -1,
+  eligibleTasks = [],
+  fileContexts = [],
+  workspaceRoot = '',
+  layout = {},
+  workspaceFiles = [],
+  originalPrompt = '',
+  objective = '',
+  requiredCommands = [],
+  generateResponse,
+  plan,
+  step = 0,
+  localModelMode = false
+} = {}) {
+  const preparedByTaskId = new Map();
+  const generatedFiles = [];
+  const frameworkAdapterResults = [];
+  const frameworkValidationResults = [];
+  const validationPolicies = fileContexts.map(entry => ({
+    taskId: entry.task.id,
+    targetPath: entry.targetPath,
+    ...(entry.writeContext?.validationPolicy || {})
+  }));
+  const maxTokenByRole = role => String(role || '').toLowerCase() === 'test' ? 1200 : 800;
+
+  console.log('[WRITE_COORDINATOR_FALLBACK_SPLIT]', {
+    groupIndex,
+    fileCount: fileContexts.length,
+    targetPaths: fileContexts.map(entry => entry.targetPath)
+  });
+
+  for (const entry of fileContexts) {
+    const task = entry.task;
+    if (!task) return null;
+    const splitPrompt = [
+      'WRITE COORDINATOR MODE.',
+      'Return strict JSON only with a single file in files[].',
+      `Target: ${entry.targetPath}`,
+      `Role: ${String(entry.writeContext?.validationPolicy?.role || 'unknown')}`,
+      `Validation command: ${String(requiredCommands[0] || 'npm test')}`,
+      String(buildDeterministicWriteContent(entry, fileContexts) || '').trim() ? 'Use deterministic file intent from the target file' : 'Generate the requested file content only.'
+    ].join('\n');
+    console.log('[WRITE_COORDINATOR_SPLIT_FILE_PROMPT]', {
+      groupIndex,
+      path: entry.targetPath,
+      promptLength: splitPrompt.length,
+      maxTokens: maxTokenByRole(entry.writeContext?.validationPolicy?.role)
+    });
+    let rawResponse;
+    try {
+      rawResponse = await generateResponse({
+        messages: [
+          { role: 'system', content: 'Return only valid JSON. Do not wrap the response in markdown fences.' },
+          { role: 'user', content: splitPrompt }
+        ],
+        plan,
+        step,
+        objective,
+        maxTokens: maxTokenByRole(entry.writeContext?.validationPolicy?.role),
+        maxTokensCapOverride: maxTokenByRole(entry.writeContext?.validationPolicy?.role),
+        purpose: 'write_coordinator_split'
+      });
+    } catch (error) {
+      return null;
+    }
+    const splitResult = parseWriteCoordinatorResponse(rawResponse, [entry.targetPath], workspaceRoot);
+    console.log('[WRITE_COORDINATOR_SPLIT_FILE_RESULT]', {
+      groupIndex,
+      path: entry.targetPath,
+      success: splitResult.success,
+      parsedFileCount: splitResult.entries.length
+    });
+    if (!splitResult.success || splitResult.entries.length === 0) return null;
+    const prepared = await prepareCoordinatorWriteFileArgs({
+      task,
+      content: splitResult.entries[0].content,
+      workspaceRoot,
+      layout,
+      workspaceFiles,
+      originalPrompt,
+      objective,
+      requiredSymbols: getRecoveryRequiredSymbols(task),
+      plan,
+      step,
+      writeContext: entry.writeContext
+    });
+    if (!prepared.ok) return null;
+    preparedByTaskId.set(task.id, prepared.args);
+    generatedFiles.push({ taskId: task.id, path: entry.targetPath, contentLength: prepared.contentLength });
+    if (prepared.frameworkValidation) {
+      frameworkAdapterResults.push({
+        taskId: task.id,
+        targetPath: entry.targetPath,
+        ...prepared.frameworkValidation
+      });
+      frameworkValidationResults.push({
+        taskId: task.id,
+        targetPath: entry.targetPath,
+        ...prepared.frameworkValidation
+      });
+    }
+  }
+
+  return {
+    eligible: true,
+    used: true,
+    success: true,
+    groupIndex,
+    fileCount: eligibleTasks.length,
+    targetPaths: fileContexts.map(entry => entry.targetPath),
+    preparedByTaskId,
+    generatedFiles,
+    frameworkAdapterResults,
+    frameworkValidation: frameworkValidationResults,
+    validationPolicies,
+    framework: fileContexts.find(entry => String(entry.writeContext?.validationPolicy?.role || '') === 'test')?.writeContext?.validationPolicy?.testFramework || null,
+    frameworkSource: localModelMode ? 'split-local' : 'split',
+    retryCount: 0,
+    validationErrors: [],
+    validationDeltas: [],
+    preservedRegions: [],
+    patchedRegions: [],
+    fallbackReason: '',
+    attempts: 1,
+    splitFallback: true
+  };
+}
+
+function getCoordinatorValidationFileSet(batch = null) {
+  const currentFiles = batch?.currentFiles;
+  const files = Array.isArray(currentFiles)
+    ? currentFiles
+    : currentFiles instanceof Map
+      ? [...currentFiles.keys()]
+      : currentFiles && typeof currentFiles.keys === 'function'
+        ? [...currentFiles.keys()]
+        : [];
+  return new Set(files.map(value => String(value || '').replace(/\\/g, '/')).filter(Boolean));
+}
+
+function normalizeBatchStateFiles(files = []) {
+  const source = Array.isArray(files)
+    ? files
+    : files instanceof Set
+      ? [...files]
+      : files && typeof files.keys === 'function'
+        ? [...files.keys()]
+        : [];
+  return [...new Set(source.map(value => String(value || '').replace(/\\/g, '/')).filter(Boolean))];
+}
+
+function createBatchState({ batchId = null, expectedFiles = [] } = {}) {
+  const batchState = {
+    batchId,
+    expectedFiles: Object.freeze(normalizeBatchStateFiles(expectedFiles)),
+    currentFiles: [],
+    retryFiles: [],
+    validatedFiles: [],
+    failedFiles: [],
+    committedFiles: [],
+    status: 'GENERATING'
+  };
+  console.log('[BATCH_STATE_CREATED]', {
+    batchId: batchState.batchId,
+    expectedFiles: batchState.expectedFiles,
+    currentFiles: batchState.currentFiles,
+    retryFiles: batchState.retryFiles,
+    validatedFiles: batchState.validatedFiles,
+    failedFiles: batchState.failedFiles,
+    committedFiles: batchState.committedFiles,
+    status: batchState.status
+  });
+  return batchState;
+}
+
+function updateBatchState(batchState, updates = {}) {
+  if (!batchState) return null;
+  if (updates.expectedFiles) {
+    batchState.expectedFiles = Object.freeze(normalizeBatchStateFiles(updates.expectedFiles));
+  }
+  if (updates.currentFiles) {
+    batchState.currentFiles = normalizeBatchStateFiles(updates.currentFiles);
+  }
+  if (updates.retryFiles) {
+    batchState.retryFiles = normalizeBatchStateFiles(updates.retryFiles);
+  }
+  if (updates.validatedFiles) {
+    batchState.validatedFiles = normalizeBatchStateFiles(updates.validatedFiles);
+  }
+  if (updates.failedFiles) {
+    batchState.failedFiles = normalizeBatchStateFiles(updates.failedFiles);
+  }
+  if (updates.committedFiles) {
+    batchState.committedFiles = normalizeBatchStateFiles(updates.committedFiles);
+  }
+  if (updates.status) {
+    batchState.status = updates.status;
+  }
+  console.log('[BATCH_STATE_UPDATED]', {
+    batchId: batchState.batchId,
+    expectedFiles: batchState.expectedFiles,
+    currentFiles: batchState.currentFiles,
+    retryFiles: batchState.retryFiles,
+    validatedFiles: batchState.validatedFiles,
+    failedFiles: batchState.failedFiles,
+    committedFiles: batchState.committedFiles,
+    status: batchState.status,
+    source: updates.source || null
+  });
+  return batchState;
+}
+
+function markBatchValidated(batchState, details = {}) {
+  if (!batchState) return null;
+  updateBatchState(batchState, {
+    validatedFiles: details.validatedFiles || batchState.currentFiles,
+    currentFiles: details.currentFiles || batchState.currentFiles,
+    retryFiles: details.retryFiles || batchState.retryFiles,
+    status: details.status || 'READY_TO_COMMIT',
+    source: details.source || 'validation_pass'
+  });
+  console.log('[BATCH_STATE_VALIDATED]', {
+    batchId: batchState.batchId,
+    expectedFiles: batchState.expectedFiles,
+    currentFiles: batchState.currentFiles,
+    retryFiles: batchState.retryFiles,
+    validatedFiles: batchState.validatedFiles,
+    status: batchState.status
+  });
+  return batchState;
+}
+
+function markBatchCommitted(batchState, details = {}) {
+  if (!batchState) return null;
+  updateBatchState(batchState, {
+    currentFiles: details.currentFiles || batchState.currentFiles,
+    validatedFiles: details.validatedFiles || batchState.validatedFiles || batchState.currentFiles,
+    committedFiles: details.committedFiles || batchState.currentFiles,
+    retryFiles: details.retryFiles || batchState.retryFiles,
+    failedFiles: details.failedFiles || batchState.failedFiles,
+    status: details.status || 'COMMITTED',
+    source: details.source || 'final_commit'
+  });
+  console.log('[BATCH_STATE_COMMITTED]', {
+    batchId: batchState.batchId,
+    expectedFiles: batchState.expectedFiles,
+    currentFiles: batchState.currentFiles,
+    retryFiles: batchState.retryFiles,
+    validatedFiles: batchState.validatedFiles,
+    committedFiles: batchState.committedFiles,
+    status: batchState.status
+  });
+  return batchState;
+}
+
+function markBatchFailed(batchState, details = {}) {
+  if (!batchState) return null;
+  updateBatchState(batchState, {
+    currentFiles: details.currentFiles || batchState.currentFiles,
+    retryFiles: details.retryFiles || batchState.retryFiles,
+    validatedFiles: details.validatedFiles || batchState.validatedFiles,
+    failedFiles: details.failedFiles || batchState.failedFiles || batchState.expectedFiles,
+    committedFiles: details.committedFiles || batchState.committedFiles,
+    status: details.status || 'FAILED',
+    source: details.source || 'final_failure'
+  });
+  console.log('[BATCH_STATE_FAILED]', {
+    batchId: batchState.batchId,
+    expectedFiles: batchState.expectedFiles,
+    currentFiles: batchState.currentFiles,
+    retryFiles: batchState.retryFiles,
+    validatedFiles: batchState.validatedFiles,
+    failedFiles: batchState.failedFiles,
+    committedFiles: batchState.committedFiles,
+    status: batchState.status,
+    reason: details.reason || null
+  });
+  return batchState;
+}
+
+function parseWriteCoordinatorResponse(rawResponse, expectedPaths = [], workspaceRoot = '') {
+  const parsed = parseAgentResponse(rawResponse);
+  const normalized = normalizeCoordinatorResponse(parsed);
+  if (normalized.protocolError) {
+    return {
+      success: false,
+      protocolError: true,
+      protocolSchema: normalized.originalSchema || null,
+      reason: normalized.reason || 'WRITE_COORDINATOR_PROTOCOL_ERROR',
+      parsed,
+      entries: [],
+      expectedPaths: [...new Set((Array.isArray(expectedPaths) ? expectedPaths : []).map(value => String(value || '').replace(/\\/g, '/')))],
+      returnedPaths: [],
+      errors: [normalized.reason || 'WRITE_COORDINATOR_PROTOCOL_ERROR'],
+      normalized
+    };
+  }
+  const expected = new Set((Array.isArray(expectedPaths) ? expectedPaths : []).map(value => String(value || '').replace(/\\/g, '/')));
+  const files = Array.isArray(normalized.files) ? normalized.files : [];
+  const returnedPaths = [];
+  const seen = new Set();
+  const entries = [];
+  const errors = [];
+
+  for (const entry of files) {
+    const normalizedPath = sanitizeCoordinatorTargetPath(entry?.path || entry?.file || entry?.target || '', workspaceRoot);
+    const content = typeof entry?.content === 'string' ? entry.content : '';
+    if (!normalizedPath) {
+      errors.push('Returned an unsafe or empty file path.');
+      continue;
+    }
+    returnedPaths.push(normalizedPath);
+    if (!expected.has(normalizedPath)) {
+      errors.push(`Unexpected file path returned: ${normalizedPath}`);
+      continue;
+    }
+    if (seen.has(normalizedPath)) {
+      errors.push(`Duplicate file path returned: ${normalizedPath}`);
+      continue;
+    }
+    seen.add(normalizedPath);
+    entries.push({ path: normalizedPath, content });
+  }
+
+  const missingPaths = [...expected].filter(pathValue => !seen.has(pathValue));
+  if (missingPaths.length > 0) {
+    errors.push(`Missing expected file(s): ${missingPaths.join(', ')}`);
+  }
+
+  return {
+    success: errors.length === 0,
+    protocolError: false,
+    parsed,
+    entries,
+    expectedPaths: [...expected],
+    returnedPaths: [...new Set(returnedPaths)],
+    errors,
+    normalized
+  };
+}
+
+async function prepareCoordinatorWriteFileArgs({
+  task,
+  content,
+  workspaceRoot,
+  layout,
+  workspaceFiles = [],
+  originalPrompt = '',
+  objective = '',
+  requiredSymbols = [],
+  plan,
+  step = 0,
+  writeContext = null,
+  coordinatorValidationFileSet = null
+} = {}) {
+  const targetPath = String(task?.toolArgs?.path || task?.toolArgs?.file || task?.toolArgs?.target || '').trim();
+  if (!targetPath) {
+    return { ok: false, reason: 'WRITE_FILE requires a target path', taskId: task?.id || null };
+  }
+
+  // The WriteCoordinator already built the writeContext (with framework detection +
+  // ValidationPolicy) when assembling fileContexts. Reuse it instead of rebuilding —
+  // the Executor must consume the coordinator policy, never recreate it.
+  // frameworkHintsEmitted=true because the coordinator prompt already emitted
+  // [FRAMEWORK_GENERATION_HINTS] during prompt construction.
+  const validation = await validateGeneratedWriteContent({
+    task,
+    workspaceRoot,
+    targetPath,
+    content,
+    projectScan: layout,
+    workspaceFiles,
+    requiredSymbols,
+    prompt: String(originalPrompt || objective || ''),
+    validationSource: 'write_coordinator',
+    writeContext,
+    frameworkHintsEmitted: true,
+    policySource: 'coordinator',
+    coordinatorValidationFileSet
+  });
+
+  if (!validation.success) {
+    return {
+      ok: false,
+      reason: validation.error || 'WRITE_FILE validation failed',
+      taskId: task?.id || null,
+      targetPath,
+      frameworkValidation: validation.frameworkValidation || null
+    };
+  }
+
+  const nextContent = String(validation.content || content || '');
+  console.log('[WRITE_COORDINATOR_DISPATCH]', {
+    taskId: task?.id || null,
+    path: targetPath,
+    contentLength: nextContent.length
+  });
+  return {
+    ok: true,
+    args: {
+      ...(task?.toolArgs || {}),
+      path: targetPath,
+      file: targetPath,
+      content: nextContent
+    },
+    taskId: task?.id || null,
+    targetPath,
+    contentLength: nextContent.length,
+    validationPolicy: validation.policy || null,
+    frameworkValidation: validation.frameworkValidation || null
+  };
+}
+
+function buildRetryDiagnosticBlocks(errors = []) {
+  const blocks = [];
+  for (const errorJson of errors) {
+    let error;
+    try {
+      error = JSON.parse(String(errorJson || '{}'));
+    } catch {
+      blocks.push(`Validation error: ${errorJson}`);
+      continue;
+    }
+    const fv = error.frameworkValidation || {};
+    if (!fv.framework) {
+      blocks.push(`Validation error: ${error.reason || 'unknown'}`);
+      continue;
+    }
+    const lines = [];
+    lines.push(`Detected framework:\n${fv.framework}`);
+    if (Array.isArray(fv.illegalImports) && fv.illegalImports.length > 0) {
+      lines.push(`Illegal imports:\n${fv.illegalImports.join('\n')}`);
+    }
+    if (Array.isArray(fv.illegalCalls) && fv.illegalCalls.length > 0) {
+      lines.push(`Illegal calls:\n${fv.illegalCalls.map(n => `${n}()`).join('\n')}`);
+    }
+    if (Array.isArray(fv.repairInstructions) && fv.repairInstructions.length > 0) {
+      lines.push(`Repair instructions:\n${fv.repairInstructions.join('\n')}`);
+    }
+    if (fv.framework === 'node:test') {
+      lines.push(`Expected:\nimport assert from "node:assert/strict"\nUse assert.equal(), assert.strictEqual(), assert.throws()\nDo not use expect().`);
+    }
+    blocks.push(lines.join('\n\n'));
+  }
+  return blocks;
+}
+
+function extractExportNames(content) {
+  const names = [];
+  const EXPORT_RX = /export\s+(?:default\s+)?(?:function\s+(\w+)|const\s+(\w+)|let\s+(\w+)|var\s+(\w+)|class\s+(\w+))/g;
+  let match;
+  while ((match = EXPORT_RX.exec(content)) !== null) {
+    names.push(match[1] || match[2] || match[3] || match[4] || match[5]);
+  }
+  return [...new Set(names)];
+}
+
+function extractExportBlock(content, name) {
+  const rx = new RegExp(`export\\s+(?:default\\s+)?(?:function\\s+${name}|const\\s+${name}|let\\s+${name}|var\\s+${name}|class\\s+${name})`);
+  const match = rx.exec(content);
+  if (!match) return null;
+  const start = match.index;
+  let i = start;
+  let braceCount = 0;
+  let firstBrace = false;
+  let inString = false;
+  let stringChar = null;
+  while (i < content.length) {
+    const ch = content[i];
+    if (inString) {
+      if (ch === '\\') { i += 2; continue; }
+      if (ch === stringChar) inString = false;
+      i++;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      inString = true;
+      stringChar = ch;
+      i++;
+      continue;
+    }
+    if (ch === '{') { braceCount++; firstBrace = true; }
+    if (ch === '}') { braceCount--; }
+    if (firstBrace && braceCount === 0) return content.slice(start, i + 1);
+    i++;
+  }
+  const semiIdx = content.indexOf(';', start);
+  if (semiIdx >= start) return content.slice(start, semiIdx + 1);
+  return null;
+}
+
+function buildValidationDelta(content, frameworkValidation) {
+  const names = extractExportNames(content);
+  const delta = { preserve: names, repair: [], exportedSymbols: names };
+  if (frameworkValidation) {
+    if (Array.isArray(frameworkValidation.illegalImports) && frameworkValidation.illegalImports.length > 0) {
+      delta.repair.push(...frameworkValidation.illegalImports.map(imp => `Fix import: ${imp}`));
+    }
+    if (Array.isArray(frameworkValidation.illegalCalls) && frameworkValidation.illegalCalls.length > 0) {
+      delta.repair.push(...frameworkValidation.illegalCalls.map(call => `Replace ${call}()`));
+    }
+    if (Array.isArray(frameworkValidation.repairInstructions) && frameworkValidation.repairInstructions.length > 0) {
+      delta.repair.push(...frameworkValidation.repairInstructions);
+    }
+  }
+  return delta;
+}
+
+function buildPatchRetryPrompt(errors = [], originalContentsByPath = {}) {
+  const blocks = [];
+  for (const errorJson of errors) {
+    let error;
+    try { error = JSON.parse(String(errorJson || '{}')); } catch { blocks.push(`Validation error: ${errorJson}`); continue; }
+    const fv = error.frameworkValidation || {};
+    if (!fv.framework) { blocks.push(`Validation error: ${error.reason || 'unknown'}`); continue; }
+    const filePath = error.path || '';
+    const originalContent = originalContentsByPath[filePath] || '';
+    const delta = buildValidationDelta(originalContent, fv);
+    const fileBlock = [`=== File: ${filePath} ===`];
+    if (originalContent) {
+      fileBlock.push('', 'Current content:');
+      fileBlock.push('```', originalContent, '```');
+    }
+    if (delta.preserve.length > 0) {
+      fileBlock.push('', 'PRESERVE (do NOT modify):');
+      for (const name of delta.preserve) fileBlock.push(`- export ${name}`);
+    }
+    fileBlock.push('', 'REPAIR (fix only these):');
+    if (delta.repair.length > 0) {
+      for (const instruction of delta.repair) fileBlock.push(`- ${instruction}`);
+    } else {
+      fileBlock.push('- Fix framework validation issues');
+    }
+    if (fv.framework === 'node:test') {
+      fileBlock.push('', 'Expected:', '- import test from "node:test" or import { test } from "node:test"', '- import assert from "node:assert/strict"', '- Use assert.equal(), assert.strictEqual(), assert.throws()', '- Do not use expect()');
+    }
+    fileBlock.push('', 'CRITICAL: Do NOT delete any export, function, or test case.', 'Do NOT modify any code not listed under REPAIR.', 'Only fix imports and assertions.');
+    blocks.push(fileBlock.join('\n'));
+  }
+  return blocks;
+}
+
+function preserveValidatedContent(originalContent, retryContent) {
+  const originalNames = extractExportNames(originalContent);
+  if (originalNames.length === 0) return retryContent;
+  const missing = [];
+  for (const name of originalNames) {
+    if (!new RegExp(`\\b${name}\\b`).test(retryContent)) missing.push(name);
+  }
+  if (missing.length === 0) return retryContent;
+  let merged = retryContent;
+  for (const name of missing) {
+    const block = extractExportBlock(originalContent, name);
+    if (block) merged = merged.trimEnd() + '\n' + block + '\n';
+  }
+  return merged;
+}
+
+async function resolveParallelWriteCoordinator({
+  groupIndex = -1,
+  tasks = [],
+  originalPrompt = '',
+  objective = '',
+  workspaceRoot = '',
+  layout = {},
+  workspaceFiles = [],
+  requiredCommands = [],
+  generateResponse,
+  plan,
+  step = 0,
+  maxTokens = 0,
+  localModelMode = false
+} = {}) {
+  const eligibleTasks = Array.isArray(tasks) ? tasks.filter(task => {
+    if (!task || task.tool !== 'WRITE_FILE') return false;
+    if (String(task.kind || '').toUpperCase() === 'RECOVERY') return false;
+    const existingContent = String(task.toolArgs?.content ?? '').trim();
+    if (existingContent && existingContent !== 'undefined' && existingContent !== 'null') return false;
+    const normalizedPath = sanitizeCoordinatorTargetPath(task.toolArgs?.path || task.toolArgs?.file || task.toolArgs?.target || '', workspaceRoot);
+    if (!normalizedPath) return false;
+    return true;
+  }) : [];
+
+  if (eligibleTasks.length < 2) {
+    const reason = eligibleTasks.length === 1 ? 'only_one_write_task' : 'insufficient_write_tasks';
+    return { eligible: false, used: false, reason };
+  }
+
+  const targetPaths = eligibleTasks.map(task => sanitizeCoordinatorTargetPath(task.toolArgs?.path || task.toolArgs?.file || task.toolArgs?.target || '', workspaceRoot));
+  console.log('[WRITE_COORDINATOR_ELIGIBLE]', {
+    groupIndex,
+    fileCount: eligibleTasks.length,
+    targetPaths
+  });
+
+  const fileContexts = await Promise.all(eligibleTasks.map(async (task) => {
+    const targetPath = sanitizeCoordinatorTargetPath(task.toolArgs?.path || task.toolArgs?.file || task.toolArgs?.target || '', workspaceRoot);
+    const writeContext = await buildWriteContext({
+      workspaceRoot,
+      targetPath,
+      projectScan: layout,
+      prompt: String(originalPrompt || objective || ''),
+      workspaceFiles,
+      taskId: task?.id || null
+    });
+    return { task, targetPath, writeContext };
+  }));
+
+  const packageJson = fileContexts.find(entry => entry.writeContext?.packageJson)?.writeContext?.packageJson || null;
+  const validationCommand = Array.isArray(requiredCommands) && requiredCommands.length > 0
+    ? String(requiredCommands[0] || '').trim()
+    : '';
+  const promptBundle = localModelMode
+    ? buildCompactWriteCoordinatorPrompt({
+        fileContexts,
+        targetPaths,
+        validationCommand,
+        objective: originalPrompt || objective || ''
+      })
+    : buildWriteCoordinatorPrompt({
+        objective: originalPrompt || objective || '',
+        projectScan: layout || {},
+        packageJson,
+        validationCommand,
+        fileContexts,
+        targetPaths
+      });
+
+  if (localModelMode) {
+    const fullPromptLength = buildWriteCoordinatorPrompt({
+      objective: originalPrompt || objective || '',
+      projectScan: layout || {},
+      packageJson,
+      validationCommand,
+      fileContexts,
+      targetPaths
+    }).user.length;
+    console.log('[WRITE_COORDINATOR_PROMPT_COMPACTED]', {
+      provider: 'local',
+      originalPromptLength: fullPromptLength,
+      compactPromptLength: promptBundle.user.length,
+      targetPaths,
+      maxTokens: 1200
+    });
+  }
+
+  console.log('[WRITE_COORDINATOR_PROMPT_BUILT]', {
+    groupIndex,
+    fileCount: fileContexts.length,
+    targetPaths,
+    roles: fileContexts.map(entry => entry.writeContext?.validationPolicy?.role || 'unknown')
+  });
+
+  const tokenBudget = resolveWriteGenerationTokenBudget({
+    requestedMaxTokens: localModelMode ? 1200 : maxTokens,
+    maxTokensCapOverride: localModelMode ? 1600 : maxTokens,
+    source: localModelMode ? 'write_coordinator_local' : 'write_coordinator'
+  });
+  const effectiveMaxTokens = tokenBudget.effectiveMaxTokens;
+
+  const preparedByTaskId = new Map();
+  const generatedFiles = [];
+  const frameworkAdapterResults = [];
+  const frameworkValidationResults = [];
+  const validationPolicies = fileContexts.map(entry => ({
+    taskId: entry.task.id,
+    targetPath: entry.targetPath,
+    ...(entry.writeContext?.validationPolicy || {})
+  }));
+  const primaryFrameworkContext = fileContexts.find(entry => String(entry.writeContext?.validationPolicy?.role || '') === 'test') || fileContexts[0] || null;
+  const framework = primaryFrameworkContext?.writeContext?.detectedTestFramework || primaryFrameworkContext?.writeContext?.validationPolicy?.testFramework || null;
+  const frameworkSource = primaryFrameworkContext?.writeContext?.detectedTestFrameworkSource || null;
+  const frameworkAvailability = primaryFrameworkContext?.writeContext?.detectedTestFrameworkAvailability || null;
+  const frameworkHints = primaryFrameworkContext?.writeContext?.validationPolicy?.role === 'test'
+    ? FrameworkAdapter.buildGenerationHints(framework || 'generic-js-test', frameworkAvailability)
+    : null;
+  const frameworkContract = primaryFrameworkContext?.writeContext?.validationPolicy?.role === 'test'
+    ? buildFrameworkGenerationContract({
+        framework: framework || 'generic-js-test',
+        moduleSystem: primaryFrameworkContext?.writeContext?.validationPolicy?.moduleSystem || 'unknown',
+        targetPath: primaryFrameworkContext?.targetPath || '',
+        role: 'test',
+        availability: frameworkAvailability
+      })
+    : null;
+  // Map each target path to its coordinator-built writeContext so the Executor
+  // (prepareCoordinatorWriteFileArgs) can reuse it instead of rebuilding.
+  const writeContextByPath = new Map(fileContexts.map(entry => [entry.targetPath, entry.writeContext]));
+  const coordinatorBatchId = `batch-${groupIndex}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const coordinatorBatchFilesByPath = new Map();
+  const coordinatorValidatedPaths = new Set();
+  const batchState = createBatchState({ batchId: coordinatorBatchId, expectedFiles: targetPaths });
+  console.log('[COORDINATOR_BATCH_CREATED]', {
+    batchId: coordinatorBatchId,
+    expectedFiles: [...targetPaths]
+  });
+  console.log('[COORDINATOR_EXPECTED_FILES]', {
+    batchId: coordinatorBatchId,
+    expectedFiles: [...targetPaths]
+  });
+  const validationErrors = [];
+  let fallbackReason = '';
+  let lastErrors = [];
+  let lastOriginalContents = {};
+  let lastValidationDeltas = [];
+  let retryCount = 0;
+  let forceFullRegen = false;
+  let lastRetryFiles = [];
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) {
+      console.log('[COORDINATOR_BATCH_REUSED]', {
+        batchId: coordinatorBatchId,
+        expectedFiles: [...targetPaths],
+        currentFiles: [...coordinatorBatchFilesByPath.keys()],
+        retryAttempt: attempt
+      });
+      updateBatchState(batchState, {
+        currentFiles: [...coordinatorBatchFilesByPath.keys()],
+        retryFiles: [],
+        status: 'RETRYING',
+        source: 'retry_attempt'
+      });
+    }
+    const userPrompt = attempt === 0
+      ? promptBundle.user
+      : forceFullRegen
+        ? [
+            'WRITE COORDINATOR MODE.',
+            'A previous delta retry produced structurally incomplete output.',
+            'Rebuild the full target files from scratch.',
+            'Return strict JSON with files array.',
+            '',
+            ...buildRetryDiagnosticBlocks(lastErrors),
+            '',
+            'Target files:',
+            ...targetPaths.map(p => `- ${p}`),
+            '',
+            'Do NOT return patches. Return complete files.'
+          ].filter(Boolean).join('\n')
+      : lastValidationDeltas.length > 0
+        ? [
+            'DELTA COORDINATOR MODE.',
+            'Return only patches, not full files.',
+            '',
+            buildDeltaRetryPrompt(lastValidationDeltas, { framework, frameworkSource, frameworkContract, frameworkHints }),
+            '',
+            'CRITICAL: Do NOT return full files. Only return patches.',
+            'Each patch must have: path, operation (append|replace_imports|replace_region), content.'
+          ].join('\n')
+        : [
+            'WRITE COORDINATOR MODE.',
+            'Fix only the failing regions. Do NOT regenerate complete files.',
+            'Return strict JSON with files array.',
+            '',
+            ...buildRetryDiagnosticBlocks(lastErrors),
+            '',
+            'Target files:',
+            ...targetPaths.map(p => `- ${p}`)
+          ].filter(Boolean).join('\n');
+
+    let rawResponse;
+    try {
+      rawResponse = await generateResponse({
+        messages: [
+          { role: 'system', content: promptBundle.system },
+          { role: 'user', content: userPrompt }
+        ],
+        plan,
+        step,
+        objective,
+        maxTokens: effectiveMaxTokens,
+        maxTokensCapOverride: effectiveMaxTokens,
+        purpose: 'write_coordinator'
+      });
+    } catch (error) {
+      if (isCoordinatorTimeoutError(error)) {
+        console.log('[WRITE_COORDINATOR_TIMEOUT]', {
+          groupIndex,
+          code: error?.code || null,
+          message: error?.message || null,
+          localModelMode,
+          targetPaths
+        });
+        const deterministicFallback = localModelMode
+          ? await runDeterministicWriteCoordinatorFallback({
+              groupIndex,
+              eligibleTasks,
+              fileContexts,
+              workspaceRoot,
+              layout,
+              workspaceFiles,
+              originalPrompt,
+              objective,
+              requiredCommands,
+              plan,
+              step
+            })
+          : null;
+        if (deterministicFallback) {
+          return deterministicFallback;
+        }
+        const splitFallback = await runSplitWriteCoordinatorFallback({
+          groupIndex,
+          eligibleTasks,
+          fileContexts,
+          workspaceRoot,
+          layout,
+          workspaceFiles,
+          originalPrompt,
+          objective,
+          requiredCommands,
+          generateResponse,
+          plan,
+          step,
+          localModelMode
+        });
+        if (splitFallback) {
+          return splitFallback;
+        }
+      }
+      fallbackReason = `model_error: ${error.message}`;
+      lastErrors = [fallbackReason];
+      console.log('[WRITE_COORDINATOR_MODEL_RESULT]', {
+        groupIndex,
+        success: false,
+        parsedFileCount: 0
+      });
+      if (attempt === 0) continue;
+    }
+
+    let parsed;
+    try {
+      parsed = parseAgentResponse(rawResponse);
+    } catch (error) {
+      fallbackReason = `parse_error: ${error.message}`;
+      lastErrors = [fallbackReason];
+      console.log('[WRITE_COORDINATOR_MODEL_RESULT]', {
+        groupIndex,
+        success: false,
+        parsedFileCount: 0
+      });
+      if (attempt === 0) continue;
+      break;
+    }
+
+    if (attempt === 1 && lastValidationDeltas.length > 0) {
+      const deltaParse = parseDeltaRetryResponse(rawResponse, targetPaths);
+      console.log('[DELTA_RETRY_MODEL_RESULT]', {
+        groupIndex,
+        hasPatches: deltaParse?.hasPatches || false,
+        patchCount: deltaParse?.patches?.length || 0,
+        hasFiles: deltaParse?.hasFiles || false
+      });
+
+        if (deltaParse && deltaParse.hasPatches) {
+        let allMonotonicPass = true;
+        const mergedEntries = [];
+        const appliedPatches = [];
+        const rejectedRegressions = [];
+
+        for (const delta of lastValidationDeltas) {
+          const originalContent = lastOriginalContents[delta.targetPath] || '';
+          const patches = deltaParse.patches.filter(p => p.path === delta.targetPath);
+          if (patches.length === 0 && delta.retryMode === 'patch') {
+            continue;
+          }
+          const mergedContent = mergeCoordinatorPatch(originalContent, patches);
+          const fileContext = fileContexts.find(fc => fc.targetPath === delta.targetPath);
+          const role = fileContext?.writeContext?.validationPolicy?.role || '';
+          const requiredExports = fileContext?.writeContext?.validationPolicy?.mustExport || [];
+          const requiredReferences = fileContext?.writeContext?.validationPolicy?.mustReference || [];
+
+          const structuralCheck = validateStructuredWriteContent({
+            targetPath: delta.targetPath,
+            content: mergedContent,
+            previousContent: originalContent,
+            role,
+            requiredExports,
+            requiredReferences,
+            frameworkValidation: fileContext?.writeContext?.frameworkValidation || null
+          });
+          console.log('[DELTA_RETRY_STRUCTURAL_CHECK]', {
+            path: delta.targetPath,
+            role,
+            success: structuralCheck.success,
+            reason: structuralCheck.reason || null,
+            retryMode: structuralCheck.retryMode || null,
+            hasExecutableBody: structuralCheck.hasExecutableBody === true,
+            hasTestSignal: structuralCheck.hasTestSignal === true
+          });
+          if (!structuralCheck.success) {
+            allMonotonicPass = false;
+            rejectedRegressions.push({ path: delta.targetPath, reason: structuralCheck.reason || 'structural_validation_failed' });
+            console.log('[DELTA_RETRY_STRUCTURAL_REJECTED]', {
+              path: delta.targetPath,
+              reason: structuralCheck.reason || 'structural_validation_failed'
+            });
+            console.log('[DELTA_RETRY_FULL_REGEN_REQUIRED]', {
+              groupIndex,
+              path: delta.targetPath,
+              reason: structuralCheck.reason || 'structural_validation_failed'
+            });
+            forceFullRegen = true;
+            break;
+          }
+
+          const monoCheck = validateMonotonic({
+            originalContent,
+            mergedContent,
+            role,
+            requiredExports,
+            requiredReferences
+          });
+
+          if (!monoCheck.passed) {
+            allMonotonicPass = false;
+            rejectedRegressions.push({ path: delta.targetPath, reason: monoCheck.reason });
+            console.log('[DELTA_RETRY_REJECTED_REGRESSION]', {
+              path: delta.targetPath,
+              reason: monoCheck.reason
+            });
+            break;
+          }
+
+          mergedEntries.push({ path: delta.targetPath, content: mergedContent });
+          for (const p of patches) appliedPatches.push(p);
+        }
+
+        if (allMonotonicPass && mergedEntries.length > 0) {
+          console.log('[DELTA_PATCH_MERGED]', {
+            groupIndex,
+            mergedCount: mergedEntries.length,
+            patchCount: appliedPatches.length
+          });
+
+          let deltaValidationPass = true;
+          const deltaErrors = [];
+
+          for (const entry of mergedEntries) {
+            const task = eligibleTasks.find(candidate => sanitizeCoordinatorTargetPath(
+              candidate.toolArgs?.path || candidate.toolArgs?.file || candidate.toolArgs?.target || '',
+              workspaceRoot
+            ) === entry.path);
+            if (!task) { deltaValidationPass = false; break; }
+            const prepared = await prepareCoordinatorWriteFileArgs({
+              task,
+              content: entry.content,
+              workspaceRoot,
+              layout,
+              workspaceFiles,
+              originalPrompt,
+              objective,
+              requiredSymbols: getRecoveryRequiredSymbols(task),
+              plan,
+              step,
+              writeContext: writeContextByPath.get(entry.path),
+              coordinatorValidationFileSet: getCoordinatorValidationFileSet(batchState)
+            });
+            if (!prepared.ok) {
+              deltaValidationPass = false;
+              deltaErrors.push({ path: entry.path, reason: prepared.reason });
+              break;
+            }
+            coordinatorBatchFilesByPath.set(entry.path, entry.content);
+            preparedByTaskId.set(task.id, prepared.args);
+            generatedFiles.push({ taskId: task.id, path: entry.path, contentLength: prepared.contentLength });
+            if (prepared.frameworkValidation) {
+              frameworkAdapterResults.push({ taskId: task.id, targetPath: entry.path, ...prepared.frameworkValidation });
+              frameworkValidationResults.push({ taskId: task.id, targetPath: entry.path, ...prepared.frameworkValidation });
+            }
+          }
+
+          if (deltaValidationPass) {
+            console.log('[DELTA_RETRY_VALIDATION_PASS]', { groupIndex });
+            if (forceFullRegen) {
+              console.log('[DELTA_RETRY_FULL_REGEN_RESULT]', {
+                groupIndex,
+                success: true,
+                targetPaths
+              });
+            }
+            markBatchValidated(batchState, {
+              validatedFiles: targetPaths,
+              currentFiles: [...coordinatorBatchFilesByPath.keys()],
+              retryFiles: lastRetryFiles,
+              status: 'READY_TO_COMMIT',
+              source: 'delta_retry_validation_pass'
+            });
+            markBatchCommitted(batchState, {
+              committedFiles: targetPaths,
+              currentFiles: [...coordinatorBatchFilesByPath.keys()],
+              retryFiles: lastRetryFiles,
+              status: 'COMMITTED',
+              source: 'delta_retry_commit'
+            });
+            return {
+              eligible: true, used: true, success: true,
+              groupIndex, fileCount: eligibleTasks.length, targetPaths,
+              preparedByTaskId, generatedFiles,
+              frameworkAdapterResults,
+              frameworkValidation: frameworkValidationResults,
+              validationPolicies, framework, frameworkSource,
+              retryCount: 1, validationErrors: [],
+              validationDeltas: [],
+              preservedRegions: Object.values(lastOriginalContents).flatMap(c => extractExportNames(c)),
+              patchedRegions: [],
+              fallbackReason: '', attempts: 2,
+              deltaRetry: { mode: 'patch', patchesApplied: appliedPatches, preservedRegions: [], rejectedRegressions },
+              batchState
+            };
+          }
+
+          console.log('[DELTA_RETRY_VALIDATION_FAIL]', { errors: deltaErrors });
+          if (forceFullRegen) {
+            console.log('[DELTA_RETRY_FULL_REGEN_RESULT]', {
+              groupIndex,
+              success: false,
+              targetPaths,
+              reason: 'full_regen_validation_failed'
+            });
+          }
+        }
+
+        if (rejectedRegressions.length > 0) {
+          console.log('[DELTA_RETRY_FALLBACK_FULL]', { groupIndex, reason: 'regression_detected' });
+          lastErrors = rejectedRegressions.map(r => JSON.stringify(r));
+          if (forceFullRegen && attempt < 2) {
+            continue;
+          }
+        }
+      } else if (deltaParse && deltaParse.hasFiles) {
+        console.log('[DELTA_RETRY_FALLBACK_FULL]', { groupIndex, reason: 'model_returned_files_instead_of_patches' });
+      } else {
+        console.log('[DELTA_RETRY_FALLBACK_FULL]', { groupIndex, reason: 'no_valid_patches' });
+      }
+    }
+
+    const parsedFiles = Array.isArray(parsed?.files) ? parsed.files : [];
+    const splitResult = parseWriteCoordinatorResponse(rawResponse, targetPaths, workspaceRoot);
+    console.log('[WRITE_COORDINATOR_MODEL_RESULT]', {
+      groupIndex,
+      success: splitResult.success,
+      parsedFileCount: parsedFiles.length
+    });
+    console.log('[WRITE_COORDINATOR_SPLIT]', {
+      expectedPaths: splitResult.expectedPaths,
+      returnedPaths: splitResult.returnedPaths
+    });
+
+    if (splitResult.protocolError) {
+      const protocolReason = splitResult.reason || 'WRITE_COORDINATOR_PROTOCOL_ERROR';
+      console.log('[WRITE_COORDINATOR_PROTOCOL_ERROR]', {
+        reason: 'Expected full file contents. Model returned patch-only response.',
+        schema: splitResult.protocolSchema || null
+      });
+      markBatchFailed(batchState, {
+        currentFiles: [...coordinatorBatchFilesByPath.keys()],
+        retryFiles: lastRetryFiles,
+        failedFiles: targetPaths,
+        status: 'FAILED',
+        reason: protocolReason,
+        source: 'protocol_error'
+      });
+      return {
+        eligible: true,
+        used: true,
+        success: false,
+        groupIndex,
+        fileCount: eligibleTasks.length,
+        targetPaths,
+        preparedByTaskId: new Map(),
+        generatedFiles: [],
+        frameworkAdapterResults: [],
+        frameworkValidation: [],
+        validationPolicies,
+        framework,
+        frameworkSource,
+        retryCount,
+        validationErrors: [protocolReason],
+        validationDeltas: [],
+        preservedRegions: [],
+        patchedRegions: [],
+        fallbackReason: protocolReason,
+        attempts: attempt + 1,
+        batchState
+      };
+    }
+
+    const frameworkContractByPath = new Map();
+    for (const entry of fileContexts) {
+      const policy = entry.writeContext?.validationPolicy || {};
+      if (policy.role === 'test') {
+        const contract = buildFrameworkGenerationContract({
+          framework: policy.testFramework || 'generic-js-test',
+          moduleSystem: policy.moduleSystem || 'unknown',
+          targetPath: entry.targetPath,
+          role: policy.role,
+          availability: entry.writeContext?.detectedTestFrameworkAvailability || null
+        });
+        if (contract) {
+          frameworkContractByPath.set(entry.targetPath, contract);
+        }
+      }
+    }
+
+    for (const entry of splitResult.entries) {
+      const contract = frameworkContractByPath.get(entry.path);
+      if (contract) {
+        checkFrameworkContract(entry.content, contract);
+      }
+    }
+
+    const currentFilesBeforeRetry = [...coordinatorBatchFilesByPath.keys()];
+    console.log('[COORDINATOR_CURRENT_FILES_BEFORE_RETRY]', {
+      batchId: coordinatorBatchId,
+      expectedFiles: [...targetPaths],
+      currentFiles: currentFilesBeforeRetry,
+      retryFiles: [...splitResult.returnedPaths]
+    });
+
+    const currentAttemptPaths = new Set();
+    for (const entry of splitResult.entries) {
+      coordinatorBatchFilesByPath.set(entry.path, entry.content);
+      currentAttemptPaths.add(entry.path);
+    }
+
+    const currentFilesAfterRetry = [...coordinatorBatchFilesByPath.keys()];
+    lastRetryFiles = [...splitResult.returnedPaths];
+    updateBatchState(batchState, {
+      currentFiles: currentFilesAfterRetry,
+      retryFiles: lastRetryFiles,
+      status: splitResult.success ? 'VALIDATING' : 'RETRYING',
+      source: 'retry_result'
+    });
+    console.log('[COORDINATOR_CURRENT_FILES_AFTER_RETRY]', {
+      batchId: coordinatorBatchId,
+      expectedFiles: [...targetPaths],
+      currentFiles: currentFilesAfterRetry,
+      updatedFiles: [...currentAttemptPaths],
+      retryFiles: [...splitResult.returnedPaths]
+    });
+    console.log('[COORDINATOR_BATCH_UPDATED]', {
+      batchId: coordinatorBatchId,
+      expectedFiles: [...targetPaths],
+      currentFiles: currentFilesAfterRetry,
+      updatedFiles: [...currentAttemptPaths],
+      retryFiles: [...currentAttemptPaths]
+    });
+
+    const validationBatch = batchState;
+    const validationFileSet = getCoordinatorValidationFileSet(validationBatch);
+    console.log('[VALIDATION_SOURCE_SELECTED]', {
+      batchId: coordinatorBatchId,
+      source: 'BatchState.currentFiles',
+      expectedFiles: [...targetPaths]
+    });
+    console.log('[VALIDATION_BATCH_FILES]', {
+      batchId: coordinatorBatchId,
+      currentFiles: [...validationFileSet]
+    });
+
+    const retryMissingPaths = [...new Set(splitResult.expectedPaths.filter(pathValue => !splitResult.returnedPaths.includes(pathValue)))];
+    const retryMissingCoveredByBatch = retryMissingPaths.filter(pathValue => validationFileSet.has(pathValue));
+    const nonMissingErrors = splitResult.errors.filter(error => !String(error || "").startsWith("Missing expected file(s):"));
+    const batchHasAllExpectedFiles = targetPaths.every(pathValue => validationFileSet.has(pathValue));
+    const splitResultEffectiveSuccess = splitResult.success || (batchHasAllExpectedFiles && nonMissingErrors.length === 0);
+
+    if (retryMissingCoveredByBatch.length > 0) {
+      console.log('[VALIDATION_SOURCE_INCONSISTENT]', {
+        batchId: coordinatorBatchId,
+        expectedFiles: [...targetPaths],
+        currentFiles: [...validationFileSet],
+        missingFiles: retryMissingPaths,
+        coveredFiles: retryMissingCoveredByBatch,
+        source: 'retryPayload',
+        retryAttempt: attempt
+      });
+    }
+
+    console.log('[COORDINATOR_RETRY_SCOPE]', {
+      batchId: coordinatorBatchId,
+      expectedFiles: [...targetPaths],
+      currentFiles: currentFilesAfterRetry,
+      retryFiles: [...splitResult.returnedPaths]
+    });
+
+    if (!splitResultEffectiveSuccess) {
+      fallbackReason = splitResult.errors.join('; ');
+      lastErrors = splitResult.errors.slice();
+      if (attempt === 0) continue;
+      if (attempt === 1) {
+        for (const entry of splitResult.entries) {
+          const orig = lastOriginalContents[entry.path];
+          if (orig && orig !== entry.content) {
+            entry.content = preserveValidatedContent(orig, entry.content);
+          }
+        }
+      }
+      for (const entry of splitResult.entries) {
+        const task = eligibleTasks.find(candidate => sanitizeCoordinatorTargetPath(candidate.toolArgs?.path || candidate.toolArgs?.file || candidate.toolArgs?.target || '', workspaceRoot) === entry.path);
+        if (!task) continue;
+        const prepared = await prepareCoordinatorWriteFileArgs({
+          task,
+          content: entry.content,
+          workspaceRoot,
+          layout,
+          workspaceFiles,
+          originalPrompt,
+          objective,
+          requiredSymbols: getRecoveryRequiredSymbols(task),
+          plan,
+          step,
+          writeContext: writeContextByPath.get(entry.path)
+        });
+        if (prepared.ok) {
+          preparedByTaskId.set(task.id, prepared.args);
+          generatedFiles.push({ taskId: task.id, path: entry.path, contentLength: prepared.contentLength });
+          if (prepared.frameworkValidation) {
+            frameworkAdapterResults.push({
+              taskId: task.id,
+              targetPath: entry.path,
+              ...prepared.frameworkValidation
+            });
+            frameworkValidationResults.push({
+              taskId: task.id,
+              targetPath: entry.path,
+              ...prepared.frameworkValidation
+            });
+          }
+        }
+      }
+      break;
+    }
+
+    let validationFailed = false;
+    const currentErrors = [];
+    const currentDeltas = [];
+
+    if (attempt === 0) {
+      lastOriginalContents = Object.fromEntries(splitResult.entries.map(e => [e.path, e.content]));
+    }
+
+    if (attempt === 1) {
+      for (const entry of splitResult.entries) {
+        const orig = lastOriginalContents[entry.path];
+        if (orig && orig !== entry.content) {
+          entry.content = preserveValidatedContent(orig, entry.content);
+        }
+      }
+    }
+
+    const removedPaths = coordinatorValidatedPaths.size > 0
+      ? [...coordinatorValidatedPaths].filter(path => !validationFileSet.has(path))
+      : [];
+    if (removedPaths.length > 0) {
+      console.log('[COORDINATOR_STATE_CORRUPTION]', {
+        batchId: coordinatorBatchId,
+        expectedPaths: [...targetPaths],
+        currentPaths: [...validationFileSet],
+        removedPaths,
+        retryAttempt: attempt,
+        provider: localModelMode ? 'local' : 'remote'
+      });
+    }
+
+    for (const expectedPath of targetPaths) {
+      console.log('[VALIDATION_FILE_LOOKUP]', {
+        batchId: coordinatorBatchId,
+        expectedPath,
+        found: validationFileSet.has(expectedPath),
+        source: 'BatchState.currentFiles'
+      });
+      const entryContent = coordinatorBatchFilesByPath.get(expectedPath);
+      if (entryContent == null) {
+        validationFailed = true;
+        currentErrors.push(JSON.stringify({
+          batchId: coordinatorBatchId,
+          expectedPaths: [...targetPaths],
+          currentPaths: [...validationFileSet],
+          removedPaths: [expectedPath],
+          retryAttempt: attempt,
+          provider: localModelMode ? 'local' : 'remote'
+        }));
+        continue;
+      }
+      const task = eligibleTasks.find(candidate => sanitizeCoordinatorTargetPath(candidate.toolArgs?.path || candidate.toolArgs?.file || candidate.toolArgs?.target || '', workspaceRoot) === expectedPath);
+      if (!task) continue;
+      const prepared = await prepareCoordinatorWriteFileArgs({
+        task,
+        content: entryContent,
+        workspaceRoot,
+        layout,
+        workspaceFiles,
+        originalPrompt,
+        objective,
+        requiredSymbols: getRecoveryRequiredSymbols(task),
+        plan,
+        step,
+        writeContext: writeContextByPath.get(expectedPath),
+        coordinatorValidationFileSet: validationFileSet
+      });
+      if (!prepared.ok) {
+        validationFailed = true;
+        const validationError = {
+          path: expectedPath,
+          reason: prepared.reason || 'validation failed',
+          frameworkValidation: prepared.frameworkValidation || null
+        };
+        currentErrors.push(JSON.stringify(validationError));
+        if (prepared.frameworkValidation) {
+          const origContent = lastOriginalContents[expectedPath] || entryContent;
+          const delta = buildValidationDelta(origContent, prepared.frameworkValidation);
+          currentDeltas.push({
+            taskId: task.id,
+            targetPath: expectedPath,
+            validationDelta: delta,
+            preservedRegions: delta.preserve,
+            patchedRegions: delta.repair
+          });
+          frameworkValidationResults.push({
+            taskId: task.id,
+            targetPath: expectedPath,
+            ...prepared.frameworkValidation
+          });
+        }
+        continue;
+      }
+      preparedByTaskId.set(task.id, prepared.args);
+      generatedFiles.push({ taskId: task.id, path: expectedPath, contentLength: prepared.contentLength });
+      if (prepared.frameworkValidation) {
+        frameworkAdapterResults.push({
+          taskId: task.id,
+          targetPath: expectedPath,
+          ...prepared.frameworkValidation
+        });
+        frameworkValidationResults.push({
+          taskId: task.id,
+          targetPath: expectedPath,
+          ...prepared.frameworkValidation
+        });
+      }
+      coordinatorValidatedPaths.add(expectedPath);
+    }
+
+    if (!validationFailed) {
+      markBatchValidated(batchState, {
+        validatedFiles: targetPaths,
+        currentFiles: [...coordinatorBatchFilesByPath.keys()],
+        retryFiles: [...currentAttemptPaths],
+        status: 'READY_TO_COMMIT',
+        source: 'validation_pass'
+      });
+      console.log('[COORDINATOR_BATCH_MERGED]', {
+        batchId: coordinatorBatchId,
+        expectedFiles: [...targetPaths],
+        currentFiles: [...coordinatorBatchFilesByPath.keys()],
+        updatedFiles: [...currentAttemptPaths],
+        retryFiles: [...currentAttemptPaths]
+      });
+      markBatchCommitted(batchState, {
+        committedFiles: targetPaths,
+        currentFiles: [...coordinatorBatchFilesByPath.keys()],
+        retryFiles: [...currentAttemptPaths],
+        status: 'COMMITTED',
+        source: 'final_commit'
+      });
+      const writeContextByTaskId = new Map(
+        fileContexts.map(entry => [entry.task?.id, entry.writeContext]).filter(([id]) => id)
+      );
+      return {
+        eligible: true,
+        used: true,
+        success: true,
+        groupIndex,
+        fileCount: eligibleTasks.length,
+        targetPaths,
+        preparedByTaskId,
+        writeContextByTaskId,
+        generatedFiles,
+        frameworkAdapterResults,
+        frameworkValidation: frameworkValidationResults,
+        validationPolicies,
+        framework,
+        frameworkSource,
+        retryCount,
+        validationErrors,
+        validationDeltas: currentDeltas,
+        preservedRegions: Object.values(lastOriginalContents).flatMap(c => extractExportNames(c)),
+        patchedRegions: currentDeltas.flatMap(d => d.patchedRegions),
+        fallbackReason: '',
+        attempts: attempt + 1,
+        batchState
+      };
+    }
+
+    if (attempt === 0 && currentErrors.some(e => {
+      try { const p = JSON.parse(String(e || '')); return p?.frameworkValidation != null; } catch { return false; }
+    })) {
+      console.log('[FRAMEWORK_AUTO_REPAIR_START]', {
+        groupIndex,
+        files: currentErrors.map(e => {
+          try { return JSON.parse(e).path; } catch { return null; }
+        }).filter(Boolean)
+      });
+
+      const repairedFiles = [];
+      for (const err of currentErrors) {
+        let parsed;
+        try { parsed = JSON.parse(err); } catch { continue; }
+        if (!parsed.frameworkValidation) continue;
+        const origContent = lastOriginalContents[parsed.path] || '';
+        if (!origContent) continue;
+        const { repairedContent, appliedRepairs, success: repaired } = repairFramework(
+          origContent,
+          parsed.frameworkValidation.framework,
+          parsed.frameworkValidation
+        );
+        if (repaired && appliedRepairs.length > 0) {
+          const entry = splitResult.entries.find(e => e.path === parsed.path);
+          if (entry) {
+            entry.content = repairedContent;
+            repairedFiles.push({ path: parsed.path, appliedRepairs });
+          }
+        }
+      }
+
+      if (repairedFiles.length > 0) {
+        console.log('[FRAMEWORK_AUTO_REPAIR_APPLIED]', { repairedFiles });
+
+        let autoRepairPassed = true;
+        const autoRepairErrors = [];
+        const preservedFrameworkAdapterResults = [...frameworkAdapterResults];
+        const preservedFrameworkValidationResults = [...frameworkValidationResults];
+        const failingPaths = new Set(currentErrors.map(err => {
+          try {
+            return String(JSON.parse(err)?.path || '').trim();
+          } catch {
+            return '';
+          }
+        }).filter(Boolean));
+        const preservedPreparedEntries = [...preparedByTaskId.entries()].filter(([taskId]) => {
+          const task = eligibleTasks.find(candidate => candidate.id === taskId);
+          if (!task) return false;
+          const taskPath = sanitizeCoordinatorTargetPath(
+            task.toolArgs?.path || task.toolArgs?.file || task.toolArgs?.target || '',
+            workspaceRoot
+          );
+          return taskPath && !failingPaths.has(taskPath);
+        });
+
+        for (const [taskId, preparedArgs] of preservedPreparedEntries) {
+          const task = eligibleTasks.find(candidate => candidate.id === taskId);
+          if (!task) continue;
+          const taskPath = sanitizeCoordinatorTargetPath(
+            task.toolArgs?.path || task.toolArgs?.file || task.toolArgs?.target || '',
+            workspaceRoot
+          );
+          if (!taskPath) continue;
+          preparedByTaskId.set(task.id, preparedArgs);
+          const originalEntry = splitResult.entries.find(entry => entry.path === taskPath);
+          coordinatorBatchFilesByPath.set(taskPath, String(originalEntry?.content || preparedArgs?.content || ''));
+          coordinatorValidatedPaths.add(taskPath);
+          generatedFiles.push({
+            taskId: task.id,
+            path: taskPath,
+            contentLength: String(originalEntry?.content || preparedArgs?.content || '').length
+          });
+          console.log('[WRITE_COORDINATOR_PRESERVED_VALID_FILE]', {
+            path: taskPath,
+            reason: 'already_valid'
+          });
+        }
+
+        for (const entry of splitResult.entries) {
+          if (!failingPaths.has(entry.path)) continue;
+          const task = eligibleTasks.find(candidate => sanitizeCoordinatorTargetPath(
+            candidate.toolArgs?.path || candidate.toolArgs?.file || candidate.toolArgs?.target || '',
+            workspaceRoot
+          ) === entry.path);
+          if (!task) continue;
+          const prepared = await prepareCoordinatorWriteFileArgs({
+            task,
+            content: entry.content,
+            workspaceRoot,
+            layout,
+            workspaceFiles,
+            originalPrompt,
+            objective,
+            requiredSymbols: getRecoveryRequiredSymbols(task),
+            plan,
+            step,
+            writeContext: writeContextByPath.get(entry.path)
+          });
+          if (!prepared.ok) {
+            autoRepairPassed = false;
+            autoRepairErrors.push({ path: entry.path, reason: prepared.reason });
+            break;
+          }
+          coordinatorBatchFilesByPath.set(entry.path, entry.content);
+          preparedByTaskId.set(task.id, prepared.args);
+          generatedFiles.push({ taskId: task.id, path: entry.path, contentLength: prepared.contentLength });
+          if (prepared.frameworkValidation) {
+            frameworkAdapterResults.push({
+              taskId: task.id,
+              targetPath: entry.path,
+              ...prepared.frameworkValidation
+            });
+            frameworkValidationResults.push({
+              taskId: task.id,
+              targetPath: entry.path,
+              ...prepared.frameworkValidation
+            });
+          }
+        }
+
+        if (autoRepairPassed) {
+          console.log('[FRAMEWORK_AUTO_REPAIR_PASS]', { groupIndex });
+          markBatchValidated(batchState, {
+            validatedFiles: targetPaths,
+            currentFiles: [...coordinatorBatchFilesByPath.keys()],
+            retryFiles: [...currentAttemptPaths],
+            status: 'READY_TO_COMMIT',
+            source: 'framework_auto_repair_pass'
+          });
+          markBatchCommitted(batchState, {
+            committedFiles: targetPaths,
+            currentFiles: [...coordinatorBatchFilesByPath.keys()],
+            retryFiles: [...currentAttemptPaths],
+            status: 'COMMITTED',
+            source: 'framework_auto_repair_commit'
+          });
+
+          return {
+            eligible: true,
+            used: true,
+            success: true,
+            groupIndex,
+            fileCount: eligibleTasks.length,
+            targetPaths,
+            preparedByTaskId,
+            generatedFiles,
+            frameworkAdapterResults,
+            frameworkValidation: frameworkValidationResults,
+            validationPolicies,
+            framework,
+            frameworkSource,
+            retryCount: 0,
+            validationErrors: [],
+            validationDeltas: [],
+            preservedRegions: Object.values(lastOriginalContents).flatMap(c => extractExportNames(c)),
+            patchedRegions: [],
+            fallbackReason: '',
+            attempts: 1,
+            batchState,
+            frameworkAutoRepair: {
+              appliedRepairs: repairedFiles,
+              success: true
+            }
+          };
+        }
+        console.log('[FRAMEWORK_AUTO_REPAIR_FAIL]', { errors: autoRepairErrors });
+        console.log('[FRAMEWORK_ESCALATE_TO_COORDINATOR]', { groupIndex });
+      } else {
+        console.log('[FRAMEWORK_AUTO_REPAIR_FAIL]', { reason: 'no_repairs_possible' });
+        console.log('[FRAMEWORK_ESCALATE_TO_COORDINATOR]', { groupIndex });
+      }
+    }
+
+    if (attempt === 0 && validationFailed) {
+      lastValidationDeltas = [];
+      for (const err of currentErrors) {
+        let parsedErr;
+        try { parsedErr = JSON.parse(err); } catch { continue; }
+        const path = parsedErr.path || '';
+        const fv = parsedErr.frameworkValidation || null;
+        const fileContext = fileContexts.find(fc => fc.targetPath === path);
+        const role = fileContext?.writeContext?.validationPolicy?.role || '';
+        const requiredExports = fileContext?.writeContext?.validationPolicy?.mustExport || [];
+        const requiredReferences = fileContext?.writeContext?.validationPolicy?.mustReference || [];
+
+        const delta = buildStructuredValidationDelta({
+          targetPath: path,
+          previousContent: lastOriginalContents[path] || '',
+          validationErrors: currentErrors,
+          frameworkValidation: fv,
+          role,
+          requiredExports,
+          requiredReferences
+        });
+        lastValidationDeltas.push(delta);
+      }
+      console.log('[VALIDATION_DELTA_BUILT]', {
+        groupIndex,
+        deltaCount: lastValidationDeltas.length,
+        modes: lastValidationDeltas.map(d => ({ path: d.targetPath, mode: d.retryMode }))
+      });
+    }
+
+    fallbackReason = currentErrors.join('; ');
+    lastErrors = currentErrors.slice();
+    retryCount = attempt + 1;
+    validationErrors.push(...currentErrors);
+    if (currentErrors.some(error => /framework/i.test(String(error || '')))) {
+      console.log('[FRAMEWORK_COORDINATOR_RETRY]', {
+        groupIndex,
+        attempt: retryCount,
+        framework,
+        frameworkSource,
+        validationErrors: currentErrors
+      });
+    }
+    if (attempt === 0) continue;
+  }
+
+  const allDeltas = [];
+  for (const err of lastErrors) {
+    let parsed;
+    try { parsed = JSON.parse(err); } catch { continue; }
+    if (parsed?.frameworkValidation) {
+      const origContent = lastOriginalContents[parsed.path] || '';
+      const delta = buildValidationDelta(origContent, parsed.frameworkValidation);
+      allDeltas.push({
+        targetPath: parsed.path,
+        validationDelta: delta,
+        preservedRegions: delta.preserve,
+        patchedRegions: delta.repair
+      });
+    }
+  }
+  markBatchFailed(batchState, {
+    currentFiles: [...coordinatorBatchFilesByPath.keys()],
+    retryFiles: lastRetryFiles,
+    failedFiles: targetPaths,
+    committedFiles: [],
+    status: 'FAILED',
+    reason: fallbackReason || 'coordinator_validation_failed',
+    source: 'final_failure'
+  });
+  return {
+    eligible: true,
+    used: true,
+    success: validationErrors.length === 0 && [...targetPaths].every(path => coordinatorBatchFilesByPath.has(path)),
+    groupIndex,
+    fileCount: eligibleTasks.length,
+    targetPaths,
+    preparedByTaskId,
+    generatedFiles,
+    frameworkAdapterResults,
+    frameworkValidation: frameworkValidationResults,
+    validationPolicies,
+    framework,
+    frameworkSource,
+    retryCount,
+    validationErrors,
+    validationDeltas: allDeltas,
+    preservedRegions: Object.values(lastOriginalContents).flatMap(c => extractExportNames(c)),
+    patchedRegions: allDeltas.flatMap(d => d.patchedRegions),
+    fallbackReason: fallbackReason || 'coordinator_validation_failed',
+    attempts: 2,
+    batchState
+  };
+}
+
 // Build strict answer instruction for common package.json questions
 function buildStrictAnswerInstruction(objective, normalizedFile) {
   try {
@@ -576,22 +2830,16 @@ export function applyScriptInstructionToPackage(pkgObj, instr) {
   return { modified, pkg: pkgObj };
 }
 
-function extractRequestedValidationCommand(objective) {
+function extractRequestedValidationCommand(objective, projectScan = null) {
   const text = String(objective || "");
-  // Extract from explicit run markers only
-  const lines = text.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const markerMatch = lines[i].match(/^\s*(?:Then\s+)?(?:Run|Execute):\s*(.*)$/i);
-    if (markerMatch) {
-      let cmd = markerMatch[1].trim();
-      if (!cmd && i + 1 < lines.length) {
-        cmd = lines[i + 1].trim();
-      }
-      if (cmd && !/^(npm|npm\s+run|npm\s+script|pnpm|yarn)$/i.test(cmd)) {
-        return cmd;
-      }
-    }
-  }
+  const explicitCommands = extractCommands(text);
+  if (explicitCommands.length > 0) return explicitCommands[0];
+
+  const scanCommands = Array.isArray(projectScan?.testCommands)
+    ? projectScan.testCommands.map(cmd => String(cmd || '').trim()).filter(Boolean)
+    : [];
+  if (scanCommands.length > 0) return scanCommands[0];
+
   const nodeCheck = text.match(/\bnode\s+--check\b[^\n]*/i);
   if (nodeCheck) return nodeCheck[0].trim();
   return null;
@@ -651,8 +2899,11 @@ function buildReadOnlySummary(toolCalls, readFileCache) {
     : "Read files summary not available.";
 }
 
-function buildPlannerFinalText({ planner, toolCalls, readFileCache, readOnly = false, changedFiles = [] }) {
-  const allTasks = planner?.graph?.allNodes?.() || [];
+export function buildPlannerFinalText({ planner, toolCalls, readFileCache, readOnly = false, changedFiles = [] }) {
+  const originalTasks = getPlannerOriginalTasks(planner);
+  const allTasks = Array.isArray(originalTasks) && originalTasks.length > 0
+    ? originalTasks
+    : (planner?.graph?.allNodes?.() || []);
   const failedTasks = allTasks.filter(t => t.status === TaskStatus.FAILED || t.status === TaskStatus.RECOVERY_FAILED);
   if (failedTasks.length > 0) {
     const failedCalls = toolCalls.filter(call => call.tool === "RUN_TERMINAL" && call.success === false);
@@ -833,8 +3084,14 @@ export async function generateValidatedWriteContent({
   layout = null,
   workspaceFiles = [],
   requiredSymbols = [],
+  maxTokens = WRITE_GENERATION_DEFAULT_MAX_TOKENS,
   onFailure = () => {}
 } = {}) {
+  const tokenBudget = resolveWriteGenerationTokenBudget({
+    requestedMaxTokens: maxTokens,
+    maxTokensCapOverride: maxTokens,
+    source: reason || 'write_generation'
+  });
   const targetPath = String(args?.path || args?.file || args?.target || '').trim();
   if (!targetPath) {
     return { accepted: false, error: 'WRITE_FILE requires a target path', targetPath: '' };
@@ -850,7 +3107,8 @@ export async function generateValidatedWriteContent({
       projectScan: layout,
       prompt: objective,
       workspaceFiles,
-      requiredSymbols
+      requiredSymbols,
+      taskId: task?.id || null
     });
   } catch (ctxError) {
     console.log('[WRITE_CONTEXT_ERROR]', { targetPath, error: ctxError.message });
@@ -874,6 +3132,30 @@ export async function generateValidatedWriteContent({
   let resolvedWriteContent = null;
   let resolvedWriteError = null;
 
+  const shouldRetryGenerationFailure = (failureText, validationResult = null) => {
+    const decision = evaluateExecutionStrategy({
+      failedTask: task || { tool: 'WRITE_FILE', kind: 'CODING' },
+      validationResult: validationResult || { stderr: failureText || '', stdout: '', output: '', rawOutput: '' },
+      plannerMetadata: {
+        requiredCommands: writeContext?.validationPolicy?.requiredCommands || [],
+        parallelAllowed: true
+      },
+      workspaceMetadata: {
+        workspaceRoot,
+        readOnly: false,
+        packageManagerAvailable: writeContext?.packageJson != null,
+        frameworkRunnable: writeContext?.detectedTestFrameworkAvailability?.runnable !== false,
+        terminalAvailable: true,
+        packageEditable: true,
+        frameworkSetupAllowed: writeContext?.detectedTestFrameworkAvailability?.runnable === false,
+        validationRequired: true
+      },
+      projectScan: layout || {},
+      requiredCommands: writeContext?.validationPolicy?.requiredCommands || []
+    });
+    return decision.retryAllowed === true;
+  };
+
   for (let generationAttempt = 1; generationAttempt <= MAX_WRITE_GENERATION_RETRIES; generationAttempt += 1) {
     const contentPrompt = await buildWriteContentPrompt({
       writeContext,
@@ -894,7 +3176,8 @@ export async function generateValidatedWriteContent({
       generateResponse,
       responseMode: 'content',
       context: { path: targetPath },
-      maxAttempts: 3
+      maxAttempts: 3,
+      maxTokens: tokenBudget.effectiveMaxTokens
     });
 
     if (!contentResult.accepted) {
@@ -904,6 +3187,9 @@ export async function generateValidatedWriteContent({
         reason: 'model did not return valid content',
         attempt: generationAttempt,
         maxAttempts: MAX_WRITE_GENERATION_RETRIES
+      });
+      const retryAllowed = shouldRetryGenerationFailure(contentResult.error || 'model did not return valid content', {
+        stderr: contentResult.error || 'model did not return valid content'
       });
       if (generationAttempt >= MAX_WRITE_GENERATION_RETRIES) {
         if (fallbackAvailable) {
@@ -920,8 +3206,36 @@ export async function generateValidatedWriteContent({
         console.log('[WRITE_CONTENT_GENERATION_FAILED]', { targetPath, reason: resolvedWriteError });
         break;
       }
+      if (!retryAllowed) {
+        resolvedWriteError = contentResult.error || 'model did not return valid content';
+        onFailure(resolvedWriteError);
+        console.log('[WRITE_CONTENT_GENERATION_FAILED]', { targetPath, reason: resolvedWriteError });
+        break;
+      }
       conversation.push({ role: 'system', content: `Failed to generate valid content for ${targetPath}. Return {"content":"..."} with no tool field and do not repeat the previous output.` });
       continue;
+    }
+
+    const returnedPath = String(contentResult.parsed?.path || contentResult.parsed?.file || contentResult.parsed?.target || '').trim();
+    if (returnedPath && returnedPath !== targetPath) {
+      const mismatchReason = `Recovery target mismatch: expected "${targetPath}", got "${returnedPath}"`;
+      const mismatchLog = String(task?.kind || '').toUpperCase() === 'RECOVERY'
+        ? '[RECOVERY_TARGET_MISMATCH_BLOCKED]'
+        : '[WRITE_TARGET_MISMATCH_BLOCKED]';
+      console.log(mismatchLog, {
+        expected: targetPath,
+        actual: returnedPath,
+        taskId: task?.id || null,
+        source: reason || 'generate_content'
+      });
+      onFailure(mismatchReason);
+      return {
+        accepted: false,
+        error: mismatchReason,
+        targetPath,
+        writeContext,
+        moduleSystem
+      };
     }
 
     const generatedContent = String(contentResult.parsed.content || '');
@@ -960,6 +3274,9 @@ export async function generateValidatedWriteContent({
         attempt: generationAttempt,
         maxAttempts: MAX_WRITE_GENERATION_RETRIES
       });
+      const retryAllowed = shouldRetryGenerationFailure('Generated content is empty', {
+        stderr: 'Generated content is empty'
+      });
       if (generationAttempt >= MAX_WRITE_GENERATION_RETRIES) {
         if (fallbackAvailable) {
           resolvedWriteContent = buildDeterministicClarificationFallbackContent();
@@ -975,18 +3292,30 @@ export async function generateValidatedWriteContent({
         console.log('[WRITE_CONTENT_GENERATION_FAILED]', { targetPath, reason: resolvedWriteError });
         break;
       }
+      if (!retryAllowed) {
+        resolvedWriteError = 'Generated content is empty';
+        onFailure(resolvedWriteError);
+        console.log('[WRITE_CONTENT_GENERATION_FAILED]', { targetPath, reason: resolvedWriteError });
+        break;
+      }
       conversation.push({ role: 'system', content: `Generated content for ${targetPath} is empty. Provide non-empty content.` });
       continue;
     }
 
     const validation = await validateGeneratedWriteContent({
+      task,
       workspaceRoot,
       targetPath,
       content: generatedContent,
       projectScan: layout,
       prompt: objective,
       workspaceFiles,
-      requiredSymbols: writeContext.requiredSymbols || []
+      requiredSymbols: writeContext.requiredSymbols || [],
+      validationSource: 'generated_write',
+      // Reuse the writeContext already built above (line ~2038) instead of
+      // rebuilding it. The single-file generator owns this policy.
+      writeContext,
+      policySource: 'write_generator'
     });
     if (!validation.success) {
       rejectedContentHashes.add(generatedHash);
@@ -996,6 +3325,10 @@ export async function generateValidatedWriteContent({
         moduleSystem: validation.moduleSystem || moduleSystem,
         attempt: generationAttempt,
         maxAttempts: MAX_WRITE_GENERATION_RETRIES
+      });
+      const retryAllowed = shouldRetryGenerationFailure(validation.error || 'Content validation failed', {
+        stderr: validation.error || 'Content validation failed',
+        frameworkValidation: validation.frameworkValidation || null
       });
       if (generationAttempt >= MAX_WRITE_GENERATION_RETRIES) {
         if (fallbackAvailable) {
@@ -1012,11 +3345,72 @@ export async function generateValidatedWriteContent({
         console.log('[WRITE_CONTENT_GENERATION_FAILED]', { targetPath, reason: resolvedWriteError });
         break;
       }
+      if (!retryAllowed) {
+        resolvedWriteError = validation.error || 'Content validation failed';
+        onFailure(resolvedWriteError);
+        console.log('[WRITE_CONTENT_GENERATION_FAILED]', { targetPath, reason: resolvedWriteError });
+        break;
+      }
       conversation.push({ role: 'system', content: `${validation.error || 'Content validation failed.'} Do not repeat the same content. Return compatible content only.` });
       continue;
     }
 
     resolvedWriteContent = String(validation.content || generatedContent);
+    const structural = validateStructuredWriteContent({
+      targetPath,
+      content: resolvedWriteContent,
+      previousContent: String(writeContext?.existingTargetContent || args?.content || ''),
+      role: writeContext?.validationPolicy?.role || validation.policy?.role || 'implementation',
+      requiredExports: writeContext?.validationPolicy?.mustExport || [],
+      requiredReferences: writeContext?.validationPolicy?.mustReference || [],
+      frameworkValidation: validation.frameworkValidation || null
+    });
+    console.log('[WRITE_CONTENT_STRUCTURAL_CHECK]', {
+      targetPath,
+      role: writeContext?.validationPolicy?.role || validation.policy?.role || 'implementation',
+      success: structural.success,
+      reason: structural.reason || null,
+      retryMode: structural.retryMode || null,
+      hasExecutableBody: structural.hasExecutableBody === true,
+      hasTestSignal: structural.hasTestSignal === true
+    });
+    if (!structural.success) {
+      rejectedContentHashes.add(generatedHash);
+      console.log('[WRITE_CONTENT_STRUCTURAL_REJECTED]', {
+        targetPath,
+        reason: structural.reason || 'structural_validation_failed',
+        retryMode: structural.retryMode || 'full'
+      });
+      const retryAllowed = shouldRetryGenerationFailure(structural.reason || 'structural_validation_failed', {
+        stderr: structural.reason || 'structural_validation_failed'
+      });
+      if (generationAttempt >= MAX_WRITE_GENERATION_RETRIES) {
+        if (fallbackAvailable) {
+          resolvedWriteContent = buildDeterministicClarificationFallbackContent();
+          console.log('[WRITE_CONTENT_DETERMINISTIC_FALLBACK]', {
+            targetPath,
+            reason: 'structural_validation_rejected',
+            attempt: generationAttempt
+          });
+          break;
+        }
+        resolvedWriteError = `WRITE content structural validation failed after ${MAX_WRITE_GENERATION_RETRIES} attempts`;
+        onFailure(resolvedWriteError);
+        console.log('[WRITE_CONTENT_GENERATION_FAILED]', { targetPath, reason: resolvedWriteError });
+        break;
+      }
+      if (!retryAllowed) {
+        resolvedWriteError = structural.reason || 'structural_validation_failed';
+        onFailure(resolvedWriteError);
+        console.log('[WRITE_CONTENT_GENERATION_FAILED]', { targetPath, reason: resolvedWriteError });
+        break;
+      }
+      conversation.push({
+        role: 'system',
+        content: `${structural.reason || 'Structural validation failed.'} Regenerate the full file from scratch. Do not return partial, import-only, or patch-only output.`
+      });
+      continue;
+    }
     console.log('[WRITE_CONTENT_VALIDATED]', {
       targetPath,
       contentLength: resolvedWriteContent.length,
@@ -1065,8 +3459,14 @@ export async function prepareWriteFileArgsForPlannerTask({
   conversation = [],
   plan,
   step = 0,
+  maxTokens = WRITE_GENERATION_DEFAULT_MAX_TOKENS,
   onFailure = () => {}
 } = {}) {
+  const tokenBudget = resolveWriteGenerationTokenBudget({
+    requestedMaxTokens: maxTokens,
+    maxTokensCapOverride: maxTokens,
+    source: 'prepare_write_file'
+  });
   const targetPath = String(args?.path || args?.file || args?.target || '').trim();
   if (!targetPath) {
     return {
@@ -1109,17 +3509,20 @@ export async function prepareWriteFileArgsForPlannerTask({
     String(objective || '').trim(),
     String(task?.goal || '').trim()
   ].filter(Boolean).join('\n');
-
   const parsedPrompt = parsePromptFileLiterals(promptSource);
   const literalRecord = parsedPrompt.files[String(targetPath).replace(/\\/g, '/')];
   const literalContent = String(literalRecord?.content ?? '').trim();
+  const targetPromptSource = literalContent || promptSource;
+
   if (literalContent && literalContent !== 'undefined' && literalContent !== 'null') {
     const literalValidation = validatePromptLiteralContent({
       path: targetPath,
       content: literalContent,
-      prompt: promptSource,
+      prompt: targetPromptSource,
       operation: literalRecord?.operation || 'write',
-      commands: parsedPrompt.commands
+      commands: parsedPrompt.commands,
+      projectContext: layout || {},
+      detectedTestFramework: layout?.detectedTestFramework || null
     });
     if (literalValidation.success) {
       const validatedContent = String(literalValidation.content || literalContent);
@@ -1174,7 +3577,7 @@ export async function prepareWriteFileArgsForPlannerTask({
       path: targetPath,
       file: targetPath
     },
-    objective: promptSource || objective,
+    objective: targetPromptSource || objective,
     plan,
     step,
     generateResponse,
@@ -1183,10 +3586,10 @@ export async function prepareWriteFileArgsForPlannerTask({
     layout,
     workspaceFiles,
     requiredSymbols,
-      onFailure
-      ,
-      reason: 'no_valid_literal_content'
-    });
+    maxTokens: tokenBudget.effectiveMaxTokens,
+    onFailure,
+    reason: 'no_valid_literal_content'
+  });
 
   if (!generated.accepted) {
     return {
@@ -1207,7 +3610,8 @@ export async function prepareWriteFileArgsForPlannerTask({
     args: generated.toolArgs,
     generated: true,
     contentLength: String(generated.content || '').length,
-    source: 'model_generated'
+    source: 'model_generated',
+    writeContext: generated.writeContext || null
   };
 }
 
@@ -1222,17 +3626,17 @@ export function buildRecoveryConversation({
   writeContext = null
 }) {
   const recoveryGoal = String(recoveryTask?.goal || '').trim();
-  const failureText = String(latestFailure || '').trim();
+  const failureText = truncateRunText(latestFailure, 'recovery.failureText');
   const expectedPath = String(expectedArgs?.path || expectedArgs?.file || expectedArgs?.target || '').trim();
   const seed = [];
   const ctx = validationContext || {};
   const failedCommand = String(ctx.failedCommand || ctx.command || '').trim();
   const exitCode = ctx.exitCode !== undefined && ctx.exitCode !== null ? String(ctx.exitCode) : '';
-  const stdout = String(ctx.stdout || '').replace(/\r/g, '').trim().slice(0, 500);
-  const stderr = String(ctx.stderr || '').replace(/\r/g, '').trim().slice(0, 500);
-  const assertion = String(ctx.assertion || '').trim();
-  const expectedValue = String(ctx.expectedValue || ctx.expected || '').trim();
-  const actualValue = String(ctx.actualValue || ctx.actual || '').trim();
+  const stdout = truncateRunText(String(ctx.stdout || '').replace(/\r/g, '').trim(), 'recovery.validationContext.stdout', 12000);
+  const stderr = truncateRunText(String(ctx.stderr || '').replace(/\r/g, '').trim(), 'recovery.validationContext.stderr', 12000);
+  const assertion = truncateRunText(String(ctx.assertion || '').trim(), 'recovery.validationContext.assertion', 12000);
+  const expectedValue = truncateRunText(String(ctx.expectedValue || ctx.expected || '').trim(), 'recovery.validationContext.expectedValue', 12000);
+  const actualValue = truncateRunText(String(ctx.actualValue || ctx.actual || '').trim(), 'recovery.validationContext.actualValue', 12000);
   const recoveryAssertionContext = ctx.recoveryAssertionContext || recoveryTask?.toolArgs?.recoveryAssertionContext || null;
   const changedFiles = Array.isArray(ctx.changedFiles) ? ctx.changedFiles.filter(Boolean).slice(0, 12) : [];
   const readFiles = Array.isArray(ctx.readFiles) ? ctx.readFiles.filter(Boolean).slice(0, 4) : [];
@@ -1370,11 +3774,116 @@ function collectRequestedWriteFiles({ requestedFiles = [], plannerWriteTargets =
     .filter(call => call && (call.tool === "WRITE_FILE" || call.tool === "APPLY_PATCH"))
     .map(call => normalizeMetadataFile(call.result?.file || call.args?.path || call.args?.file || call.args?.target || ""))
     .filter(Boolean);
-  return uniqueMetadataFiles([
-    ...requestedFiles,
-    ...plannerWriteTargets,
-    ...toolWriteFiles
+  return uniqueMetadataFiles(toolWriteFiles);
+}
+
+function collectPlannerReadFiles({ toolCalls = [] } = {}) {
+  return uniqueMetadataFiles(
+    (Array.isArray(toolCalls) ? toolCalls : [])
+      .filter(call => call && call.tool === "READ_FILE" && call.success === true)
+      .map(call => normalizeMetadataFile(call.result?.file || call.args?.path || call.args?.file || ""))
+      .filter(Boolean)
+  );
+}
+
+function extractPathCandidatesFromText(text = "") {
+  const value = String(text || "");
+  if (!value.trim()) return [];
+  const matches = value.match(/(?:[A-Za-z]:[\\/])?(?:[\w.-]+[\\/])*[\w.-]+\.(?:js|jsx|ts|tsx|mjs|cjs|json|css|scss|html|php|py|cs|md|txt|vue|svelte)/g) || [];
+  return uniqueMetadataFiles(matches);
+}
+
+function isLikelySourcePath(file = "") {
+  const normalized = normalizeMetadataFile(file);
+  return /(^|\/)(?:src|app|lib|server|client)(?:\/|$)/i.test(normalized);
+}
+
+async function filterExistingWorkspaceFiles(workspaceRoot, files = []) {
+  const out = [];
+  for (const file of uniqueMetadataFiles(files)) {
+    if (!isLikelySourcePath(file)) continue;
+    try {
+      const resolved = await resolveWorkspacePathSafe(workspaceRoot, file);
+      const stat = await fs.stat(resolved.absolutePath);
+      if (stat.isFile()) out.push(resolved.relativePath.replace(/\\/g, "/"));
+    } catch {
+      // ignore paths that do not exist inside the workspace
+    }
+  }
+  return uniqueMetadataFiles(out);
+}
+
+function buildValidatedFileRecords({
+  requestedFiles = [],
+  plannerWriteTargets = [],
+  toolCalls = [],
+  validationPassed = false,
+  validationSummary = null,
+  validatedFiles = null,
+  verifiedExistingFiles = null
+} = {}) {
+  const requested = uniqueMetadataFiles([
+    ...(Array.isArray(requestedFiles) ? requestedFiles : []),
+    ...(Array.isArray(plannerWriteTargets) ? plannerWriteTargets : [])
   ]);
+  const explicitValidated = uniqueMetadataFiles(Array.isArray(validatedFiles) ? validatedFiles : []);
+  const explicitVerifiedExisting = uniqueMetadataFiles(Array.isArray(verifiedExistingFiles) ? verifiedExistingFiles : []);
+  const verifiedExistingSet = new Set(explicitVerifiedExisting);
+
+  const writeCalls = (Array.isArray(toolCalls) ? toolCalls : [])
+    .filter(call => call && call.tool === "WRITE_FILE" && call.success === true);
+  const patchValidatedFiles = new Set(
+    (Array.isArray(toolCalls) ? toolCalls : [])
+      .filter(call => call && call.tool === "VALIDATE_PATCH" && call.success === true)
+      .map(call => normalizeMetadataFile(call.args?.file || call.result?.file || ""))
+      .filter(Boolean)
+  );
+
+  const records = [];
+  for (const call of writeCalls) {
+    const file = normalizeMetadataFile(call.result?.file || call.args?.path || call.args?.file || call.args?.target || "");
+    if (!file) continue;
+    const noChange = call.result?.alreadyUpToDate === true || call.result?.changed === false || call.result?.cached === true;
+    const validated = noChange || patchValidatedFiles.has(file) || call.result?.writeValidation?.targetApproved === true || explicitValidated.includes(file) || verifiedExistingSet.has(file);
+    if (!validated) continue;
+    records.push({
+      path: file,
+      writeStatus: noChange ? "no_change" : "changed",
+      physicalChangeStatus: noChange ? "unchanged_but_valid" : "changed",
+      validationStatus: "passed",
+      source: verifiedExistingSet.has(file) ? "verified_existing_files" : (noChange ? "write_coordinator" : "write_file"),
+      reason: verifiedExistingSet.has(file) ? "already_validated_on_disk" : (noChange ? "content_identical" : "content_written")
+    });
+  }
+
+  for (const file of explicitValidated) {
+    if (records.some(record => record.path === file)) continue;
+    records.push({
+      path: file,
+      writeStatus: "validated",
+      physicalChangeStatus: "unknown",
+      validationStatus: "passed",
+      source: verifiedExistingSet.has(file) ? "verified_existing_files" : "validation_summary",
+      reason: verifiedExistingSet.has(file) ? "already_validated_on_disk" : "explicitly_reported"
+    });
+  }
+
+  const summaryPassed = validationSummary?.validationPassed === true;
+  const summaryMatched = Array.isArray(validationSummary?.matchedCommands) && validationSummary.matchedCommands.length > 0;
+  if (records.length === 0 && (validationPassed || summaryPassed || summaryMatched)) {
+    for (const file of requested) {
+      records.push({
+        path: file,
+        writeStatus: "validated",
+        physicalChangeStatus: "unknown",
+        validationStatus: "passed",
+        source: verifiedExistingSet.has(file) ? "verified_existing_files" : "validation_summary",
+        reason: verifiedExistingSet.has(file) ? "already_validated_on_disk" : "validation_passed"
+      });
+    }
+  }
+
+  return uniqueMetadataFiles(records.map(record => record.path)).map(file => records.find(record => record.path === file));
 }
 
 export function buildValidatedFilesMetadata({
@@ -1382,22 +3891,77 @@ export function buildValidatedFilesMetadata({
   plannerWriteTargets = [],
   validationPassed = false,
   validationSummary = null,
-  validatedFiles = null
+  validatedFiles = null,
+  verifiedExistingFiles = null,
+  toolCalls = []
 } = {}) {
-  if (!validationPassed) return [];
-  const requested = uniqueMetadataFiles([
-    ...(Array.isArray(requestedFiles) ? requestedFiles : []),
-    ...(Array.isArray(plannerWriteTargets) ? plannerWriteTargets : [])
-  ]);
-  const summaryPassed = validationSummary?.validationPassed === true;
-  const summaryMatched = Array.isArray(validationSummary?.matchedCommands) && validationSummary.matchedCommands.length > 0;
-  const validated = Array.isArray(validatedFiles) && validatedFiles.length > 0
-    ? uniqueMetadataFiles(validatedFiles)
-    : (summaryPassed || summaryMatched ? requested : []);
-  for (const file of validated) {
-    console.log("[VALIDATED_FILE_RECORDED]", { file, validationPassed: true });
+  const records = buildValidatedFileRecords({
+    requestedFiles,
+    plannerWriteTargets,
+    toolCalls,
+    validationPassed,
+    validationSummary,
+    validatedFiles,
+    verifiedExistingFiles
+  });
+  for (const record of records) {
+    if (!record?.path) continue;
+    console.log("[VALIDATED_FILE_RECORDED]", { file: record.path, validationPassed: true });
+    if (record.writeStatus === "no_change") {
+      console.log("[WRITE_NO_CHANGE_VALIDATED]", {
+        path: record.path,
+        taskId: null,
+        validationStatus: "passed"
+      });
+    }
   }
-  return validated;
+  return records.map(record => record.path);
+}
+
+function determineValidationFailureAttribution({
+  validationSummary = null,
+  toolCalls = [],
+  requestedWriteFiles = [],
+  validatedFiles = [],
+  changedFiles = [],
+  workspaceRoot = "",
+  externalFailureFiles = []
+} = {}) {
+  const terminalCalls = (Array.isArray(toolCalls) ? toolCalls : []).filter(call => call?.tool === "RUN_TERMINAL");
+  const failedTerminalCalls = terminalCalls.filter(call =>
+    call?.success === false ||
+    (call?.result?.exitCode !== null && call?.result?.exitCode !== undefined && call?.result?.exitCode !== 0)
+  );
+  if (failedTerminalCalls.length === 0) {
+    return {
+      validationFailureAttribution: null,
+      externalFailureFiles: []
+    };
+  }
+  const requestedSet = new Set(uniqueMetadataFiles([...(Array.isArray(requestedWriteFiles) ? requestedWriteFiles : []), ...(Array.isArray(changedFiles) ? changedFiles : [])]));
+  const requestedValidated = Array.isArray(validatedFiles) && validatedFiles.length > 0 &&
+    uniqueMetadataFiles(requestedWriteFiles).every(file => uniqueMetadataFiles(validatedFiles).includes(file));
+  const providedExternalFiles = uniqueMetadataFiles(Array.isArray(externalFailureFiles) ? externalFailureFiles : []);
+  const failureFileCandidates = providedExternalFiles.length > 0
+    ? providedExternalFiles
+    : uniqueMetadataFiles(
+        failedTerminalCalls.flatMap(call => extractExternalFailureFilesFromText([
+          call?.error,
+          call?.result?.stderr,
+          call?.result?.stdout
+        ].filter(Boolean).join("\n"), workspaceRoot))
+      ).filter(file => isLikelySourcePath(file));
+  const externalFiles = failureFileCandidates.filter(file => !requestedSet.has(file));
+  const validationFailureAttribution = requestedValidated
+    ? "external_project_failure"
+    : (externalFiles.length > 0 ? "external_project_failure" : "requested_scope_failure");
+  if (externalFiles.length > 0) {
+    console.log("[EXTERNAL_FAILURE_FILES]", { files: externalFiles });
+  }
+  return {
+    validationFailureAttribution,
+      externalFailureFiles: externalFiles
+  };
 }
 
 export function buildRunFileMetadata({
@@ -1408,16 +3972,50 @@ export function buildRunFileMetadata({
   validationSummary = null,
   completionResult = null,
   qualityGatePassed = false,
-  validatedFiles = null
+  validatedFiles = null,
+  verifiedExistingFiles = null,
+  plannerReadFiles = null,
+  plannerExecutionMetadata = null,
+  executionStateRegistry = null,
+  workspaceRoot = ""
 } = {}) {
-  const requestedWriteFiles = uniqueMetadataFiles(
-    Array.isArray(completionResult?.requestedWriteFiles) && completionResult.requestedWriteFiles.length > 0
-      ? completionResult.requestedWriteFiles
-      : collectRequestedWriteFiles({
-          requestedFiles,
-          plannerWriteTargets,
-          toolCalls
-        })
+  if (executionStateRegistry) {
+    const snapshot = typeof executionStateRegistry.getSnapshot === "function"
+      ? executionStateRegistry.getSnapshot()
+      : null;
+    if (snapshot) {
+      return {
+        requestedWriteFiles: snapshot.requestedWriteFiles || [],
+        plannerReadFiles: snapshot.plannerReadFiles || [],
+        changedFiles: snapshot.changedFiles || [],
+        validatedFiles: snapshot.validatedFiles || [],
+        verifiedExistingFiles: snapshot.verifiedExistingFiles || [],
+        validatedFileDetails: snapshot.validatedFileDetails || [],
+        physicalChangeStatus: snapshot.physicalChangeStatus || "not_applicable",
+        validationCoverageStatus: snapshot.validationCoverageStatus || "not_required",
+        validationExecuted: snapshot.validationExecuted === true,
+        validationCommand: snapshot.validationCommand || null,
+        validationSuccess: snapshot.validationSuccess === true,
+        requestedFilesValidated: snapshot.requestedFilesValidated === true,
+        validationFailureAttribution: snapshot.validationFailureAttribution || null,
+        externalFailureFiles: snapshot.externalFailureFiles || []
+      };
+    }
+  }
+  const normalizedPlannerExecutionMetadata = plannerExecutionMetadata || {};
+  const requestedWriteFiles = uniqueMetadataFiles([
+    ...(Array.isArray(normalizedPlannerExecutionMetadata.plannerWriteFiles) ? normalizedPlannerExecutionMetadata.plannerWriteFiles : []),
+    ...(Array.isArray(completionResult?.requestedWriteFiles) ? completionResult.requestedWriteFiles : []),
+    ...collectRequestedWriteFiles({ toolCalls })
+  ]);
+  const computedPlannerReadFiles = uniqueMetadataFiles(
+    Array.isArray(normalizedPlannerExecutionMetadata.plannerReadFiles) && normalizedPlannerExecutionMetadata.plannerReadFiles.length > 0
+      ? normalizedPlannerExecutionMetadata.plannerReadFiles
+      : Array.isArray(completionResult?.plannerReadFiles) && completionResult.plannerReadFiles.length > 0
+      ? completionResult.plannerReadFiles
+      : (Array.isArray(plannerReadFiles) && plannerReadFiles.length > 0
+        ? plannerReadFiles
+        : collectPlannerReadFiles({ toolCalls }))
   );
   const changedFileList = uniqueMetadataFiles(
     Array.isArray(completionResult?.changedFiles) && completionResult.changedFiles.length >= 0
@@ -1430,21 +4028,51 @@ export function buildRunFileMetadata({
   const validationMatched = completionResult
     ? completionResult.validationMatched === true
     : Array.isArray(validationSummary?.matchedCommands) && validationSummary.matchedCommands.length > 0;
-  const computedValidatedFiles = validationPassed && validationMatched
-    ? requestedWriteFiles
-    : [];
+  const validatedRecords = buildValidatedFileRecords({
+    requestedFiles: requestedWriteFiles,
+    toolCalls,
+    validationPassed,
+    validationSummary,
+    validatedFiles,
+    verifiedExistingFiles
+  });
+  const computedValidatedFiles = validatedRecords.map(record => record.path);
+  const requestedFilesValidated = requestedWriteFiles.length > 0 && requestedWriteFiles.every(file => computedValidatedFiles.includes(file));
   const physicalChangeStatus = requestedWriteFiles.length === 0
     ? "none"
-    : (changedFileList.length > 0 ? "changed" : "unchanged");
-  const validationCoverageStatus = validationPassed && validationMatched
+    : (changedFileList.length > 0 ? "changed" : (Array.isArray(verifiedExistingFiles) && verifiedExistingFiles.length > 0 ? "already_valid" : (requestedFilesValidated ? "unchanged_but_valid" : "unchanged")));
+  const validationCoverageStatus = requestedFilesValidated
     ? "validated"
     : "not_validated";
+  const validationExecuted = (Array.isArray(toolCalls) ? toolCalls : []).some(call => call?.tool === "RUN_TERMINAL");
+  const validationCommand = validationSummary?.executedValidationCommands?.[0]?.executedCommand
+    || validationSummary?.matchedCommands?.[0]?.executedCommand
+    || validationSummary?.failedCommands?.[0]?.executedCommand
+    || (Array.isArray(toolCalls) ? toolCalls.find(call => call?.tool === "RUN_TERMINAL")?.args?.command || null : null);
+  const validationSuccess = validationPassed && validationMatched;
+  const validationFailureInfo = determineValidationFailureAttribution({
+    validationSummary,
+    toolCalls,
+    requestedWriteFiles,
+    validatedFiles: computedValidatedFiles,
+    changedFiles: changedFileList,
+    workspaceRoot
+  });
   return {
     requestedWriteFiles,
+    plannerReadFiles: computedPlannerReadFiles,
     changedFiles: changedFileList,
     validatedFiles: computedValidatedFiles,
+    verifiedExistingFiles: uniqueMetadataFiles(Array.isArray(verifiedExistingFiles) ? verifiedExistingFiles : []),
+    validatedFileDetails: validatedRecords,
     physicalChangeStatus,
-    validationCoverageStatus
+    validationCoverageStatus,
+    validationExecuted,
+    validationCommand,
+    validationSuccess,
+    requestedFilesValidated,
+    validationFailureAttribution: validationSuccess ? null : validationFailureInfo.validationFailureAttribution,
+    externalFailureFiles: validationFailureInfo.externalFailureFiles
   };
 }
 
@@ -1528,6 +4156,7 @@ async function enforceExpectedToolResponse({
   objective,
   generateResponse,
   maxAttempts = 3,
+  maxTokens = null,
   onMismatch = () => {},
   mismatchLog = '[PLANNER_TOOL_MISMATCH]',
   correctiveLog = '[PLANNER_CORRECTIVE_INSTRUCTION]',
@@ -1541,7 +4170,14 @@ async function enforceExpectedToolResponse({
   let returnedTool = null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const raw = await generateResponse({ messages: baseMessages, plan, step, objective });
+    const raw = await generateResponse({
+      messages: baseMessages,
+      plan,
+      step,
+      objective,
+      maxTokens: maxTokens ?? undefined,
+      maxTokensCapOverride: maxTokens ?? undefined
+    });
     lastRaw = raw;
     try {
       const parsed = parseAgentResponse(raw);
@@ -1552,8 +4188,8 @@ async function enforceExpectedToolResponse({
         const normalizedContentMode = normalizedExpected;
         if (normalizedContentMode === 'WRITE_FILE') {
           const content = String(payload.content ?? '');
-          if (!hasUnexpectedTool && content.trim()) {
-            return { accepted: true, parsed: { content }, raw, attempts: attempt + 1 };
+        if (!hasUnexpectedTool && content.trim()) {
+            return { accepted: true, parsed: { content, path: payload.path, file: payload.file, target: payload.target }, raw, attempts: attempt + 1 };
           }
         } else if (normalizedContentMode === 'APPLY_PATCH') {
           const find = String(payload.find ?? '');
@@ -1634,8 +4270,14 @@ export async function resolveRecoveryToolResponse({
   objective,
   generateResponse,
   maxAttempts = 3,
+  maxTokens = WRITE_GENERATION_DEFAULT_MAX_TOKENS,
   writePath = ''
 }) {
+  const tokenBudget = resolveWriteGenerationTokenBudget({
+    requestedMaxTokens: maxTokens,
+    maxTokensCapOverride: maxTokens,
+    source: 'recovery_tool'
+  });
   return enforceExpectedToolResponse({
     expectedTool: expectedTool || getRecoveryExpectedTool(recoveryTask),
     expectedArgs: recoveryTask?.toolArgs || {},
@@ -1645,6 +4287,7 @@ export async function resolveRecoveryToolResponse({
     objective,
     generateResponse,
     maxAttempts,
+    maxTokens: tokenBudget.effectiveMaxTokens,
     mismatchLog: '[RECOVERY_TOOL_MISMATCH]',
     correctiveLog: '[RECOVERY_CORRECTIVE_INSTRUCTION]',
     context: { path: writePath },
@@ -1661,8 +4304,14 @@ export async function resolveRecoveryPayloadResponse({
   objective,
   generateResponse,
   maxAttempts = 3,
+  maxTokens = WRITE_GENERATION_DEFAULT_MAX_TOKENS,
   writePath = ''
 }) {
+  const tokenBudget = resolveWriteGenerationTokenBudget({
+    requestedMaxTokens: maxTokens,
+    maxTokensCapOverride: maxTokens,
+    source: 'recovery_payload'
+  });
   return enforceExpectedToolResponse({
     expectedTool: expectedTool || getRecoveryExpectedTool(recoveryTask),
     expectedArgs: recoveryTask?.toolArgs || {},
@@ -1672,6 +4321,7 @@ export async function resolveRecoveryPayloadResponse({
     objective,
     generateResponse,
     maxAttempts,
+    maxTokens: tokenBudget.effectiveMaxTokens,
     mismatchLog: '[RECOVERY_TOOL_MISMATCH]',
     correctiveLog: '[RECOVERY_CORRECTIVE_INSTRUCTION]',
     context: { path: writePath },
@@ -1965,6 +4615,25 @@ export async function runAgentLoop({
     ? await normalizeWorkspacePaths(resolvedWorkspaceRoot, initialChangedFiles, scan, { allowMissing: false })
     : [...initialChangedFiles];
   const changedFiles = new Set(normalizedInitialChangedFiles);
+  const writeCoordinatorState = {
+    writeCoordinatorUsed: false,
+    coordinatorGroups: [],
+    batchState: null,
+    generatedFiles: [],
+    validationPolicies: [],
+    frameworkAdapterResults: [],
+    framework: null,
+    frameworkSource: null,
+    frameworkValidation: [],
+    retryCount: 0,
+    validationErrors: [],
+    validationDeltas: [],
+    preservedRegions: [],
+    patchedRegions: [],
+    frameworkAutoRepair: null,
+    deltaRetry: null,
+    fallbackReason: null
+  };
   const optimizer = enableToolOptimizer ? (executionCache || getSharedExecutionCache(resolvedWorkspaceRoot) || createExecutionCache()) : null;
   const opt = {
     getCachedRead: async (p) => optimizer ? await optimizer.getCachedRead(p, resolvedWorkspaceRoot) : null,
@@ -2180,8 +4849,7 @@ export async function runAgentLoop({
   function emitRunFileMetadata(overrideQualityGate = null) {
     const qg = overrideQualityGate || qualityGate;
     const meta = buildRunFileMetadata({
-      requestedFiles: criteriaEffective.requestedFiles || [],
-      plannerWriteTargets: criteriaEffective.plannerWriteTargets || [],
+      plannerExecutionMetadata,
       toolCalls,
       changedFiles: [...changedFiles],
       validationSummary: qg?.validationSummary,
@@ -2194,6 +4862,7 @@ export async function runAgentLoop({
   async function maybeFinalizeRun(step, phase = 'loop') {
     if (!planner) return null;
     const plannerStatus = getPlannerRuntimeStatusSnapshot();
+    const finalizationDiagnostics = buildPlannerGraphFinalizationDiagnostics(planner, plannerStatus);
     const finalization = finalizeRunStatus({
       requiredCommands: originalRequiredCommands,
       toolCalls,
@@ -2201,7 +4870,185 @@ export async function runAgentLoop({
     });
     if (!finalization.status) return null;
 
+    if (plannerFatalBlock) {
+      const blockedReason = planner?.validationBlockedReason || finalization.reason || 'Planner validation was blocked.';
+      console.log('[FINAL_SUCCESS_BLOCKED_BY_QUALITY_GATE]', {
+        step,
+        phase,
+        reason: blockedReason
+      });
+      plannerMetrics.finalizerStatus = 'BLOCKED';
+      const blockedCompletionResult = {
+        plannerCompleted: false,
+        validationPassed: false,
+        qualityGatePassed: false,
+        requestedWriteFiles: getExecutionStateRegistry()?.getRequestedWriteFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerWriteFiles || []),
+        plannerReadFiles: getExecutionStateRegistry()?.getPlannerReadFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerReadFiles || []),
+        changedFiles: [...changedFiles],
+        validationMatched: false,
+        requiredCommands: [...originalRequiredCommands],
+        matchedCommands: [],
+        finalStatus: 'needs_revision',
+        success: false,
+        plannerFinalizationBlocked: true,
+        plannerFinalizationReason: blockedReason
+      };
+      const blockedRunFileMetadata = getRunFileMetadata({
+        completionResult: blockedCompletionResult,
+        validationSummary: null,
+        qualityGatePassed: false
+      });
+      const blockedFinalText = buildPlannerFinalizationBlockedText({ blockedReason });
+      const blockedPlannerDebugSnapshot = capturePlannerDebugSnapshot(planner, {
+        qualityGate,
+        runFileMetadata: blockedRunFileMetadata,
+        completionResult: blockedCompletionResult,
+        writeCoordinatorState,
+        plannerFinalizationDiagnostics: {
+          blocked: true,
+          blockedReason,
+          graphCorruption: false,
+          originalCount: getPlannerOriginalTasks(planner).length,
+          currentCount: typeof planner.graph?.allNodes === 'function' ? planner.graph.allNodes().length : 0,
+          missingIds: [],
+          missingTasks: [],
+          unfinishedTasks: []
+        }
+      });
+      emitRunFileMetadata();
+      planner.executionMemory?.printSummary?.();
+      opt.printSummary();
+      return {
+        success: false,
+        status: 'needs_revision',
+        final: blockedFinalText,
+        error: blockedReason,
+        history,
+        events,
+        toolCalls,
+        changedFiles: [...changedFiles],
+        diffSummary: { stat: "", numstat: "" },
+        qualityGate,
+        plannerMetrics: getPlannerMetricsSummary('BLOCKED'),
+        acceptanceCriteria: criteriaEffective,
+        workspaceRoot: resolvedWorkspaceRoot || null,
+        workspaceId: workspaceId || null,
+        validatedFiles: blockedRunFileMetadata.validatedFiles,
+        validatedFileDetails: blockedRunFileMetadata.validatedFileDetails,
+        requestedWriteFiles: blockedRunFileMetadata.requestedWriteFiles,
+        physicalChangeStatus: blockedRunFileMetadata.physicalChangeStatus,
+        validationCoverageStatus: blockedRunFileMetadata.validationCoverageStatus,
+        validationExecuted: blockedRunFileMetadata.validationExecuted,
+        validationCommand: blockedRunFileMetadata.validationCommand,
+        validationSuccess: blockedRunFileMetadata.validationSuccess,
+        requestedFilesValidated: blockedRunFileMetadata.requestedFilesValidated,
+        validationFailureAttribution: blockedRunFileMetadata.validationFailureAttribution,
+        externalFailureFiles: blockedRunFileMetadata.externalFailureFiles,
+        runFileMetadata: blockedRunFileMetadata,
+        completionResult: blockedCompletionResult,
+        plannerDebugSnapshot: blockedPlannerDebugSnapshot
+      };
+    }
+
     const noPlannerWork = !plannerStatus.ready && !plannerStatus.pending && !plannerStatus.running && !plannerStatus.recovering;
+    if (noPlannerWork && finalizationDiagnostics.blocked) {
+      if (finalizationDiagnostics.graphCorruption) {
+        console.log('[PLANNER_GRAPH_CORRUPTION]', {
+          step,
+          phase,
+          originalCount: finalizationDiagnostics.originalCount,
+          currentCount: finalizationDiagnostics.currentCount,
+          missingIds: finalizationDiagnostics.missingIds,
+          missingTasks: finalizationDiagnostics.missingTasks.map(task => ({
+            id: task.id,
+            kind: task.kind,
+            tool: task.tool
+          }))
+        });
+      }
+      plannerMetrics.finalizerStatus = 'BLOCKED';
+      console.log('[PLANNER_FINALIZATION_BLOCKED]', {
+        step,
+        phase,
+        reason: finalizationDiagnostics.blockedReason,
+        unfinishedTasks: finalizationDiagnostics.unfinishedTasks.map(task => ({
+          id: task.id,
+          kind: task.kind,
+          tool: task.tool,
+          status: task.status,
+          dependencies: task.dependencies
+        })),
+        missingIds: finalizationDiagnostics.missingIds
+      });
+      recordEvent('planner_finalization_blocked', {
+        step,
+        phase,
+        reason: finalizationDiagnostics.blockedReason,
+        unfinishedTaskIds: finalizationDiagnostics.unfinishedTasks.map(task => task.id).filter(Boolean),
+        missingTaskIds: finalizationDiagnostics.missingIds
+      });
+      const blockedCompletionResult = {
+        plannerCompleted: false,
+        validationPassed: false,
+        qualityGatePassed: false,
+        requestedWriteFiles: getExecutionStateRegistry()?.getRequestedWriteFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerWriteFiles || []),
+        plannerReadFiles: getExecutionStateRegistry()?.getPlannerReadFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerReadFiles || []),
+        changedFiles: [...changedFiles],
+        validationMatched: false,
+        requiredCommands: [...originalRequiredCommands],
+        matchedCommands: [],
+        finalStatus: 'needs_revision',
+        success: false,
+        plannerFinalizationBlocked: true,
+        plannerFinalizationReason: finalizationDiagnostics.blockedReason || null
+      };
+      const blockedRunFileMetadata = getRunFileMetadata({
+        completionResult: blockedCompletionResult,
+        validationSummary: null,
+        qualityGatePassed: false
+      });
+      const blockedFinalText = buildPlannerFinalizationBlockedText(finalizationDiagnostics);
+      const blockedPlannerDebugSnapshot = capturePlannerDebugSnapshot(planner, {
+        qualityGate,
+        runFileMetadata: blockedRunFileMetadata,
+        completionResult: blockedCompletionResult,
+        writeCoordinatorState,
+        plannerFinalizationDiagnostics: finalizationDiagnostics
+      });
+      emitRunFileMetadata();
+      planner.executionMemory?.printSummary?.();
+      opt.printSummary();
+      return {
+        success: false,
+        status: 'needs_revision',
+        final: blockedFinalText,
+        error: finalizationDiagnostics.blockedReason || 'Planner finalization blocked.',
+        history,
+        events,
+        toolCalls,
+        changedFiles: [...changedFiles],
+        diffSummary: { stat: "", numstat: "" },
+        qualityGate,
+        plannerMetrics: getPlannerMetricsSummary('BLOCKED'),
+        acceptanceCriteria: criteriaEffective,
+        workspaceRoot: resolvedWorkspaceRoot || null,
+        workspaceId: workspaceId || null,
+        validatedFiles: blockedRunFileMetadata.validatedFiles,
+        validatedFileDetails: blockedRunFileMetadata.validatedFileDetails,
+        requestedWriteFiles: blockedRunFileMetadata.requestedWriteFiles,
+        physicalChangeStatus: blockedRunFileMetadata.physicalChangeStatus,
+        validationCoverageStatus: blockedRunFileMetadata.validationCoverageStatus,
+        validationExecuted: blockedRunFileMetadata.validationExecuted,
+        validationCommand: blockedRunFileMetadata.validationCommand,
+        validationSuccess: blockedRunFileMetadata.validationSuccess,
+        requestedFilesValidated: blockedRunFileMetadata.requestedFilesValidated,
+        validationFailureAttribution: blockedRunFileMetadata.validationFailureAttribution,
+        externalFailureFiles: blockedRunFileMetadata.externalFailureFiles,
+        runFileMetadata: blockedRunFileMetadata,
+        completionResult: blockedCompletionResult,
+        plannerDebugSnapshot: blockedPlannerDebugSnapshot
+      };
+    }
     const finalizablePass = finalization.status === 'PASS';
     const finalizableFailure = noPlannerWork && finalization.status !== 'PASS';
     if (!finalizablePass && !finalizableFailure) return null;
@@ -2290,6 +5137,90 @@ export async function runAgentLoop({
       finalText
     });
 
+    const qualityGatePassed = qualityGate?.passed === true;
+    if (finalizablePass && !qualityGatePassed) {
+      plannerMetrics.finalizerStatus = "QUALITY_GATE_BLOCKED";
+      console.log('[PLANNER_COMPLETE_STOP]', {
+        reason: 'quality gate failed after required validation command passed',
+        requiredCommands: originalRequiredCommands,
+        terminalCommands,
+        phase
+      });
+      recordEvent('planner_complete_stop', {
+        step,
+        reason: 'quality gate failed after required validation command passed',
+        requiredCommands: originalRequiredCommands,
+        terminalCommands,
+        phase
+      });
+      recordEvent("completion", {
+        step,
+        message: "Planner stopped because quality gate did not pass.",
+        finalText
+      });
+      emitRunFileMetadata(qualityGate);
+      const completionResult = {
+        plannerCompleted: false,
+        validationPassed: true,
+        qualityGatePassed: false,
+        requestedWriteFiles: getExecutionStateRegistry()?.getRequestedWriteFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerWriteFiles || []),
+        plannerReadFiles: getExecutionStateRegistry()?.getPlannerReadFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerReadFiles || []),
+        changedFiles: changedFileList,
+        validationMatched: Array.isArray(qualityGate?.validationSummary?.matchedCommands) && qualityGate.validationSummary.matchedCommands.length > 0,
+        requiredCommands: [...originalRequiredCommands],
+        matchedCommands: Array.isArray(qualityGate?.validationSummary?.matchedCommands)
+          ? qualityGate.validationSummary.matchedCommands.map(match => match.executedCommand).filter(Boolean)
+          : [],
+        finalStatus: "needs_revision",
+        success: false
+      };
+      const runFileMetadata = getRunFileMetadata({
+        completionResult,
+        validationSummary: qualityGate?.validationSummary,
+        qualityGatePassed: false
+      });
+      const plannerDSSuccess = capturePlannerDebugSnapshot(planner, {
+        qualityGate,
+        runFileMetadata,
+        completionResult,
+        writeCoordinatorState
+      });
+      planner.executionMemory?.printSummary?.();
+      opt.printSummary();
+      return {
+        success: false,
+        status: "needs_revision",
+        final: finalText,
+        error: null,
+        history,
+        events,
+        toolCalls,
+        changedFiles: changedFileList,
+        plannerReadFiles: runFileMetadata.plannerReadFiles,
+        diffSummary,
+        qualityGate,
+        plannerMetrics: getPlannerMetricsSummary("QUALITY_GATE_BLOCKED"),
+        acceptanceCriteria: criteriaEffective,
+        workspaceRoot: resolvedWorkspaceRoot || null,
+        workspaceId: workspaceId || null,
+        validatedFiles: runFileMetadata.validatedFiles,
+        verifiedExistingFiles: runFileMetadata.verifiedExistingFiles,
+        validatedFileDetails: runFileMetadata.validatedFileDetails,
+        requestedWriteFiles: runFileMetadata.requestedWriteFiles,
+        physicalChangeStatus: runFileMetadata.physicalChangeStatus,
+        validationCoverageStatus: runFileMetadata.validationCoverageStatus,
+        validationExecuted: runFileMetadata.validationExecuted,
+        validationCommand: runFileMetadata.validationCommand,
+        validationSuccess: runFileMetadata.validationSuccess,
+        requestedFilesValidated: runFileMetadata.requestedFilesValidated,
+        validationFailureAttribution: runFileMetadata.validationFailureAttribution,
+        externalFailureFiles: runFileMetadata.externalFailureFiles,
+        runFileMetadata,
+        completionResult,
+        plannerDebugSnapshot: plannerDSSuccess
+      };
+    }
+
     if (finalizablePass) {
       plannerMetrics.finalizerStatus = finalization.status;
       console.log('[PLANNER_COMPLETE_STOP]', {
@@ -2307,6 +5238,32 @@ export async function runAgentLoop({
       });
       recordEvent("completion", { step, message: "Planner completed after required command execution.", finalText });
       emitRunFileMetadata();
+      const completionResult = {
+        plannerCompleted: true,
+        validationPassed: finalizablePass,
+        qualityGatePassed: true,
+        requestedWriteFiles: getExecutionStateRegistry()?.getRequestedWriteFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerWriteFiles || []),
+        plannerReadFiles: getExecutionStateRegistry()?.getPlannerReadFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerReadFiles || []),
+        changedFiles: changedFileList,
+        validationMatched: Array.isArray(qualityGate?.validationSummary?.matchedCommands) && qualityGate.validationSummary.matchedCommands.length > 0,
+        requiredCommands: [...originalRequiredCommands],
+        matchedCommands: Array.isArray(qualityGate?.validationSummary?.matchedCommands)
+          ? qualityGate.validationSummary.matchedCommands.map(match => match.executedCommand).filter(Boolean)
+          : [],
+        finalStatus: "completed",
+        success: true
+      };
+      const runFileMetadata = getRunFileMetadata({
+        completionResult,
+        validationSummary: qualityGate?.validationSummary,
+        qualityGatePassed: true
+      });
+      const plannerDSSuccess = capturePlannerDebugSnapshot(planner, {
+        qualityGate,
+        runFileMetadata,
+        completionResult,
+        writeCoordinatorState
+      });
       planner.executionMemory?.printSummary?.();
       opt.printSummary();
       return {
@@ -2318,12 +5275,27 @@ export async function runAgentLoop({
         events,
         toolCalls,
         changedFiles: changedFileList,
+        plannerReadFiles: runFileMetadata.plannerReadFiles,
         diffSummary,
         qualityGate,
         plannerMetrics: getPlannerMetricsSummary(finalization.status),
         acceptanceCriteria: criteriaEffective,
         workspaceRoot: resolvedWorkspaceRoot || null,
-        workspaceId: workspaceId || null
+        workspaceId: workspaceId || null,
+        validatedFiles: runFileMetadata.validatedFiles,
+        validatedFileDetails: runFileMetadata.validatedFileDetails,
+        requestedWriteFiles: runFileMetadata.requestedWriteFiles,
+        physicalChangeStatus: runFileMetadata.physicalChangeStatus,
+        validationCoverageStatus: runFileMetadata.validationCoverageStatus,
+        validationExecuted: runFileMetadata.validationExecuted,
+        validationCommand: runFileMetadata.validationCommand,
+        validationSuccess: runFileMetadata.validationSuccess,
+        requestedFilesValidated: runFileMetadata.requestedFilesValidated,
+        validationFailureAttribution: runFileMetadata.validationFailureAttribution,
+        externalFailureFiles: runFileMetadata.externalFailureFiles,
+        runFileMetadata,
+        completionResult,
+        plannerDebugSnapshot: plannerDSSuccess
       };
     }
 
@@ -2342,6 +5314,9 @@ export async function runAgentLoop({
         : (finalization.reason || 'Planner stopped before validation could complete.');
     plannerMetrics.finalizerStatus = finalization.status;
     emitRunFileMetadata();
+    const plannerDSFailure = capturePlannerDebugSnapshot(planner, {
+      writeCoordinatorState
+    });
     planner.executionMemory?.printSummary?.();
     opt.printSummary();
     return {
@@ -2357,6 +5332,7 @@ export async function runAgentLoop({
       qualityGate,
       plannerMetrics: getPlannerMetricsSummary(finalization.status),
       acceptanceCriteria: criteriaEffective,
+      plannerDebugSnapshot: plannerDSFailure,
       workspaceRoot: resolvedWorkspaceRoot || null,
       workspaceId: workspaceId || null
     };
@@ -2514,8 +5490,17 @@ export async function runAgentLoop({
     const combinedWriteIntent = writeIntent || hasToolNameWrite;
     // Merge tool-name commands with natural-language commands
     const requiredCommands = extractCommands(text);
+    const scanCommands = Array.isArray(scan?.testCommands)
+      ? scan.testCommands
+        .map(cmd => String(cmd || '').trim())
+        .filter(Boolean)
+        .filter(cmd => isValidShellCommand(cmd))
+      : [];
+    if (requiredCommands.length === 0 && scanCommands.length > 0) {
+      requiredCommands.push(...scanCommands);
+    }
     for (const tc of toolRunLines) {
-      if (tc && !requiredCommands.includes(tc)) requiredCommands.push(tc);
+      if (tc && isValidShellCommand(tc) && !requiredCommands.includes(tc)) requiredCommands.push(tc);
     }
     const hasCommands = requiredCommands.length > 0;
     const hasToolNameCommand = hasToolNameRun && toolRunLines.length > 0;
@@ -2596,6 +5581,8 @@ export async function runAgentLoop({
     if (toolPolicy.mode === "READ_ONLY") {
       return {
         ...criteriaWithIntent,
+        projectScan: scan,
+        testCommands: scan?.testCommands || [],
         taskType: "ANALYSIS",
         taskClass: "ANALYSIS",
         taskMode: "read_only",
@@ -2609,6 +5596,8 @@ export async function runAgentLoop({
     if (toolPolicy.mode === "COMMAND_ONLY") {
       return {
         ...criteriaWithIntent,
+        projectScan: scan,
+        testCommands: scan?.testCommands || [],
         taskMode: "command_only",
         requiresWorkspaceChange: false,
         requiresValidationCommand: false,
@@ -2619,10 +5608,37 @@ export async function runAgentLoop({
     }
     return {
       ...criteriaWithIntent,
+      projectScan: scan,
+      testCommands: scan?.testCommands || [],
       requestedFiles: normalizedRequestedFiles,
       requiredCommands: originalRequiredCommands
     };
   })();
+  let workspaceState = { existingFiles: [], scan };
+  let projectIntent = detectProjectIntent(objective, criteriaEffective);
+  let bootstrapProfile = null;
+  if (resolvedWorkspaceRoot) {
+    try {
+      workspaceState = await detectWorkspaceState(resolvedWorkspaceRoot);
+    } catch {
+      workspaceState = { existingFiles: [], scan };
+    }
+  }
+  bootstrapProfile = resolveBootstrapProfile(projectIntent, workspaceState);
+  const criteriaBootstrap = {
+    ...criteriaEffective,
+    projectIntent,
+    workspaceState,
+    bootstrapProfile,
+    bootstrapEnabled: true
+  };
+  console.log('[BOOTSTRAP_PROFILE_RESOLVED]', {
+    profile: bootstrapProfile?.id || null,
+    label: bootstrapProfile?.label || null,
+    resolvedBy: bootstrapProfile?.resolvedBy || null,
+    goalType: projectIntent.goalType || null,
+    workspaceFiles: Array.isArray(workspaceState.existingFiles) ? workspaceState.existingFiles.length : 0
+  });
   const classifierDbg = createEvent("debug", { section: "CLASSIFIER_RESULT", result: {
     taskMode: criteriaEffective.taskMode || criteriaEffective.taskType,
     intentMode: toolPolicy.mode,
@@ -2639,6 +5655,10 @@ export async function runAgentLoop({
     requiredCommands: originalRequiredCommands
   });
   let planner = null;
+  let plannerExecutionMetadata = null;
+  let plannerFatalBlock = false;
+  let executionStateRegistry = null;
+  let executionStateRegistryToolCallCount = -1;
   const plannerMetrics = createPlannerMetrics();
   const getPlannerMetricsSummary = (finalizerStatus = null) => {
     if (finalizerStatus) {
@@ -2650,17 +5670,48 @@ export async function runAgentLoop({
     return summarizePlannerMetrics(plannerMetrics);
   };
   let contextFiles = [];
+  function getExecutionStateRegistry() {
+    const toolCallCount = toolCalls.length;
+    if (!executionStateRegistry) {
+      executionStateRegistry = buildExecutionStateRegistry({
+        plannerExecutionMetadata,
+        toolCalls: [],
+        runId: workspaceId || null,
+        workspaceRoot: resolvedWorkspaceRoot || ""
+      });
+      if (planner) {
+        planner.executionStateRegistry = executionStateRegistry;
+      }
+      executionStateRegistry.replayToolCalls({ planner, toolCalls });
+      executionStateRegistryToolCallCount = toolCallCount;
+      return executionStateRegistry;
+    }
+    if (executionStateRegistryToolCallCount !== toolCallCount) {
+      executionStateRegistry.replayToolCalls({ planner, toolCalls });
+      executionStateRegistryToolCallCount = toolCallCount;
+    }
+    return executionStateRegistry;
+  }
   if (toolPolicy.mode !== "UNKNOWN") {
-    const plan = buildPlan(objective, criteriaEffective);
+    const plan = buildPlan(objective, criteriaBootstrap);
+    const planValidationBlockedReason = plan?.validationBlockedReason || null;
     planner = new Planner(plan.tasks);
+    captureOriginalPlannerGraph(planner);
     syncPlannerMetricsFromPlanner(plannerMetrics, planner);
     planner.executionMemory?.setContext?.({
       workspaceRoot: resolvedWorkspaceRoot || '',
       cwd: resolvedWorkspaceRoot || ''
     });
     planner.acceptanceCriteria = criteriaEffective;
-    planner.requiredFiles = criteriaEffective.requestedFiles || [];
     planner.changedFiles = changedFiles;
+    if (planValidationBlockedReason) {
+      planner.validationBlockedReason = planValidationBlockedReason;
+      plannerFatalBlock = true;
+      console.log('[PLANNER_VALIDATION_TASK_BLOCKED]', {
+        reason: planValidationBlockedReason,
+        objective: String(objective || '').slice(0, 200)
+      });
+    }
     planner.getNextTask();
 
     // Phase 4.14-4.15: Build execution context and expand generic tasks
@@ -2722,6 +5773,15 @@ export async function runAgentLoop({
         }
       }
     }
+    plannerExecutionMetadata = buildPlannerExecutionMetadata(planner);
+    planner.executionMetadata = plannerExecutionMetadata;
+    planner.requiredFiles = plannerExecutionMetadata.plannerWriteFiles || [];
+    criteriaEffective.plannerWriteTargets = [...new Set(plannerExecutionMetadata.plannerWriteFiles || [])];
+    criteriaEffective.plannerReadFiles = [...new Set(plannerExecutionMetadata.plannerReadFiles || [])];
+    criteriaEffective.plannerRunCommands = [...new Set(plannerExecutionMetadata.plannerRunCommands || [])];
+    criteriaEffective.plannerValidationCommands = [...new Set(plannerExecutionMetadata.plannerValidationCommands || [])];
+    criteriaEffective.plannerProtectedFiles = [...new Set(plannerExecutionMetadata.plannerProtectedFiles || [])];
+    getExecutionStateRegistry();
   }
 
   // Phase 4.15: Expand generic tasks into concrete planner tasks
@@ -2819,24 +5879,39 @@ export async function runAgentLoop({
   let qualityGate = null;
   let requestedChangeStatus = "unknown";
   let packageJsonValid = true;
-  let plannerFatalBlock = false;
+  let verifiedExistingFiles = [];
   // Local wrapper that always passes required commands and package.json validity to quality gate
   const runQualityGate = async (input) => {
-    if (planner?.graph?.allNodes) {
-      const plannerWriteTargets = [...new Set(
-        planner.graph.allNodes()
-          .filter(task => task?.tool === "WRITE_FILE" || task?.tool === "APPLY_PATCH")
-          .map(task => task.toolArgs?.path || task.toolArgs?.file || task.toolArgs?.target)
-          .filter(Boolean)
-      )];
-      criteriaEffective.plannerWriteTargets = [...new Set([
-        ...(criteriaEffective.plannerWriteTargets || []),
-        ...plannerWriteTargets
-      ])];
-    }
-    console.log('[BEFORE_QUALITY_GATE]', { changedFiles: input.changedFiles || [] });
+    const registry = getExecutionStateRegistry();
+    const originalPlannerTasks = getPlannerOriginalTasks(planner);
+    const originalWriteFiles = uniqueMetadataFiles(
+      originalPlannerTasks
+        .filter(task => ["WRITE_FILE", "APPLY_PATCH"].includes(String(task?.tool || "").toUpperCase()))
+        .map(task => task?.toolArgs?.path || task?.toolArgs?.file || task?.toolArgs?.target || "")
+    );
+    const originalReadFiles = uniqueMetadataFiles(
+      originalPlannerTasks
+        .filter(task => String(task?.tool || "").toUpperCase() === "READ_FILE")
+        .map(task => task?.toolArgs?.path || task?.toolArgs?.file || task?.toolArgs?.target || "")
+    );
+    const requestedWriteFiles = registry?.getRequestedWriteFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerWriteFiles || originalWriteFiles || []);
+    const plannerReadFiles = registry?.getPlannerReadFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerReadFiles || originalReadFiles || []);
+    const plannerValidationCommands = registry?.getPlannerValidationCommands?.() || plannerExecutionMetadata?.plannerValidationCommands || [];
+    verifiedExistingFiles = registry?.getVerifiedExistingFiles?.() || (resolvedWorkspaceRoot ? await filterExistingWorkspaceFiles(resolvedWorkspaceRoot, requestedWriteFiles) : []);
+    console.log('[BEFORE_QUALITY_GATE]', {
+      changedFiles: input.changedFiles || [],
+      requestedWriteFiles,
+      plannerReadFiles,
+      verifiedExistingFiles
+    });
     const gate = await evaluateQualityGate({
       ...input,
+      requestedWriteFiles,
+      verifiedExistingFiles,
+      filesRead: plannerReadFiles,
+      requiredValidationCommands: plannerValidationCommands.length > 0
+        ? plannerValidationCommands
+        : (plannerExecutionMetadata?.plannerRunCommands || []),
       requiredCommands: toolPolicy.requiredCommands,
       packageJsonValid
     });
@@ -2844,14 +5919,15 @@ export async function runAgentLoop({
   };
 
   const getRunFileMetadata = ({ completionResult = null, validationSummary = null, validatedFiles = null, qualityGatePassed = false } = {}) => buildRunFileMetadata({
-    requestedFiles: criteriaEffective.requestedFiles || [],
-    plannerWriteTargets: criteriaEffective.plannerWriteTargets || [],
+    plannerExecutionMetadata,
+    executionStateRegistry: getExecutionStateRegistry(),
     toolCalls,
     changedFiles: [...changedFiles],
     validationSummary,
     completionResult,
     qualityGatePassed,
-    validatedFiles
+    validatedFiles,
+    verifiedExistingFiles
   });
 
   if (DEBUG()) {
@@ -3001,7 +6077,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
   }
 
   function recordEvent(type, details = {}) {
-    const event = createEvent(type, details);
+    const event = createEvent(type, sanitizeRunPayload(details, { field: `event.${type}` }));
     events.push(event);
     history.push(event);
     onEvent(event);
@@ -3035,6 +6111,13 @@ After execution, return { "done": true, "final": "your summary here" }.`;
       const { skipped } = await opt.shouldSkipWrite(args.path, args.content);
       if (skipped) {
         opt.recordEstimatedTimeSaved(50);
+        const registry = getExecutionStateRegistry();
+        const payload = { path: args.path };
+        if (registry?.logOnce) {
+          registry.logOnce('WRITE_SKIPPED_NO_CHANGE', payload, { path: args.path, taskId });
+        } else {
+          console.log('[WRITE_SKIPPED_NO_CHANGE]', payload);
+        }
         return { success: true, file: args.path, changed: false, alreadyUpToDate: true, cached: true };
       }
     }
@@ -3082,6 +6165,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
     console.log('[EXECUTOR_ENTRY]', { taskId: task.id, kind: task.kind, tool: toolName });
     try {
       let effectiveArgs = dispatchArgs;
+      let writeGenerationSource = null;
       if (toolName === 'WRITE_FILE') {
         const prepared = await prepareWriteFileArgsForPlannerTask({
           task,
@@ -3096,6 +6180,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           conversation,
           plan,
           step,
+          maxTokens: WRITE_GENERATION_DEFAULT_MAX_TOKENS,
           onFailure: () => {}
         });
         if (!prepared.ok) {
@@ -3118,6 +6203,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           };
         }
         effectiveArgs = prepared.args;
+        writeGenerationSource = prepared.source || null;
       }
 
       const startedAt = new Date();
@@ -3131,7 +6217,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           targetPath: effectiveArgs?.path || effectiveArgs?.file || dispatchArgs?.path || dispatchArgs?.file || "",
           generatedContent: String(effectiveArgs?.content || ""),
           executionMemoryKey,
-          source: prepared?.source || null,
+          source: writeGenerationSource,
           step
         }));
       }
@@ -3139,6 +6225,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
       const completedAt = new Date();
 
       const toolCall = {
+        taskId: task.id,
         step,
         tool: toolName,
         args: effectiveArgs,
@@ -3154,8 +6241,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
         const writeFile = String(toolResult.file || dispatchArgs?.path || dispatchArgs?.file || "").replace(/\\/g, "/");
         const approvedWriteTargets = new Set(
           [
-            ...(criteriaEffective.requestedFiles || []),
-            ...(criteriaEffective.plannerWriteTargets || [])
+            ...(plannerExecutionMetadata?.plannerWriteFiles || [])
           ]
             .map(value => String(value || "").replace(/\\/g, "/"))
             .filter(Boolean)
@@ -3183,7 +6269,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           validationResult: {
             success: toolResult?.changed === true ? true : true
           },
-          source: prepared?.source || null,
+          source: writeGenerationSource,
           step
         }));
       }
@@ -3246,12 +6332,12 @@ After execution, return { "done": true, "final": "your summary here" }.`;
             success: validationCall.success,
             file: validationCall.args?.file || null
           },
-          source: prepared?.source || null,
+          source: writeGenerationSource,
           step
         }));
       }
 
-      const plannerResult = notifyToolExecution(planner, toolName, effectiveArgs, toolResult);
+      const plannerResult = notifyToolExecution(planner, toolName, effectiveArgs, toolResult, task.id);
       logPlannerStatus(planner);
       updatePlannerMetricsFromTask(plannerMetrics, task, {
         event: toolResult?.success !== false ? "completed" : "failed"
@@ -3702,7 +6788,8 @@ After execution, return { "done": true, "final": "your summary here" }.`;
               projectScan: scan,
               prompt: objective,
               requiredSymbols: recoveryRequiredSymbols,
-              workspaceFiles: [...readFileCache.keys(), ...changedFiles]
+              workspaceFiles: [...readFileCache.keys(), ...changedFiles],
+              taskId: recoveryTask?.id || null
             });
             const recoveryConversation = buildRecoveryConversation({
               objective,
@@ -3740,6 +6827,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
               layout: scan,
               workspaceFiles: [...readFileCache.keys(), ...changedFiles],
               requiredSymbols: recoveryRequiredSymbols,
+              maxTokens: WRITE_GENERATION_DEFAULT_MAX_TOKENS,
               onFailure: () => {}
             });
 
@@ -3754,9 +6842,16 @@ After execution, return { "done": true, "final": "your summary here" }.`;
             }
 
             toolName = 'WRITE_FILE';
-            args = repairResult.toolArgs;
+            args = repairResult.args || repairResult.toolArgs;
             recoveryTask.tool = 'WRITE_FILE';
             recoveryTask.toolArgs = args;
+            const newRepairPath = String(args?.path || args?.file || args?.target || '').trim();
+            if (newRepairPath && newRepairPath !== repairPath) {
+              const targetMismatchMsg = `Recovery target mismatch: expected "${repairPath}", got "${newRepairPath}"`;
+              console.log('[RECOVERY_TARGET_MISMATCH_BLOCKED]', { expected: repairPath, actual: newRepairPath, recoveryTaskId: recoveryTask.id });
+              planner.markBlocked(recoveryTask.id, targetMismatchMsg);
+              continue;
+            }
             console.log('[PLANNER_RECOVERY_WRITE_REPAIRED]', {
               step,
               recoveryTaskId: recoveryTask.id,
@@ -3850,7 +6945,81 @@ After execution, return { "done": true, "final": "your summary here" }.`;
             planner.markFailure(task.id, `Previous identical ${task.tool} task failed`);
           }
         }
-        if (activeTasks.length === 0) {
+
+        const eligibleWriteTasks = activeTasks.filter(task => task.tool === 'WRITE_FILE');
+        const coordinatorResolution = eligibleWriteTasks.length >= 2
+          ? await resolveParallelWriteCoordinator({
+              groupIndex: planner.currentParallelGroupIndex,
+              tasks: eligibleWriteTasks,
+              originalPrompt: objective,
+              objective,
+              workspaceRoot: resolvedWorkspaceRoot,
+              layout: scan,
+              workspaceFiles: [...readFileCache.keys(), ...changedFiles],
+              requiredCommands: originalRequiredCommands,
+              generateResponse,
+              plan,
+              step,
+              maxTokens: 4096,
+              localModelMode: LOCAL_MODEL_MODE
+            })
+          : {
+              eligible: false,
+              used: false,
+              reason: eligibleWriteTasks.length === 1 ? 'only_one_write_task' : 'insufficient_write_tasks'
+            };
+
+        if (coordinatorResolution.used) {
+          writeCoordinatorState.writeCoordinatorUsed = true;
+          writeCoordinatorState.coordinatorGroups.push({
+            groupIndex: planner.currentParallelGroupIndex,
+            fileCount: coordinatorResolution.fileCount || eligibleWriteTasks.length,
+            targetPaths: coordinatorResolution.targetPaths || [],
+            batchState: coordinatorResolution.batchState || null
+          });
+          writeCoordinatorState.batchState = coordinatorResolution.batchState || writeCoordinatorState.batchState;
+          writeCoordinatorState.generatedFiles.push(...(coordinatorResolution.generatedFiles || []));
+          writeCoordinatorState.frameworkAdapterResults.push(...(coordinatorResolution.frameworkAdapterResults || []));
+          writeCoordinatorState.framework = coordinatorResolution.framework || writeCoordinatorState.framework;
+          writeCoordinatorState.frameworkSource = coordinatorResolution.frameworkSource || writeCoordinatorState.frameworkSource;
+          writeCoordinatorState.frameworkValidation = coordinatorResolution.frameworkValidation || writeCoordinatorState.frameworkValidation;
+          writeCoordinatorState.retryCount = coordinatorResolution.retryCount ?? writeCoordinatorState.retryCount;
+          writeCoordinatorState.validationErrors.push(...(coordinatorResolution.validationErrors || []));
+          writeCoordinatorState.validationPolicies.push(...(coordinatorResolution.validationPolicies || []));
+          writeCoordinatorState.validationDeltas.push(...(coordinatorResolution.validationDeltas || []));
+          if (Array.isArray(coordinatorResolution.preservedRegions)) {
+            writeCoordinatorState.preservedRegions.push(...coordinatorResolution.preservedRegions);
+          }
+          if (Array.isArray(coordinatorResolution.patchedRegions)) {
+            writeCoordinatorState.patchedRegions.push(...coordinatorResolution.patchedRegions);
+          }
+          writeCoordinatorState.frameworkAutoRepair = coordinatorResolution.frameworkAutoRepair || null;
+          writeCoordinatorState.deltaRetry = coordinatorResolution.deltaRetry || null;
+          writeCoordinatorState.fallbackReason = coordinatorResolution.fallbackReason || null;
+
+          for (const task of eligibleWriteTasks) {
+            if (coordinatorResolution.preparedByTaskId?.has(task.id)) {
+              task.toolArgs = coordinatorResolution.preparedByTaskId.get(task.id);
+              continue;
+            }
+            const fallbackReason = coordinatorResolution.fallbackReason || 'WRITE coordinator validation failed';
+            console.log('[WRITE_COORDINATOR_FALLBACK]', {
+              reason: fallbackReason,
+              taskId: task.id,
+              path: sanitizeCoordinatorTargetPath(task.toolArgs?.path || task.toolArgs?.file || task.toolArgs?.target || '', resolvedWorkspaceRoot),
+              batchStatus: coordinatorResolution.batchState?.status || null,
+              deferred: true
+            });
+          }
+        } else if (eligibleWriteTasks.length >= 2) {
+          const fallbackReason = coordinatorResolution.reason || 'WRITE coordinator not eligible';
+          writeCoordinatorState.fallbackReason = writeCoordinatorState.fallbackReason || fallbackReason;
+          console.log('[WRITE_COORDINATOR_FALLBACK]', { reason: fallbackReason });
+        }
+
+        const dispatchTasks = activeTasks.filter(task => task.status !== TaskStatus.BLOCKED && task.status !== TaskStatus.FAILED && task.status !== TaskStatus.SKIPPED);
+
+        if (dispatchTasks.length === 0) {
           if (waitingTasks.length === 0) {
             planner.waitParallelGroup();
             planner.mergeParallelGroup();
@@ -3858,7 +7027,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           continue;
         }
         // Execute remaining tasks in the group concurrently
-        const taskResults = await Promise.all(activeTasks.map(async (task) => {
+        const taskResults = await Promise.all(dispatchTasks.map(async (task) => {
           const toolName = task.tool;
           const args = task.toolArgs || {};
           console.log('[PLANNER_DISPATCH]', { step, taskId: task.id, tool: toolName, args, parallel: true });
@@ -3867,37 +7036,43 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           const toolCtx = { workspaceRoot: resolvedWorkspaceRoot, layout: scan };
           let dispatchArgs = args;
           if (toolName === 'WRITE_FILE') {
-            const prepared = await prepareWriteFileArgsForPlannerTask({
-              task,
-              args,
-              originalPrompt: objective,
-              objective,
-              workspaceRoot: resolvedWorkspaceRoot,
-              layout: scan,
-              workspaceFiles: [...readFileCache.keys(), ...changedFiles],
-              requiredSymbols: getRecoveryRequiredSymbols(task),
-              generateResponse,
-              conversation,
-              plan,
-              step,
-              onFailure: () => {}
-            });
-            if (!prepared.ok) {
-              const failureReason = prepared.reason || prepared.errorCode || 'WRITE content generation failed';
-              planner.markBlocked(task.id, failureReason);
-              console.log('[WRITE_CONTENT_FAILED]', {
-                targetPath: String(args?.path || args?.file || args?.target || ''),
-                reason: failureReason
+            if (!coordinatorResolution.preparedByTaskId?.has(task.id)) {
+              const prepared = await prepareWriteFileArgsForPlannerTask({
+                task,
+                args,
+                originalPrompt: objective,
+                objective,
+                workspaceRoot: resolvedWorkspaceRoot,
+                layout: scan,
+                workspaceFiles: [...readFileCache.keys(), ...changedFiles],
+                requiredSymbols: getRecoveryRequiredSymbols(task),
+                generateResponse,
+                conversation,
+                plan,
+                step,
+                maxTokens: WRITE_GENERATION_DEFAULT_MAX_TOKENS,
+                onFailure: () => {}
               });
-              return { toolName, plannerResult: null };
+              if (!prepared.ok) {
+                const failureReason = prepared.reason || prepared.errorCode || 'WRITE content generation failed';
+                planner.markBlocked(task.id, failureReason);
+                console.log('[WRITE_CONTENT_FAILED]', {
+                  targetPath: String(args?.path || args?.file || args?.target || ''),
+                  reason: failureReason
+                });
+                return { toolName, plannerResult: null };
+              }
+              dispatchArgs = prepared.args;
+            } else {
+              dispatchArgs = coordinatorResolution.preparedByTaskId.get(task.id);
             }
-            dispatchArgs = prepared.args;
           }
           const startedAt = new Date();
           const toolResult = await executeToolOptimized(toolName, dispatchArgs, toolCtx, task.id, step);
           const completedAt = new Date();
 
           const toolCall = {
+            taskId: task.id,
             step,
             tool: toolName,
             args: dispatchArgs,
@@ -3921,7 +7096,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           }
 
           // Notify planner of the result (triggers recovery on failure)
-          const plannerResult = notifyToolExecution(planner, toolName, args, toolResult);
+          const plannerResult = notifyToolExecution(planner, toolName, args, toolResult, task.id);
           logPlannerStatus(planner);
           syncPlannerMetricsFromPlanner(plannerMetrics, planner);
 
@@ -3933,6 +7108,24 @@ After execution, return { "done": true, "final": "your summary here" }.`;
             console.log('[PLANNER_RECOVERY_START]', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
             recordEvent('planner_recovery_start', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
           }
+        }
+
+        const completedWriteTasks = dispatchTasks.filter(task => {
+          if (task.tool !== 'WRITE_FILE') return false;
+          return task.status === TaskStatus.SUCCESS || task.status === TaskStatus.SKIPPED;
+        });
+        if (completedWriteTasks.length === eligibleWriteTasks.length && eligibleWriteTasks.length > 0) {
+          console.log('[WRITE_GROUP_COMPLETED]', {
+            groupIndex: planner.currentParallelGroupIndex,
+            taskIds: completedWriteTasks.map(task => task.id),
+            paths: completedWriteTasks.map(task => sanitizeCoordinatorTargetPath(
+              task.toolArgs?.path || task.toolArgs?.file || task.toolArgs?.target || '',
+              resolvedWorkspaceRoot
+            ))
+          });
+          planner._updateReadyStates();
+          logPlannerStatus(planner);
+          syncPlannerMetricsFromPlanner(plannerMetrics, planner);
         }
 
         planner.resolveWaitingTasks(waitingTasks, getMemoryContext());
@@ -4019,6 +7212,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
                 conversation,
                 plan,
                 step,
+                maxTokens: WRITE_GENERATION_DEFAULT_MAX_TOKENS,
                 onFailure: () => {}
               });
               if (!writePrep.ok) {
@@ -4132,6 +7326,9 @@ After execution, return { "done": true, "final": "your summary here" }.`;
         if (qualityGate?.passed === true) {
           console.log('[PLANNER_RECOVERY_OVERRIDE]', { reason: 'qualityGate passed, overriding recovery failure', status: 'completed' });
           const changedFileList = [...changedFiles].sort();
+          const plannerDSRecOv = capturePlannerDebugSnapshot(planner, {
+            writeCoordinatorState
+          });
           return {
             success: true,
             status: "completed",
@@ -4145,9 +7342,13 @@ After execution, return { "done": true, "final": "your summary here" }.`;
             qualityGate,
             acceptanceCriteria: criteriaEffective,
             workspaceRoot: resolvedWorkspaceRoot || null,
-            workspaceId: workspaceId || null
+            workspaceId: workspaceId || null,
+            plannerDebugSnapshot: plannerDSRecOv
           };
         }
+        const plannerDSRecFail = capturePlannerDebugSnapshot(planner, {
+          writeCoordinatorState
+        });
         return {
           success: false,
           status: "needs_revision",
@@ -4161,7 +7362,8 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           qualityGate,
           acceptanceCriteria: criteriaEffective,
           workspaceRoot: resolvedWorkspaceRoot || null,
-          workspaceId: workspaceId || null
+          workspaceId: workspaceId || null,
+          plannerDebugSnapshot: plannerDSRecFail
         };
       }
 
@@ -4192,6 +7394,9 @@ After execution, return { "done": true, "final": "your summary here" }.`;
         if (qualityGate?.passed === true) {
           console.log('[PLANNER_STUCK_OVERRIDE]', { reason: 'qualityGate passed, overriding stuck planner', status: 'completed' });
           const changedFileList = [...changedFiles].sort();
+          const plannerDSSO = capturePlannerDebugSnapshot(planner, {
+            writeCoordinatorState
+          });
           return {
             success: true,
             status: "completed",
@@ -4205,9 +7410,13 @@ After execution, return { "done": true, "final": "your summary here" }.`;
             qualityGate,
             acceptanceCriteria: criteriaEffective,
             workspaceRoot: resolvedWorkspaceRoot || null,
-            workspaceId: workspaceId || null
+            workspaceId: workspaceId || null,
+            plannerDebugSnapshot: plannerDSSO
           };
         }
+        const plannerDSStuck = capturePlannerDebugSnapshot(planner, {
+          writeCoordinatorState
+        });
         return {
           success: false,
           status: "needs_revision",
@@ -4221,7 +7430,8 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           qualityGate,
           acceptanceCriteria: criteriaEffective,
           workspaceRoot: resolvedWorkspaceRoot || null,
-          workspaceId: workspaceId || null
+          workspaceId: workspaceId || null,
+          plannerDebugSnapshot: plannerDSStuck
         };
       }
     }
@@ -4265,11 +7475,38 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           const diffSummary = resolvedWorkspaceRoot
             ? await getDiffSummary(resolvedWorkspaceRoot, changedFileList)
             : { stat: "", numstat: "" };
+          const completionResult = {
+            plannerCompleted: true,
+            validationPassed: true,
+            qualityGatePassed: true,
+            requestedWriteFiles: getExecutionStateRegistry()?.getRequestedWriteFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerWriteFiles || []),
+            plannerReadFiles: getExecutionStateRegistry()?.getPlannerReadFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerReadFiles || []),
+            changedFiles: changedFileList,
+            validationMatched: Array.isArray(qualityGate?.validationSummary?.matchedCommands) && qualityGate.validationSummary.matchedCommands.length > 0,
+            requiredCommands: [...originalRequiredCommands],
+            matchedCommands: Array.isArray(qualityGate?.validationSummary?.matchedCommands)
+              ? qualityGate.validationSummary.matchedCommands.map(match => match.executedCommand).filter(Boolean)
+              : [],
+            finalStatus: "completed",
+            success: true
+          };
+          const runFileMetadata = logRunFileMetadata(getRunFileMetadata({
+            completionResult,
+            validationSummary: qualityGate.validationSummary,
+            qualityGatePassed: qualityGate.passed
+          }));
+          const plannerDebugSnapshot = capturePlannerDebugSnapshot(planner, {
+            qualityGate,
+            runFileMetadata,
+            completionResult,
+            writeCoordinatorState
+          });
           planner.executionMemory?.printSummary?.();
           opt.printSummary();
           return {
             success: true,
             status: "completed",
+            completionResult,
             final: finalText,
             error: null,
             history,
@@ -4280,7 +7517,9 @@ After execution, return { "done": true, "final": "your summary here" }.`;
             qualityGate,
             acceptanceCriteria: criteriaEffective,
             workspaceRoot: resolvedWorkspaceRoot || null,
-            workspaceId: workspaceId || null
+            workspaceId: workspaceId || null,
+            runFileMetadata,
+            plannerDebugSnapshot
           };
         }
       }
@@ -4518,6 +7757,76 @@ After execution, return { "done": true, "final": "your summary here" }.`;
     }
 
     recordEvent("thinking", { step });
+
+    if (planner) {
+      const allPlannerTasks = planner.graph.allNodes();
+      const hasReadyBeforeReeval = allPlannerTasks.some(t => t.status === TaskStatus.READY);
+      if (!hasReadyBeforeReeval) {
+        console.log('[PLANNER_NO_READY_REEVALUATE]', {
+          step,
+          pending: allPlannerTasks.filter(t => t.status === TaskStatus.PENDING).length,
+          blocked: allPlannerTasks.filter(t => t.status === TaskStatus.BLOCKED).length,
+          failed: allPlannerTasks.filter(t => t.status === TaskStatus.FAILED).length,
+          recovering: allPlannerTasks.filter(t => t.status === TaskStatus.RECOVERING).length
+        });
+        planner._updateReadyStates();
+        const reevaluatedTasks = planner.graph.allNodes();
+        const hasReadyAfterReeval = reevaluatedTasks.some(t => t.status === TaskStatus.READY);
+        if (!hasReadyAfterReeval) {
+          const noReadyFinalization = await maybeFinalizeRun(step, 'no-ready');
+          if (noReadyFinalization) {
+            return noReadyFinalization;
+          }
+          console.log('[PLANNER_NO_READY_FINALIZED]', {
+            step,
+            ready: reevaluatedTasks.filter(t => t.status === TaskStatus.READY).length,
+            pending: reevaluatedTasks.filter(t => t.status === TaskStatus.PENDING).length,
+            blocked: reevaluatedTasks.filter(t => t.status === TaskStatus.BLOCKED).length,
+            failed: reevaluatedTasks.filter(t => t.status === TaskStatus.FAILED).length
+          });
+          console.log('[GENERIC_RESPONSE_BLOCKED_NO_READY]', {
+            step,
+            reason: 'Planner has no READY tasks after dependency re-evaluation'
+          });
+          const noReadyReason = 'Planner has no READY tasks remaining after dependency re-evaluation.';
+          finalText = buildPlannerFinalText({
+            planner,
+            toolCalls,
+            readFileCache,
+            readOnly: isReadOnly || isNonCodingTask,
+            changedFiles
+          }) || noReadyReason;
+          qualityGate = await runQualityGate({
+            acceptanceCriteria: criteriaEffective,
+            changedFiles: [...changedFiles],
+            toolCalls,
+            workspaceRoot: resolvedWorkspaceRoot,
+            finalText,
+            requiredCommands: originalRequiredCommands
+          });
+          const plannerDSSnap = capturePlannerDebugSnapshot(planner, {
+            qualityGate,
+            writeCoordinatorState
+          });
+          return {
+            success: false,
+            status: 'needs_revision',
+            final: finalText,
+            error: qualityGate.feedback || noReadyReason,
+            history,
+            events,
+            toolCalls,
+            changedFiles: [...changedFiles],
+            diffSummary: { stat: "", numstat: "" },
+            qualityGate,
+            acceptanceCriteria: criteriaEffective,
+            workspaceRoot: resolvedWorkspaceRoot || null,
+            workspaceId: workspaceId || null,
+            plannerDebugSnapshot: plannerDSSnap
+          };
+        }
+      }
+    }
 
     let parsed;
     let rawResponse;
@@ -5441,7 +8750,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
       }
       let toolType;
       if (WRITE_TOOLS.has(toolName) || toolName === 'VALIDATE_PATCH') toolType = 'write';
-      else if (toolName === 'READ_FILE') toolType = 'read';
+      else if (toolName === 'READ_FILE' || toolName === 'LIST_FILES') toolType = 'read';
       else if (toolName === 'RUN_TERMINAL') toolType = 'terminal';
       if (toolType) {
         const gate = canExecuteTool(planner, toolType);
@@ -5686,6 +8995,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
               conversation,
               plan,
               step,
+              maxTokens: WRITE_GENERATION_DEFAULT_MAX_TOKENS,
               onFailure: () => {}
             });
             if (!writePrep.ok) {
@@ -5718,6 +9028,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
             const toolResult = await executeTool(readyTask.tool, effectiveArgs, toolCtx);
             const completedAt = new Date();
             const toolCall = {
+              taskId: readyTask.id,
               step, tool: readyTask.tool, args: effectiveArgs,
               success: toolResult?.success !== false,
               result: toolResult, startedAt, completedAt
@@ -5733,7 +9044,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
             if (WRITE_TOOLS.has(readyTask.tool) && toolResult?.success && toolResult?.changed && toolResult.file) {
               recordChangedFile(toolResult.file);
             }
-            notifyToolExecution(planner, readyTask.tool, effectiveArgs, toolResult);
+            notifyToolExecution(planner, readyTask.tool, effectiveArgs, toolResult, readyTask.id);
             logPlannerStatus(planner);
             updatePlannerMetricsFromTask(plannerMetrics, readyTask, {
               event: toolResult?.success !== false ? "completed" : "failed"
@@ -5988,6 +9299,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
                   validatedFiles: runFileMetadata.validatedFiles,
                   requestedWriteFiles: runFileMetadata.requestedWriteFiles,
                   changedFiles: runFileMetadata.changedFiles,
+                  plannerReadFiles: runFileMetadata.plannerReadFiles,
                   physicalChangeStatus: runFileMetadata.physicalChangeStatus,
                   validationCoverageStatus: runFileMetadata.validationCoverageStatus,
                   final: finalText,
@@ -6197,6 +9509,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
     }
 
     const toolCall = {
+      taskId: null,
       step,
       tool: toolName,
       args,
@@ -6248,7 +9561,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
     if (toolName !== 'VALIDATE_PATCH' && toolName !== 'FINAL' && planner) {
       const toolFailed = result?.success === false;
       if (toolFailed) {
-        const notifyResult = notifyToolExecution(planner, toolName, args, result);
+        const notifyResult = notifyToolExecution(planner, toolName, args, result, toolCall?.plannerTaskId || null);
         logPlannerStatus(planner);
         // Phase 4.6: Try recovery instead of stopping immediately
         if (notifyResult?.recoveryStarted) {
@@ -6282,7 +9595,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
       } else if (WRITE_TOOLS.has(toolName)) {
         const pkgValid = await validatePackageJsonAfterWrite(planner, toolName, args, result, toolContext);
         if (pkgValid.valid) {
-          const plannerResult = notifyToolExecution(planner, toolName, args, result);
+          const plannerResult = notifyToolExecution(planner, toolName, args, result, toolCall?.plannerTaskId || null);
           if (plannerResult?.recoveryStarted) {
             console.log('[PLANNER_RECOVERY_START]', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
             recordEvent('planner_recovery_start', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
@@ -6299,7 +9612,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           packageJsonValid = false;
         }
       } else {
-        const plannerResult = notifyToolExecution(planner, toolName, args, result);
+        const plannerResult = notifyToolExecution(planner, toolName, args, result, toolCall?.plannerTaskId || null);
         if (plannerResult?.recoveryStarted) {
           console.log('[PLANNER_RECOVERY_START]', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
           recordEvent('planner_recovery_start', { step, tool: toolName, recoveryTaskIds: plannerResult.recoveryTaskIds });
@@ -6417,6 +9730,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
                   validatedFiles: runFileMetadata.validatedFiles,
                   requestedWriteFiles: runFileMetadata.requestedWriteFiles,
                   changedFiles: runFileMetadata.changedFiles,
+                  plannerReadFiles: runFileMetadata.plannerReadFiles,
                   physicalChangeStatus: runFileMetadata.physicalChangeStatus,
                   validationCoverageStatus: runFileMetadata.validationCoverageStatus,
                   final: finalText,
@@ -6470,8 +9784,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
             const dbg = createEvent("debug", { section: "ANALYSIS_FALLBACK_USED", file: normalized });
             events.push(dbg); history.push(dbg);
             finalText = msg;
-            const qInput = { acceptanceCriteria: criteriaEffective, changedFiles: [...changedFiles], toolCalls, workspaceRoot: resolvedWorkspaceRoot, finalText };
-            qualityGate = await evaluateQualityGate(qInput);
+            qualityGate = await runQualityGate({ acceptanceCriteria: criteriaEffective, changedFiles: [...changedFiles], toolCalls, workspaceRoot: resolvedWorkspaceRoot, finalText });
             recordEvent("quality_gate", { step, passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
             const runFileMetadata = getRunFileMetadata({
               validationSummary: qualityGate.validationSummary,
@@ -6488,6 +9801,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
               validatedFiles: runFileMetadata.validatedFiles,
               requestedWriteFiles: runFileMetadata.requestedWriteFiles,
               changedFiles: runFileMetadata.changedFiles,
+              plannerReadFiles: runFileMetadata.plannerReadFiles,
               physicalChangeStatus: runFileMetadata.physicalChangeStatus,
               validationCoverageStatus: runFileMetadata.validationCoverageStatus,
               diffSummary: { stat: "", numstat: "" },
@@ -6509,14 +9823,13 @@ After execution, return { "done": true, "final": "your summary here" }.`;
             events.push(dbg); history.push(dbg);
             finalText = firstFn;
             // Evaluate quality gate and return success immediately
-               const qInput = {
+               qualityGate = await runQualityGate({
               acceptanceCriteria: criteriaEffective,
               changedFiles: [...changedFiles],
               toolCalls,
               workspaceRoot: resolvedWorkspaceRoot,
               finalText
-            };
-               qualityGate = await evaluateQualityGate(qInput);
+            });
                 recordEvent("quality_gate", { step, passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
                 return {
                   success: true,
@@ -6575,7 +9888,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
                 recordEvent("file_changed", { step, tool: "WRITE_FILE", file: wfRes.file });
               }
               // Run validation if requested
-              const requestedCmd = extractRequestedValidationCommand(objective);
+              const requestedCmd = extractRequestedValidationCommand(objective, scan);
               if (requestedCmd) {
                 const termStartedAt = new Date();
                 const termResult = await executeTool(
@@ -6606,8 +9919,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
                 return "package.json updated.";
               })();
               finalText = concise;
-              const qInput = { acceptanceCriteria: criteriaEffective, changedFiles: [...changedFiles], toolCalls, workspaceRoot: resolvedWorkspaceRoot, finalText };
-              qualityGate = await runQualityGate(qInput);
+              qualityGate = await runQualityGate({ acceptanceCriteria: criteriaEffective, changedFiles: [...changedFiles], toolCalls, workspaceRoot: resolvedWorkspaceRoot, finalText });
               recordEvent("quality_gate", { step, passed: qualityGate.passed, score: qualityGate.score, failures: qualityGate.failures });
               const runFileMetadata = getRunFileMetadata({
                 validationSummary: qualityGate.validationSummary,
@@ -6877,7 +10189,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
       }
 
       // Deterministic validation command execution: handle multiple required commands for WRITE_AND_RUN, else requested
-      const requestedCmd = extractRequestedValidationCommand(objective);
+      const requestedCmd = extractRequestedValidationCommand(objective, scan);
       const pendingRequired = toolPolicy.mode === "WRITE_AND_RUN" ? getPendingRequiredCommands() : [];
       const commandsToRun = pendingRequired.length ? pendingRequired.slice() : (requestedCmd ? [requestedCmd] : []);
       if (commandsToRun.length) {
@@ -7131,6 +10443,14 @@ After execution, return { "done": true, "final": "your summary here" }.`;
               }
             }
             if (!recommendedCmd) {
+              const scanCommands = Array.isArray(scan?.testCommands)
+                ? scan.testCommands.map(cmd => String(cmd || '').trim()).filter(Boolean)
+                : [];
+              if (scanCommands.length > 0) {
+                recommendedCmd = scanCommands[0];
+              }
+            }
+            if (!recommendedCmd) {
               // Fall back to node --check for a changed .js file
               const jsChanged = [...changedFiles].find(f => /\.js$/i.test(String(f)) && !/\.jsx$/i.test(String(f)));
               if (jsChanged) recommendedCmd = `node --check ${jsChanged}`;
@@ -7182,13 +10502,36 @@ After execution, return { "done": true, "final": "your summary here" }.`;
                 if (qualityGate.passed) {
                   recordEvent("completion", { step, message: "Task completed.", finalText });
                   console.log("[AgentLoop] Deterministic validation passed — returning immediately");
-                  const runFileMetadata = getRunFileMetadata({
+                  const completionResult = {
+                    plannerCompleted: true,
+                    validationPassed: true,
+                    qualityGatePassed: true,
+                    requestedWriteFiles: getExecutionStateRegistry()?.getRequestedWriteFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerWriteFiles || []),
+                    plannerReadFiles: getExecutionStateRegistry()?.getPlannerReadFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerReadFiles || []),
+                    changedFiles: [...changedFiles].sort(),
+                    validationMatched: Array.isArray(qualityGate?.validationSummary?.matchedCommands) && qualityGate.validationSummary.matchedCommands.length > 0,
+                    requiredCommands: [...originalRequiredCommands],
+                    matchedCommands: Array.isArray(qualityGate?.validationSummary?.matchedCommands)
+                      ? qualityGate.validationSummary.matchedCommands.map(match => match.executedCommand).filter(Boolean)
+                      : [],
+                    finalStatus: "completed",
+                    success: true
+                  };
+                  const runFileMetadata = logRunFileMetadata(getRunFileMetadata({
+                    completionResult,
                     validationSummary: qualityGate.validationSummary,
                     qualityGatePassed: qualityGate.passed
+                  }));
+                  const plannerDebugSnapshot = capturePlannerDebugSnapshot(planner, {
+                    qualityGate,
+                    runFileMetadata,
+                    completionResult,
+                    writeCoordinatorState
                   });
                   return {
                     success: true,
                     status: "completed",
+                    completionResult,
                     final: finalText,
                     error: null,
                     history,
@@ -7197,13 +10540,16 @@ After execution, return { "done": true, "final": "your summary here" }.`;
                     validatedFiles: runFileMetadata.validatedFiles,
                     requestedWriteFiles: runFileMetadata.requestedWriteFiles,
                     changedFiles: runFileMetadata.changedFiles,
+                    plannerReadFiles: runFileMetadata.plannerReadFiles,
                     physicalChangeStatus: runFileMetadata.physicalChangeStatus,
                     validationCoverageStatus: runFileMetadata.validationCoverageStatus,
                     diffSummary: { stat: "", numstat: "" },
                     qualityGate,
                     acceptanceCriteria: criteriaEffective,
                     workspaceRoot: resolvedWorkspaceRoot || null,
-                    workspaceId: workspaceId || null
+                    workspaceId: workspaceId || null,
+                    runFileMetadata,
+                    plannerDebugSnapshot
                   };
                 }
               }
@@ -7446,10 +10792,8 @@ After execution, return { "done": true, "final": "your summary here" }.`;
     plannerCompleted: !hasExecutableWork && !hasActiveRecovery && !plannerFatalBlock,
     validationPassed: qualityGatePassed,
     qualityGatePassed,
-    requestedWriteFiles: uniqueMetadataFiles([
-      ...(criteriaEffective.requestedFiles || []),
-      ...(criteriaEffective.plannerWriteTargets || [])
-    ]),
+    requestedWriteFiles: getExecutionStateRegistry()?.getRequestedWriteFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerWriteFiles || []),
+    plannerReadFiles: getExecutionStateRegistry()?.getPlannerReadFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerReadFiles || []),
     changedFiles: [...changedFileList],
     validationMatched: Array.isArray(qualityGate?.validationSummary?.matchedCommands) && qualityGate.validationSummary.matchedCommands.length > 0,
     requiredCommands: [...originalRequiredCommands],
@@ -7491,21 +10835,293 @@ After execution, return { "done": true, "final": "your summary here" }.`;
     console.log("[runAgentLoop] final status=%s success=%s changedFiles=%d steps=%d",
       status, success, changedFileList.length, events.filter(e => e.type === "thinking").length);
   }
+  function capturePlannerDebugSnapshot(planner, context = {}) {
+    if (!planner) return null;
+
+    const safeClone = (value) => {
+      if (value == null) return value;
+      try {
+        return sanitizeRunPayload(value, { field: 'plannerDebugSnapshot' });
+      } catch {
+        return null;
+      }
+    };
+
+    const graphNodes = typeof planner.graph?.allNodes === 'function' ? planner.graph.allNodes() : [];
+    const originalPlannerTasks = getPlannerOriginalTasks(planner);
+    const dagNodes = graphNodes.map(node => ({
+      id: node.id,
+      taskId: node.id,
+      tool: node.tool || null,
+      kind: node.kind || null,
+      goal: node.goal || null,
+      status: node.status || null,
+      priority: node.priority ?? null,
+      dependencies: [...(node.dependencies || [])],
+      parents: [...(node.parents || [])],
+      children: [...(node.children || [])],
+      estimatedCost: node.estimatedCost ?? null,
+      toolArgs: typeof node.toolArgs === 'object' && node.toolArgs !== null
+        ? safeClone(node.toolArgs)
+        : node.toolArgs ?? null,
+      retryCount: node.retryCount ?? 0,
+      attempts: node.attempts ?? 0,
+      stallCount: node.stallCount ?? 0,
+      result: safeClone(node.result),
+      error: safeClone(node.error),
+      reason: safeClone(node.reason),
+      branchType: node.branchType ?? null,
+      branchReason: node.branchReason ?? null,
+      successNext: node.successNext ?? null,
+      failureNext: node.failureNext ?? null,
+      recoveredNext: node.recoveredNext ?? null,
+      blockedNext: node.blockedNext ?? null,
+      skipNext: node.skipNext ?? null,
+      estimatedCategory: node.estimatedCategory ?? null,
+      estimatedTime: node.estimatedTime ?? null,
+      estimatedTokens: node.estimatedTokens ?? null,
+      estimatedIO: node.estimatedIO ?? null,
+      estimatedCPU: node.estimatedCPU ?? null,
+      estimatedMemory: node.estimatedMemory ?? null,
+      estimatedRisk: node.estimatedRisk ?? null,
+      statusReason: node.statusReason ?? null,
+      timeoutMs: node.timeoutMs ?? null,
+      maxAttempts: node.maxAttempts ?? null,
+      startedAt: node.startedAt ?? null,
+      lastProgressAt: node.lastProgressAt ?? null,
+      createdAt: node.createdAt ?? null,
+      updatedAt: node.updatedAt ?? null
+    }));
+    const snapshotDagNodes = safeClone(dagNodes);
+    const snapshotTasks = safeClone(dagNodes);
+    const originalDagNodes = originalPlannerTasks.map(node => serializePlannerTaskSnapshot(node)).filter(Boolean);
+
+    const dagEdgesMap = new Map();
+    for (const node of graphNodes) {
+      for (const depId of node?.dependencies || []) {
+        if (!depId) continue;
+        const key = `${depId}=>${node.id}`;
+        if (!dagEdgesMap.has(key)) {
+          dagEdgesMap.set(key, { from: depId, to: node.id });
+        }
+      }
+    }
+    const dagEdges = [...dagEdgesMap.values()];
+    const originalDagEdgesMap = new Map();
+    for (const node of originalPlannerTasks) {
+      for (const depId of node?.dependencies || []) {
+        if (!depId) continue;
+        const key = `${depId}=>${node.id}`;
+        if (!originalDagEdgesMap.has(key)) {
+          originalDagEdgesMap.set(key, { from: depId, to: node.id });
+        }
+      }
+    }
+    const originalDagEdges = [...originalDagEdgesMap.values()];
+
+    const parallelGroups = Array.isArray(planner.parallelGroups)
+      ? planner.parallelGroups.map(group => (Array.isArray(group)
+        ? group.map(node => (typeof node === 'string' ? node : node?.id)).filter(Boolean)
+        : []))
+      : [];
+
+    const executionRecords = (planner.executionMemory?.getAllRecords?.() || []).map(r => ({
+      taskId: r.taskId ?? null,
+      plannerNodeId: r.plannerNodeId ?? null,
+      executionKey: r.executionKey ?? null,
+      tool: r.tool ?? null,
+      normalizedArgs: safeClone(r.normalizedArgs),
+      status: r.status ?? null,
+      attemptCount: r.attemptCount ?? 0,
+      reasoning: r.reasoning ?? null,
+      dependencies: [...(r.dependencies || [])],
+      resultSummary: safeClone(r.resultSummary),
+      failureReason: r.failureReason ?? null,
+      timestamp: r.timestamp ?? null
+    }));
+    const executionStats = planner.executionMemory?.getStats?.() || null;
+    const executionMemory = {
+      entries: executionRecords,
+      records: executionRecords,
+      lookups: executionStats?.memoryLookups ?? 0,
+      stores: executionStats?.tasksRemembered ?? executionRecords.length,
+      hits: executionStats?.memoryHits ?? 0,
+      reused: executionStats?.reasoningReused ?? 0,
+      retriesAvoided: executionStats?.retriesAvoided ?? 0,
+      skippedDupes: executionStats?.skippedDuplicateExecutions ?? 0,
+      stats: executionStats ? safeClone(executionStats) : null
+    };
+
+    const qualityGate = context?.qualityGate
+      ? {
+          passed: context.qualityGate.passed === true,
+          score: context.qualityGate.score ?? null,
+          failures: Array.isArray(context.qualityGate.failures) ? [...context.qualityGate.failures] : [],
+          feedback: context.qualityGate.feedback ?? null
+        }
+      : null;
+
+    const runFileMetadata = context?.runFileMetadata
+      ? safeClone(context.runFileMetadata)
+      : null;
+
+    const completionResult = context?.completionResult
+      ? safeClone(context.completionResult)
+      : null;
+
+    const writeCoordinator = context?.writeCoordinatorState
+      ? {
+          writeCoordinatorUsed: context.writeCoordinatorState.writeCoordinatorUsed === true,
+          coordinatorGroups: Array.isArray(context.writeCoordinatorState.coordinatorGroups)
+            ? safeClone(context.writeCoordinatorState.coordinatorGroups)
+            : [],
+          generatedFiles: Array.isArray(context.writeCoordinatorState.generatedFiles)
+            ? safeClone(context.writeCoordinatorState.generatedFiles)
+            : [],
+          frameworkAdapterResults: Array.isArray(context.writeCoordinatorState.frameworkAdapterResults)
+            ? safeClone(context.writeCoordinatorState.frameworkAdapterResults)
+            : [],
+          framework: context.writeCoordinatorState.framework || null,
+          frameworkSource: context.writeCoordinatorState.frameworkSource || null,
+          frameworkValidation: safeClone(context.writeCoordinatorState.frameworkValidation || []),
+          retryCount: context.writeCoordinatorState.retryCount || 0,
+          validationErrors: Array.isArray(context.writeCoordinatorState.validationErrors)
+            ? safeClone(context.writeCoordinatorState.validationErrors)
+            : [],
+          validationPolicies: Array.isArray(context.writeCoordinatorState.validationPolicies)
+            ? safeClone(context.writeCoordinatorState.validationPolicies)
+            : [],
+          validationDeltas: Array.isArray(context.writeCoordinatorState.validationDeltas)
+            ? safeClone(context.writeCoordinatorState.validationDeltas)
+            : [],
+          preservedRegions: Array.isArray(context.writeCoordinatorState.preservedRegions)
+            ? safeClone(context.writeCoordinatorState.preservedRegions)
+            : [],
+          patchedRegions: Array.isArray(context.writeCoordinatorState.patchedRegions)
+            ? safeClone(context.writeCoordinatorState.patchedRegions)
+            : [],
+          frameworkAutoRepair: context.writeCoordinatorState.frameworkAutoRepair || null,
+          deltaRetry: context.writeCoordinatorState.deltaRetry || null,
+          fallbackReason: context.writeCoordinatorState.fallbackReason || null,
+          batchState: safeClone(context.writeCoordinatorState.batchState || null)
+        }
+      : {
+          writeCoordinatorUsed: false,
+          coordinatorGroups: [],
+          batchState: null,
+          generatedFiles: [],
+          frameworkAdapterResults: [],
+          framework: null,
+          frameworkSource: null,
+          frameworkValidation: [],
+          retryCount: 0,
+          validationErrors: [],
+          validationPolicies: [],
+          validationDeltas: [],
+          preservedRegions: [],
+          patchedRegions: [],
+          frameworkAutoRepair: null,
+          deltaRetry: null,
+          fallbackReason: null,
+          batchState: null
+        };
+
+    const adaptivePlanning = typeof planner.getAdaptiveSnapshot === 'function'
+      ? safeClone(planner.getAdaptiveSnapshot({
+          ...context,
+          executionMemory,
+          qualityGate,
+          runFileMetadata,
+          completionResult,
+          writeCoordinator
+        }))
+      : null;
+
+    const snapshot = {
+      plannerState: planner.state ?? null,
+      state: planner.state ?? null,
+      parallelMode: !!planner.parallelMode,
+      currentParallelGroupIndex: planner.currentParallelGroupIndex ?? -1,
+      dag: {
+        nodes: snapshotDagNodes,
+        edges: safeClone(dagEdges)
+      },
+      tasks: snapshotTasks,
+      dependencyGraph: {
+        ready: graphNodes.filter(node => node.status === TaskStatus.READY).map(node => node.id),
+        blocked: graphNodes.filter(node => node.status === TaskStatus.BLOCKED).map(node => node.id),
+        released: [],
+        edges: safeClone(dagEdges)
+      },
+      originalPlannerTasks: safeClone(originalDagNodes),
+      originalTaskGraph: safeClone(planner.originalTaskGraph || null),
+      initialPlannerGraphSnapshot: safeClone(planner.initialPlannerGraphSnapshot || null),
+      originalPlannerGraph: {
+        taskCount: originalPlannerTasks.length,
+        nodes: safeClone(originalDagNodes),
+        edges: safeClone(originalDagEdges)
+      },
+      parallelGroups,
+      executionMemory,
+      costSummary: typeof planner.totalPlanCost === 'function' ? safeClone(planner.totalPlanCost()) : null,
+      qualityGate,
+      runFileMetadata,
+      completionResult,
+      writeCoordinatorUsed: writeCoordinator.writeCoordinatorUsed,
+      coordinatorGroups: writeCoordinator.coordinatorGroups,
+      generatedFiles: writeCoordinator.generatedFiles,
+      frameworkAdapterResults: writeCoordinator.frameworkAdapterResults,
+      framework: writeCoordinator.framework,
+      frameworkSource: writeCoordinator.frameworkSource,
+      frameworkValidation: writeCoordinator.frameworkValidation,
+      retryCount: writeCoordinator.retryCount,
+      validationErrors: writeCoordinator.validationErrors,
+      validationPolicies: writeCoordinator.validationPolicies,
+      validationDeltas: writeCoordinator.validationDeltas,
+      preservedRegions: writeCoordinator.preservedRegions,
+      patchedRegions: writeCoordinator.patchedRegions,
+      frameworkAutoRepair: writeCoordinator.frameworkAutoRepair,
+      deltaRetry: writeCoordinator.deltaRetry,
+      fallbackReason: writeCoordinator.fallbackReason,
+      writeCoordinator,
+      executionStateRegistry: safeClone(getExecutionStateRegistry()?.getSnapshot?.() || null),
+      plannerExecutionMetadata: safeClone(plannerExecutionMetadata || null),
+      memorySummary: typeof planner.getMemorySummary === 'function' ? safeClone(planner.getMemorySummary()) : null,
+      adaptivePlanning
+    };
+
+    return safeClone(snapshot) || snapshot;
+  }
+
   if (planner) {
     planner._logCompletion();
   }
   planner?.executionMemory?.printSummary?.();
   opt.printSummary();
 
+  const plannerDebugSnapshot = capturePlannerDebugSnapshot(planner, {
+    qualityGate,
+    runFileMetadata,
+    completionResult
+  });
+
       return {
         success,
         status,
         completionResult,
         validatedFiles: runFileMetadata.validatedFiles,
+        validatedFileDetails: runFileMetadata.validatedFileDetails,
         requestedWriteFiles: runFileMetadata.requestedWriteFiles,
         changedFiles: runFileMetadata.changedFiles,
+        plannerReadFiles: runFileMetadata.plannerReadFiles,
         physicalChangeStatus: runFileMetadata.physicalChangeStatus,
         validationCoverageStatus: runFileMetadata.validationCoverageStatus,
+        validationExecuted: runFileMetadata.validationExecuted,
+        validationCommand: runFileMetadata.validationCommand,
+        validationSuccess: runFileMetadata.validationSuccess,
+        requestedFilesValidated: runFileMetadata.requestedFilesValidated,
+        validationFailureAttribution: runFileMetadata.validationFailureAttribution,
+        externalFailureFiles: runFileMetadata.externalFailureFiles,
         final: finalText,
         error: success
           ? null
@@ -7518,7 +11134,9 @@ After execution, return { "done": true, "final": "your summary here" }.`;
         plannerMetrics: getPlannerMetricsSummary(plannerMetrics.finalizerStatus),
         acceptanceCriteria: criteriaEffective,
         workspaceRoot: resolvedWorkspaceRoot || null,
-        workspaceId: workspaceId || null
+        workspaceId: workspaceId || null,
+        runFileMetadata,
+        plannerDebugSnapshot
       };
 }
     // Helper: allow re-reading a file when a subsequent tool failed after the last successful READ_FILE

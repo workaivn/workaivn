@@ -3,6 +3,7 @@ import AgentTask from "../../models/AgentTask.js";
 import AiAgent from "../../models/AiAgent.js";
 import AgentRun from "../../models/AgentRun.js";
 import { providerRegistry } from "../../services/adapters/index.js";
+import { createProviderRouter } from "../../agent/providers/index.js";
 import { normalizePrompt } from "../../services/PromptNormalizer.js";
 
 function sortSteps(steps = []) {
@@ -21,6 +22,15 @@ function buildStepPrompt(basePrompt, workflow, previousOutput, step) {
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+function buildProviderRequestFromAgent(agent = {}) {
+  const providerId = agent.providerId?.code || agent.providerId?.id || agent.providerId || agent.providerCode || null;
+  return {
+    providerId: providerId ? String(providerId) : null,
+    model: agent.modelName || agent.model || null,
+    providers: [agent].filter(Boolean)
+  };
 }
 
 export async function getWorkflows(req, res) {
@@ -171,6 +181,10 @@ export async function runWorkflow(req, res) {
     const normalizedSource = sourceTask.normalizedPrompt || normalizePrompt(sourceTask.inputPrompt, sourceTask.taskType);
     let previousOutput = "";
     const stepResults = [];
+    const providerRouter = createProviderRouter({
+      adapterRegistry: providerRegistry,
+      allowFallback: false
+    });
 
     for (const step of sortedSteps) {
       const agent = step.agentId;
@@ -214,37 +228,44 @@ export async function runWorkflow(req, res) {
       run.startedAt = new Date();
       await run.save();
 
-      const result = await adapter.run({
-        modelName: agent.modelName,
+      const result = await providerRouter.generate({
+        ...buildProviderRequestFromAgent(agent),
         messages: [
           { role: "system", content: agent.systemPrompt },
           { role: "user", content: step.inputPrompt }
         ],
         temperature: agent.temperature,
-        maxTokens: agent.maxTokens
+        maxTokens: agent.maxTokens,
+        purpose: "code_generation"
       });
 
       run.status = result.success ? "completed" : "error";
-      run.outputText = result.outputText || "";
+      run.outputText = result.normalizedText || result.text || "";
       run.rawResponse = result.rawResponse || null;
-      run.errorMessage = result.error || null;
+      run.errorMessage = result.success ? null : (result.error?.message || result.error?.type || null);
       run.completedAt = new Date();
       await run.save();
 
       step.status = result.success ? "completed" : "failed";
-      step.outputText = result.outputText || "";
-      step.errorMessage = result.error || null;
+      step.outputText = result.normalizedText || result.text || "";
+      step.errorMessage = result.success ? null : (result.error?.message || result.error?.type || null);
       step.completedAt = new Date();
-      previousOutput = result.outputText || previousOutput;
+      previousOutput = result.normalizedText || result.text || previousOutput;
       stepResults.push({ stepId: step._id, runId: run._id, status: run.status });
 
       if (!result.success) {
         workflow.status = "failed";
-        workflow.errorMessage = result.error || "Workflow step failed";
+        workflow.errorMessage = result.error?.message || result.error?.type || "Workflow step failed";
         workflow.finalOutput = previousOutput;
         await workflow.save();
 
-        return res.status(500).json({ success: false, message: "Workflow step failed", error: result.error || "Unknown error", data: workflow, stepResults });
+        return res.status(500).json({
+          success: false,
+          message: "Workflow step failed",
+          error: result.error?.message || result.error?.type || "Unknown error",
+          data: workflow,
+          stepResults
+        });
       }
     }
 

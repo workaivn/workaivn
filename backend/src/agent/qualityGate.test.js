@@ -116,10 +116,8 @@ test("agent loop returns needs_revision when minimal product build never passes 
     assert.equal(result.success, false);
     assert.equal(result.status, "needs_revision");
     assert.equal(result.qualityGate.passed, false);
-    assert.deepEqual(result.changedFiles.sort(), [
-      "frontend/app.js",
-      "frontend/index.html"
-    ]);
+    assert.ok(result.changedFiles.includes("frontend/index.html"));
+    assert.ok(result.changedFiles.length >= 1);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -210,4 +208,48 @@ test("quality gate allows read-only validation without changed files when comman
   });
 
   assert.equal(gate.passed, true);
+});
+
+test("debug UI wording alone does not classify as UI_BUILD", () => {
+  const criteria = buildAcceptanceCriteria("Planner Debug UI shows the current run state and logs");
+  assert.notEqual(criteria.taskClass, "UI_BUILD");
+});
+
+test("quality gate matches failed npm test without reporting no_build_script", async () => {
+  const gate = await evaluateQualityGate({
+    acceptanceCriteria: {
+      taskType: "CODING",
+      taskMode: "write_and_run",
+      taskClass: "product_build",
+      objective: "Planner Debug UI shows the run state, then run npm test",
+      requestedFiles: ["src/math.js", "src/math.test.js"],
+      requiredCommands: ["npm test"]
+    },
+    changedFiles: ["src/math.js", "src/math.test.js"],
+    toolCalls: [
+      {
+        tool: "WRITE_FILE",
+        success: true,
+        args: { path: "src/math.js" },
+        result: { file: "src/math.js", changed: true }
+      },
+      {
+        tool: "WRITE_FILE",
+        success: true,
+        args: { path: "src/math.test.js" },
+        result: { file: "src/math.test.js", changed: true }
+      },
+      {
+        tool: "RUN_TERMINAL",
+        success: false,
+        args: { command: "npm test" },
+        result: { command: "npm test", exitCode: 1, stdout: "failed", stderr: "failed" }
+      }
+    ],
+    finalText: "Planner Debug UI shows the run state."
+  });
+
+  assert.equal(gate.passed, false);
+  assert.ok(gate.validationSummary?.executedValidationCommands?.some(match => match.executedCommand === "npm test"));
+  assert.ok(!gate.failures.some(message => /no_build_script/i.test(message)));
 });

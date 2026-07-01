@@ -1,5 +1,6 @@
 import { AiProviderAdapter } from "./AiProviderAdapter.js";
 import axios from "axios";
+import { resolveTokenBudget } from "./tokenBudget.js";
 
 const PROVIDER_CONFIGS = {
   koboldcpp: {
@@ -141,16 +142,15 @@ export class OpenAICompatibleProviderAdapter extends AiProviderAdapter {
           if (this.code === "groq") {
             console.log(`[GroqAdapter] trying model=%s (%d/%d)`, model, i + 1, candidates.length);
           }
-          // Build payload; local providers (koboldcpp/llamacpp) often reject unsupported fields like max_tokens
-          const isLocal = (this.code === "koboldcpp" || this.code === "llamacpp");
-          // Clamp max_tokens to 512 for compatibility with local/providers that have this limit
-          const safeMaxTokens = Math.min(Number(maxTokens) || 512, 512);
-          if (safeMaxTokens !== maxTokens) {
-            console.log("[PROVIDER_MAX_TOKENS_CLAMPED]", { provider: this.code, model, requestedMaxTokens: maxTokens, maxTokens: safeMaxTokens });
-          }
-          const payload = isLocal
-            ? { model, messages, temperature }
-            : { model, messages, temperature, max_tokens: safeMaxTokens };
+          const tokenBudget = resolveTokenBudget({
+            provider: this.code,
+            model,
+            requestedMaxTokens: maxTokens,
+            maxTokensCapOverride: params?.maxTokensCapOverride,
+            source: 'requested'
+          });
+          console.log("[PROVIDER_TOKEN_BUDGET_RESOLVED]", tokenBudget);
+          const payload = { model, messages, temperature, max_tokens: tokenBudget.effectiveMaxTokens };
 
           const modelTimeout = Number(params?.modelCallTimeout || process.env.WORKAI_MODEL_CALL_TIMEOUT_MS || 90000);
           const response = await axios.post(`${this.baseUrl}/chat/completions`, payload, {
@@ -170,6 +170,19 @@ export class OpenAICompatibleProviderAdapter extends AiProviderAdapter {
             const msg = choice?.message;
             const contentRaw = msg?.content;
             const content = (typeof contentRaw === "string") ? contentRaw : String(contentRaw ?? "");
+            const finishReason = choice?.finish_reason || choice?.finishReason || data?.finish_reason || null;
+            console.log("[PROVIDER_GENERATION_LIMITS]", {
+              provider: this.code,
+              model,
+              requestedMaxTokens: tokenBudget.requestedMaxTokens,
+              effectiveMaxTokens: tokenBudget.effectiveMaxTokens,
+              nPredict: params?.nPredict ?? null,
+              maxTokens: tokenBudget.effectiveMaxTokens,
+              maxNewTokens: params?.maxNewTokens ?? null,
+              stop: params?.stop ?? null,
+              outputLength: content.length,
+              finishReason
+            });
 
             if (content && content.trim()) {
               // Return exact normalized contract

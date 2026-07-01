@@ -2,6 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import { resolveWorkspacePathSafe } from "./workspace.js";
 import { isSameCommand, matchValidationCommand } from "./validationCommandMatcher.js";
+import { extractExternalFailureFilesFromText } from "./execution/executionStateRegistry.js";
 const DEBUG = () => process.env.DEBUG_AGENT === "true" || process.env.WORKAI_AGENT_DEBUG === "true";
 
 const MEANINGFUL_EXTENSIONS = new Set([
@@ -52,6 +53,11 @@ function isValidationCommand(command) {
   return getValidationMatch(command).matched;
 }
 
+function isSourceFailurePath(file = "") {
+  const normalized = String(file || "").replace(/\\/g, "/").trim();
+  return /^(?:src|backend\/src|frontend\/src|app\/src)\//i.test(normalized);
+}
+
 async function readChangedFileEvidence(workspaceRoot, changedFiles) {
   const evidence = [];
 
@@ -79,10 +85,22 @@ export async function evaluateQualityGate(input = {}) {
     toolCalls = [],
     workspaceRoot = "",
     finalText = "",
+    verifiedExistingFiles = [],
   } = input;
   const packageJsonValid = input.packageJsonValid !== false;
   const criteria = acceptanceCriteria || {};
-  const requiredCommands = input.requiredCommands || criteria.requiredCommands || [];
+  const requestedWriteFiles = Array.isArray(input.requestedWriteFiles)
+    ? unique(input.requestedWriteFiles)
+    : unique([
+        ...(Array.isArray(criteria.requestedFiles) ? criteria.requestedFiles : []),
+        ...(Array.isArray(criteria.plannerWriteTargets) ? criteria.plannerWriteTargets : [])
+      ]);
+  const filesRead = Array.isArray(input.filesRead)
+    ? unique(input.filesRead)
+    : unique(Array.isArray(criteria.plannerReadFiles) ? criteria.plannerReadFiles : []);
+  const requiredCommands = Array.isArray(input.requiredValidationCommands)
+    ? input.requiredValidationCommands
+    : (input.requiredCommands || criteria.requiredCommands || []);
   const taskType = criteria.taskType || "CODING";
   // Intent-aware mode override
   let mode = criteria.taskMode || (taskType === "CHAT" ? "qa" : (taskType === "CODING" ? "coding" : "read_only"));
@@ -90,12 +108,11 @@ export async function evaluateQualityGate(input = {}) {
   if (intentMode === "READ_ONLY") mode = "read_only";
   if ((intentMode === "WRITE" || intentMode === "WRITE_AND_RUN") && !criteria.doNotModify) mode = "coding";
   if (DEBUG()) {
-    const filesRead = toolCalls.filter(call => call.tool === "READ_FILE" && call.success).map(call => call.result?.file || call.args?.path);
     const terminals = toolCalls.filter(call => call.tool === "RUN_TERMINAL");
     console.log("[QUALITY_GATE][INPUT]", {
       mode,
       taskType,
-      requestedFiles: criteria.requestedFiles || [],
+      requestedFiles: requestedWriteFiles,
       filesRead,
       changedFiles,
       terminalCommands: terminals.map(c => ({ cmd: c.args?.command, success: c.success }))
@@ -125,7 +142,7 @@ export async function evaluateQualityGate(input = {}) {
 
   // ── READ_ONLY mode: require requested files were read and final text exists ──
   if (mode === "read_only") {
-    const required = (criteria.requestedFiles || []).map(f => String(f || "").replace(/\\/g, "/").toLowerCase()).filter(Boolean);
+    const required = filesRead.map(f => String(f || "").replace(/\\/g, "/").toLowerCase()).filter(Boolean);
     const missing = required.filter(f => {
       // If requester provided a path with slashes, require exact path read
       if (f.includes("/")) return !successfulReadPaths.includes(f);
@@ -219,8 +236,8 @@ export async function evaluateQualityGate(input = {}) {
 
   // Remove behavior-based pass: explicit modes now handle read-only logic
 
-  const meaningfulFiles = unique(changedFiles).filter(isMeaningfulFile);
-  // successfulReads already computed above
+    const meaningfulFiles = unique(changedFiles).filter(isMeaningfulFile);
+    // successfulReads already computed above
   const successfulToolCalls = toolCalls.filter(call =>
     call.success && ["READ_FILE", "LIST_FILES", "SEARCH_CODE", "SEARCH_SYMBOL"].includes(call.tool)
   );
@@ -242,15 +259,35 @@ export async function evaluateQualityGate(input = {}) {
     : terminalCalls.filter(call => call.success && isValidationCommand(call.args?.command));
   const successfulValidations = toolCalls.filter(call => call.tool === "VALIDATE_PATCH" && call.success);
   const failedValidations = toolCalls.filter(call => call.tool === "VALIDATE_PATCH" && !call.success);
-  const approvedWriteTargets = new Set(
-    [
-      ...(criteria.requestedFiles || []),
-      ...(criteria.plannerWriteTargets || [])
-    ]
-      .map(normalizeGatePath)
-      .filter(Boolean)
-  );
   const changedFileTargets = unique(changedFiles).map(normalizeGatePath).filter(Boolean);
+  const requestedWriteTargets = unique(requestedWriteFiles.map(normalizeGatePath).filter(Boolean));
+  const verifiedExistingTargets = unique(Array.isArray(verifiedExistingFiles) ? verifiedExistingFiles : []).map(normalizeGatePath).filter(Boolean);
+  const successfulWriteTargets = unique(toolCalls.filter(call =>
+    call.tool === "WRITE_FILE" &&
+    call.success === true
+  ).map(call => normalizeGatePath(call.result?.file || call.args?.path || call.args?.file || call.args?.target || "")));
+  const requestedFilesValidated = requestedWriteTargets.length > 0 && requestedWriteTargets.every(file => successfulWriteTargets.includes(file) || changedFileTargets.includes(file) || verifiedExistingTargets.includes(file));
+  const failedTerminalCalls = terminalCalls.filter(call =>
+    call.success === false ||
+    (call.result?.exitCode !== null && call.result?.exitCode !== undefined && call.result?.exitCode !== 0)
+  );
+  const failureText = failedTerminalCalls
+    .map(call => [call.error, call.result?.stderr, call.result?.stdout].filter(Boolean).join("\n"))
+    .join("\n");
+  const failureFileCandidates = extractExternalFailureFilesFromText(failureText, workspaceRoot).filter(isSourceFailurePath);
+  const externalFailureFiles = failureFileCandidates.filter(file => !requestedWriteTargets.includes(normalizeGatePath(file)));
+  const validationExecuted = terminalCalls.length > 0;
+  const validationCommand = validationSummary?.executedValidationCommands?.[0]?.executedCommand
+    || validationSummary?.matchedCommands?.[0]?.executedCommand
+    || validationSummary?.failedCommands?.[0]?.executedCommand
+    || terminalCalls[0]?.args?.command
+    || requiredCommands[0]
+    || null;
+  const validationSuccess = validationSummary?.validationPassed === true;
+  const validationFailureAttribution = validationSuccess
+    ? null
+    : ((requestedFilesValidated || externalFailureFiles.length > 0) ? "external_project_failure" : "requested_scope_failure");
+  const approvedWriteTargets = new Set(requestedWriteFiles.map(normalizeGatePath).filter(Boolean));
   const packageJsonInspected = successfulReads.some(call =>
     /(^|\/)package\.json$/i.test(call.result?.file || call.args?.path || "")
   );
@@ -300,6 +337,11 @@ export async function evaluateQualityGate(input = {}) {
     // Read-only/analysis are handled above and never reach this branch
     const meaningfulChanged = meaningfulFiles.length > 0;
     const mustValidate = (meaningfulChanged || intentMode === "WRITE_AND_RUN" || objectiveRequiresTerminal) && criteria.taskClass !== 'ui_build';
+    const verifiedExistingCoverage = requestedWriteTargets.length > 0 && requestedWriteTargets.every(file =>
+      successfulWriteTargets.includes(file) ||
+      changedFileTargets.includes(file) ||
+      verifiedExistingTargets.includes(file)
+    );
 
     // Accept idempotent write success (alreadyUpToDate or changed === false)
     const hasAlreadyUpToDate = toolCalls.some(call =>
@@ -308,9 +350,9 @@ export async function evaluateQualityGate(input = {}) {
 
     check(
       "workspace_changes",
-      meaningfulChanged || hasAlreadyUpToDate || (intentMode === "WRITE_AND_RUN" && successfulCommands.length > 0),
+      meaningfulChanged || hasAlreadyUpToDate || verifiedExistingCoverage || (intentMode === "WRITE_AND_RUN" && successfulCommands.length > 0),
       "No meaningful source files were changed.",
-      meaningfulFiles
+      meaningfulFiles.length > 0 ? meaningfulFiles : verifiedExistingTargets
     );
 
     // Emit VALIDATION_MATCH debug for each terminal command
@@ -318,8 +360,8 @@ export async function evaluateQualityGate(input = {}) {
       const cmd = c.args?.command || "";
       const m = validationSummary.hasRequiredCommands
         ? {
-            matched: validationSummary.matchedCommands.some(match => isSameCommand(match.executedCommand, cmd)),
-            rule: validationSummary.matchedCommands.some(match => isSameCommand(match.executedCommand, cmd)) ? "required" : ""
+            matched: validationSummary.executedValidationCommands.some(match => isSameCommand(match.executedCommand, cmd)),
+            rule: validationSummary.executedValidationCommands.some(match => isSameCommand(match.executedCommand, cmd)) ? "required" : ""
           }
         : getValidationMatch(cmd);
       console.log("[VALIDATION_MATCH]", { command: cmd, matched: m.matched, rule: m.rule });
@@ -366,8 +408,8 @@ export async function evaluateQualityGate(input = {}) {
       ),
       "Changed files must pass patch validation.",
       {
-        requestedFiles: criteria.requestedFiles || [],
-        plannerWriteTargets: criteria.plannerWriteTargets || [],
+        requestedFiles: requestedWriteFiles,
+        plannerWriteTargets: requestedWriteFiles,
         changedFiles: changedFileTargets,
         validationPassed: validationSummary.validationPassed,
         matchedValidationCommands: validationSummary.matchedCommands.map(match => match.executedCommand)
@@ -392,7 +434,7 @@ export async function evaluateQualityGate(input = {}) {
       const isUIBuild = criteria.taskClass === "ui_build";
       const hasFailedBuildScript = isUIBuild && terminalCalls.some(c =>
         !c.success &&
-        /(?:npm|pnpm|yarn)\s+(?:run\s+)?\S+/i.test(String(c.args?.command || ''))
+        /(?:npm|pnpm|yarn)\s+(?:run\s+)?build\b/i.test(String(c.args?.command || ''))
       );
       if (hasFailedBuildScript) {
         console.log('[QUALITY_GATE_VALIDATION_SKIPPED]', {
@@ -528,13 +570,21 @@ export async function evaluateQualityGate(input = {}) {
     feedback: failures.length
       ? `Quality gate failed:\n- ${failures.join("\n- ")}`
       : "Quality gate passed.",
+    validationExecuted,
+    validationCommand,
+    validationSuccess,
+    requestedFilesValidated,
+    validationFailureAttribution,
+    externalFailureFiles,
     validationSummary,
     evidence: {
       meaningfulFiles,
       filesChanged: unique(changedFiles),
       filesRead: unique(successfulReads.map(call => call.result?.file || call.args?.path)),
       validationCommands: successfulCommands.map(call => call.args?.command),
-      layers
+      verifiedExistingFiles: verifiedExistingTargets,
+      layers,
+      externalFailureFiles
     }
   };
   // Print QUALITY_GATE_REASONING for diagnostics
@@ -542,7 +592,7 @@ export async function evaluateQualityGate(input = {}) {
     const filesRead = unique(successfulReads.map(call => call.result?.file || call.args?.path));
     const terminalCommands = terminalCalls.map(call => call.args?.command).filter(Boolean);
     const matchedValidationCommands = validationSummary.hasRequiredCommands
-      ? validationSummary.matchedCommands.map(match => match.executedCommand)
+      ? validationSummary.executedValidationCommands.map(match => match.executedCommand)
       : terminalCommands.filter(cmd => getValidationMatch(cmd).matched);
     const reasoning = {
       taskType,
@@ -559,6 +609,17 @@ export async function evaluateQualityGate(input = {}) {
     };
     console.log("[QUALITY_GATE_REASONING]", reasoning);
   } catch {}
+  if (validationFailureAttribution === "external_project_failure") {
+    console.log("[EXTERNAL_VALIDATION_FAILURE_ATTRIBUTED]", {
+      validationCommand,
+      externalFailureFiles
+    });
+    console.log("[QUALITY_GATE_EXTERNAL_FAILURE]", {
+      validationCommand,
+      externalFailureFiles
+    });
+    console.log("[EXTERNAL_FAILURE_FILES]", { files: externalFailureFiles });
+  }
   if (DEBUG()) console.log("[QUALITY_GATE][OUTPUT]", { passed: out.passed, score: out.score, failures: out.failures });
   return out;
 }

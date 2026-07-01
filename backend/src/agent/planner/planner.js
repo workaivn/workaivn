@@ -13,6 +13,7 @@ import { estimateForTool, costBreakdown } from './costEstimator.js';
 import { getTaskPriority, sortReadyTasksByPriority, pickNextPlannerTask } from './priorityQueue.js';
 import { createExecutionHistory } from './executionHistory.js';
 import { ExecutionMemoryStatus, createExecutionMemory } from './executionMemory.js';
+import { createAdaptivePlanner } from './adaptivePlanner.js';
 
 export const PlannerState = Object.freeze({
   WAITING_CONTEXT: 'WAITING_CONTEXT',
@@ -29,6 +30,7 @@ export class Planner {
     this.taskMap = new Map();
     this.executionMemory = createExecutionMemory();
     this.executionHistory = createExecutionHistory(this.executionMemory);
+    this.adaptivePlanner = createAdaptivePlanner(this);
     for (const task of tasks) {
       this._addTask(task);
     }
@@ -214,7 +216,7 @@ export class Planner {
 
     // Phase 4.10: Reorder by priority descending (highest first)
     if (ready.length > 1) {
-      const sorted = sortReadyTasksByPriority(ready);
+      const sorted = this.adaptivePlanner?.sortReadyTasks?.(ready) || sortReadyTasksByPriority(ready);
       ready.length = 0;
       ready.push(...sorted);
       console.log('[PLANNER_PRIORITY_ORDER]', {
@@ -223,8 +225,14 @@ export class Planner {
       });
     }
 
-    const next = pickNextPlannerTask(ready);
+    const next = this.adaptivePlanner?.sortReadyTasks?.(ready)?.[0] || pickNextPlannerTask(ready);
     if (next) {
+      if (next.tool === 'RUN_TERMINAL') {
+        console.log('[RUN_TERMINAL_READY]', {
+          taskId: next.id,
+          command: next.toolArgs?.command || null
+        });
+      }
       console.log('[PLANNER_NEXT]', {
         id: next.id,
         kind: next.kind,
@@ -359,6 +367,10 @@ export class Planner {
       reasoningReused: 0,
       retriesAvoided: 0
     };
+  }
+
+  getAdaptiveSnapshot(context = {}) {
+    return this.adaptivePlanner?.buildSnapshot?.(context) || null;
   }
 
   markSuccess(taskId, result) {
@@ -577,16 +589,16 @@ export class Planner {
     if (ready.length === 0) return null;
     // If any READY task has a tool set, that's the one being dispatched directly
     const withTool = ready.filter(t => t.tool);
-    if (withTool.length > 0) return withTool[0];
+    if (withTool.length > 0) return this.adaptivePlanner?.sortReadyTasks?.(withTool)?.[0] || withTool[0];
     // Otherwise, the model is being called for the highest-priority CODING task
-    return pickNextPlannerTask(ready);
+    return this.adaptivePlanner?.sortReadyTasks?.(ready)?.[0] || pickNextPlannerTask(ready);
   }
 
   // Phase 4.11: Get the task that should be receiving model tool results (fallback path)
   getModelTask() {
     const ready = this.graph.allNodes().filter(n => n.status === TaskStatus.READY && !n.tool);
     if (ready.length === 0) return null;
-    return pickNextPlannerTask(ready);
+    return this.adaptivePlanner?.sortReadyTasks?.(ready)?.[0] || pickNextPlannerTask(ready);
   }
 
   // Check if there are any REASONING tasks (tasks requiring LLM generation)
@@ -604,7 +616,7 @@ export class Planner {
       (n.status === TaskStatus.PENDING || n.status === TaskStatus.READY)
     );
     if (reasoning.length === 0) return null;
-    return pickNextPlannerTask(reasoning);
+    return this.adaptivePlanner?.sortReadyTasks?.(reasoning)?.[0] || pickNextPlannerTask(reasoning);
   }
 
   // Replace a completed REASONING task with concrete execution tasks
@@ -969,7 +981,7 @@ export class Planner {
     if (ready.length === 0) return [];
 
     // Phase 4.10: Sort by priority descending so high-priority tasks get into early groups
-    ready = sortReadyTasksByPriority(ready);
+    ready = this.adaptivePlanner?.sortReadyTasks?.(ready) || sortReadyTasksByPriority(ready);
 
     const groups = this._buildParallelGroups(ready);
     this.parallelGroups = groups;

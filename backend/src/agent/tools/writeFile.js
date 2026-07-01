@@ -3,7 +3,7 @@ import pathModule from "path";
 import { normalizeGeneratedModuleContent, resolveWorkspacePathSafe } from "../workspace.js";
 const DEBUG = () => process.env.DEBUG_AGENT === "true" || process.env.WORKAI_AGENT_DEBUG === "true";
 
-export async function writeFileTool({ path, content, activeFiles = [], workspaceRoot, layout = null, allowEmptyContent = false, overwriteEmpty = false }) {
+export async function writeFileTool({ path, content, activeFiles = [], workspaceRoot, layout = null, allowEmptyContent = false, overwriteEmpty = false, writeContext = null }) {
   const nextContent = String(content ?? "");
   const allowEmptyOverwrite = allowEmptyContent === true || overwriteEmpty === true;
 
@@ -48,7 +48,8 @@ export async function writeFileTool({ path, content, activeFiles = [], workspace
         targetPath: resolved.relativePath,
         content: nextContent,
         layout,
-        workspaceFiles: activeFiles.map(file => String(file.path || file.name || ""))
+        workspaceFiles: activeFiles.map(file => String(file.path || file.name || "")),
+        writeContext
       });
 
       if (!normalizedWrite.success) {

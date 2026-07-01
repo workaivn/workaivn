@@ -55,6 +55,14 @@ const AgentRunSchema = new mongoose.Schema(
       type: [String],
       default: []
     },
+    verifiedExistingFiles: {
+      type: [String],
+      default: []
+    },
+    plannerReadFiles: {
+      type: [String],
+      default: []
+    },
     toolCalls: {
       type: [mongoose.Schema.Types.Mixed],
       default: []
@@ -74,6 +82,10 @@ const AgentRunSchema = new mongoose.Schema(
     plannerMetrics: {
       type: mongoose.Schema.Types.Mixed,
       default: {}
+    },
+    plannerDebugSnapshot: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null
     },
     qualityGate: {
       type: mongoose.Schema.Types.Mixed,

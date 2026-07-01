@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { TaskNode } from '../taskNode.js';
 import { Task } from '../task.js';
 import { Planner } from '../planner.js';
@@ -8,7 +11,8 @@ import {
   notifyToolExecution,
   canExecuteTool,
   logPlannerStatus,
-  validatePackageJsonAfterWrite
+  validatePackageJsonAfterWrite,
+  tryRecovery
 } from '../executionController.js';
 
 function makePlanner(tasks) {
@@ -145,4 +149,50 @@ test('notifyToolExecution with VALIDATE_PATCH still notifies planner', () => {
   const result = notifyToolExecution(planner, 'VALIDATE_PATCH', { file: 'f.js' }, { success: false, error: 'patch failed' });
   assert.equal(result.handled, true);
   assert.equal(result.status, 'FAILED');
+});
+
+test('tryRecovery blocks unexpected recovery target drift and preserves the active file', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'workai-recovery-'));
+  const logs = [];
+  const originalLog = console.log;
+
+  try {
+    console.log = (...args) => logs.push(args.map(value => {
+      if (typeof value === 'string') return value;
+      try { return JSON.stringify(value); } catch { return String(value); }
+    }).join(' '));
+
+    const failedTask = new Task({
+      id: 'run-1',
+      kind: 'CODING',
+      tool: 'RUN_TERMINAL',
+      toolArgs: { command: 'npm test' },
+      goal: 'Run tests'
+    });
+    const planner = makePlanner([failedTask]);
+    planner.markFailure('run-1', 'ReferenceError: prepared is not defined');
+
+    const result = tryRecovery(planner, failedTask, {
+      workspaceRoot: root,
+      activeFailedPhaseTargetFile: 'src/math.js',
+      validationContext: {
+        stderr: [
+          'ReferenceError: prepared is not defined',
+          '    at executePlannerTaskLifecycle (file:///G:/langtuvn/ai_local/src/modules/aiagent/aiagent.controller.js:1:1)'
+        ].join('\n')
+      }
+    });
+
+    assert.equal(result.recoveryStarted, false);
+    assert.equal(result.reason, 'RECOVERY_TARGET_MISMATCH_BLOCKED');
+    assert.ok(logs.some(line => line.includes('[RECOVERY_TARGET_MISMATCH_BLOCKED]')), 'must log the blocked recovery target mismatch');
+    assert.equal(
+      logs.some(line => line.includes('aiagent.controller.js') && line.includes('[PLANNER_RECOVERY_START]')),
+      false,
+      'unexpected controller path must not proceed into recovery planning'
+    );
+  } finally {
+    console.log = originalLog;
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

@@ -12,10 +12,13 @@ import {
   buildRunFileMetadata,
   logRunFileMetadata
 } from "../runAgentLoop.js";
+import { buildExecutionStateRegistry } from "../execution/executionStateRegistry.js";
 
 async function createWorkspace() {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workai-phase420-cleanup-"));
   await fs.mkdir(path.join(workspaceRoot, "src"), { recursive: true });
+  await fs.mkdir(path.join(workspaceRoot, "src", "modules", "aiagent"), { recursive: true });
+  await fs.mkdir(path.join(workspaceRoot, "src", "agent"), { recursive: true });
   await fs.writeFile(
     path.join(workspaceRoot, "package.json"),
     JSON.stringify({
@@ -25,6 +28,8 @@ async function createWorkspace() {
     }, null, 2),
     "utf8"
   );
+  await fs.writeFile(path.join(workspaceRoot, "src", "modules", "aiagent", "aiagent.controller.js"), "export const controller = true;\n", "utf8");
+  await fs.writeFile(path.join(workspaceRoot, "src", "agent", "autoFallback.test.js"), 'import test from "node:test";\n', "utf8");
   return workspaceRoot;
 }
 
@@ -162,7 +167,7 @@ test("Phase 4.20 Cleanup Test 1: no-change writes keep changedFiles empty while 
     assert.deepEqual(runFileMetadata.requestedWriteFiles, requestedFiles);
     assert.deepEqual(runFileMetadata.changedFiles, []);
     assert.deepEqual(runFileMetadata.validatedFiles, requestedFiles);
-    assert.equal(runFileMetadata.physicalChangeStatus, "unchanged");
+    assert.equal(runFileMetadata.physicalChangeStatus, "unchanged_but_valid");
     assert.equal(runFileMetadata.validationCoverageStatus, "validated");
     assert.ok(logger.logs.some(line => line.includes("[RUN_FILE_METADATA]")));
   } finally {
@@ -214,6 +219,183 @@ test("Phase 4.20 Cleanup Test 2: real changed writes keep changedFiles limited t
     assert.deepEqual(runFileMetadata.validatedFiles, requestedFiles);
     assert.equal(runFileMetadata.physicalChangeStatus, "changed");
     assert.equal(runFileMetadata.validationCoverageStatus, "validated");
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("Phase 4.22-HF repeated run: verified existing files keep QualityGate passing after cache hits", async () => {
+  const workspaceRoot = await createWorkspace();
+  const requestedFiles = ["src/app.js", "src/app.test.js"];
+  const command = "npm test";
+  const criteria = createCriteria({ requestedFiles, command });
+
+  try {
+    await fs.writeFile(path.join(workspaceRoot, "src", "app.js"), 'export const app = true;\n', "utf8");
+    await fs.writeFile(path.join(workspaceRoot, "src", "app.test.js"), 'console.log("APP_OK");\n', "utf8");
+
+    const firstGate = await evaluateQualityGate({
+      acceptanceCriteria: criteria,
+      changedFiles: requestedFiles,
+      toolCalls: [
+        createWriteCall("src/app.js"),
+        createWriteCall("src/app.test.js"),
+        createTerminalCall(command, 0)
+      ],
+      workspaceRoot,
+      requiredCommands: [command],
+      finalText: "First run completed."
+    });
+
+    assert.equal(firstGate.passed, true);
+
+    const registry = buildExecutionStateRegistry({
+      plannerExecutionMetadata: {
+        plannerReadFiles: ["package.json"],
+        plannerWriteFiles: requestedFiles,
+        plannerRunCommands: [command]
+      },
+      toolCalls: [
+        createTerminalCall(command, 0)
+      ],
+      runId: "repeat-run",
+      workspaceRoot
+    });
+
+    const runFileMetadata = buildRunFileMetadata({
+      executionStateRegistry: registry,
+      workspaceRoot
+    });
+
+    assert.deepEqual(runFileMetadata.requestedWriteFiles, requestedFiles);
+    assert.deepEqual(runFileMetadata.verifiedExistingFiles.sort(), requestedFiles);
+    assert.deepEqual(runFileMetadata.validatedFiles.sort(), requestedFiles);
+    assert.equal(runFileMetadata.physicalChangeStatus, "already_valid");
+    assert.equal(runFileMetadata.validationCoverageStatus, "validated");
+
+    const secondGate = await evaluateQualityGate({
+      acceptanceCriteria: criteria,
+      changedFiles: [],
+      requestedWriteFiles: requestedFiles,
+      verifiedExistingFiles: runFileMetadata.verifiedExistingFiles,
+      toolCalls: [
+        createTerminalCall(command, 0)
+      ],
+      workspaceRoot,
+      requiredCommands: [command],
+      finalText: "Second run completed using cached validation."
+    });
+
+    assert.equal(secondGate.passed, true);
+    assert.ok(secondGate.evidence.verifiedExistingFiles.includes("src/app.js"));
+    assert.ok(secondGate.evidence.verifiedExistingFiles.includes("src/app.test.js"));
+  } finally {
+    await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("Phase 4.22-HF7: no-change writes still count as validated coverage", () => {
+  const requestedFiles = ["src/math.js", "src/math.test.js"];
+  const runFileMetadata = buildRunFileMetadata({
+    requestedFiles,
+    plannerWriteTargets: requestedFiles,
+    toolCalls: [
+      createNoChangeWriteCall("src/math.js"),
+      createNoChangeWriteCall("src/math.test.js"),
+      createTerminalCall("npm test", 1)
+    ],
+    changedFiles: [],
+    validationSummary: {
+      validationPassed: false,
+      matchedCommands: [],
+      executedValidationCommands: [
+        {
+          requiredCommand: "npm test",
+          executedCommand: "npm test",
+          exitCode: 1,
+          success: false
+        }
+      ]
+    },
+    qualityGatePassed: false
+  });
+
+  assert.deepEqual(runFileMetadata.requestedWriteFiles, requestedFiles);
+  assert.deepEqual(runFileMetadata.changedFiles, []);
+  assert.deepEqual(runFileMetadata.validatedFiles, requestedFiles);
+  assert.equal(runFileMetadata.physicalChangeStatus, "unchanged_but_valid");
+  assert.equal(runFileMetadata.validationCoverageStatus, "validated");
+  assert.equal(runFileMetadata.validationExecuted, true);
+  assert.equal(runFileMetadata.validationSuccess, false);
+  assert.equal(runFileMetadata.requestedFilesValidated, true);
+});
+
+test("Phase 4.22-HF7: external validation failure is attributed outside the requested scope", async () => {
+  const workspaceRoot = await createWorkspace();
+  try {
+    const criteria = createCriteria({ requestedFiles: ["src/math.js", "src/math.test.js"], command: "npm test" });
+    const gate = await evaluateQualityGate({
+      acceptanceCriteria: criteria,
+      changedFiles: [],
+      toolCalls: [
+        createNoChangeWriteCall("src/math.js"),
+        createNoChangeWriteCall("src/math.test.js"),
+        {
+          tool: "RUN_TERMINAL",
+          success: false,
+          args: { command: "npm test" },
+          result: {
+            command: "npm test",
+            exitCode: 1,
+            stdout: "",
+            stderr: [
+              "ReferenceError in src/modules/aiagent/aiagent.controller.js",
+              "Failure in src/agent/autoFallback.test.js"
+            ].join("\n")
+          }
+        }
+      ],
+      workspaceRoot,
+      requiredCommands: ["npm test"],
+      finalText: "Validation failed outside the requested scope."
+    });
+
+    const runFileMetadata = buildRunFileMetadata({
+      requestedFiles: criteria.requestedFiles,
+      plannerWriteTargets: criteria.plannerWriteTargets,
+      toolCalls: [
+        createNoChangeWriteCall("src/math.js"),
+        createNoChangeWriteCall("src/math.test.js"),
+        {
+          tool: "RUN_TERMINAL",
+          success: false,
+          args: { command: "npm test" },
+          result: {
+            command: "npm test",
+            exitCode: 1,
+            stdout: "",
+            stderr: [
+              "ReferenceError in src/modules/aiagent/aiagent.controller.js",
+              "Failure in src/agent/autoFallback.test.js"
+            ].join("\n")
+          }
+        }
+      ],
+      changedFiles: [],
+      validationSummary: gate.validationSummary,
+      qualityGatePassed: gate.passed
+    });
+
+    assert.equal(gate.passed, false);
+    assert.equal(gate.validationExecuted, true);
+    assert.equal(gate.validationSuccess, false);
+    assert.equal(gate.requestedFilesValidated, true);
+    assert.equal(gate.validationFailureAttribution, "external_project_failure");
+    assert.ok(gate.externalFailureFiles.some(file => file.includes("src/modules/aiagent/aiagent.controller.js")));
+    assert.ok(gate.externalFailureFiles.some(file => file.includes("src/agent/autoFallback.test.js")));
+    assert.equal(runFileMetadata.validationCoverageStatus, "validated");
+    assert.equal(runFileMetadata.validationFailureAttribution, "external_project_failure");
+    assert.deepEqual(runFileMetadata.validatedFiles.sort(), ["src/math.js", "src/math.test.js"]);
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
   }

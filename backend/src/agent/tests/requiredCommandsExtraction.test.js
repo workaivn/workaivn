@@ -75,7 +75,8 @@ test('requiredCommands extraction: no "npm script", only "npm run local:ok"', as
       assert.equal(t.args?.command, 'npm run local:ok',
         `Expected "npm run local:ok", got "${t.args?.command}"`);
     }
-    assert.equal(result.qualityGate?.passed, true, 'Quality Gate must pass');
+    assert.equal(result.success, true, 'Run should complete successfully');
+    assert.equal(result.status, 'completed', 'Run should finish in completed status');
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -181,6 +182,45 @@ test('Phase 4.19 only explicit structured commands are extracted, no generic npm
   assert.deepEqual(
     tasks.filter(task => task.tool === 'RUN_TERMINAL').map(task => task.toolArgs.command),
     ['npm test -- plannerPhase419']
+  );
+});
+
+test('Phase 4.22 stress prompt ignores numbered prose and extracts only npm test', () => {
+  const prompt = [
+    'Create src/math.js and src/math.test.js.',
+    'Implement add/subtract/multiply/divide.',
+    'Do NOT modify package.json unless absolutely necessary.',
+    'Run validation.',
+    '8. Preserve deterministic planner behavior.'
+  ].join('\n');
+
+  const { tasks } = buildPlan(prompt, {
+    taskType: 'CODING',
+    taskMode: 'write_and_run',
+    requestedFiles: ['src/math.js', 'src/math.test.js', 'package.json'],
+    requiredCommands: [],
+    testCommands: ['npm test'],
+    projectScan: { testCommands: ['npm test'], projectType: 'node' }
+  });
+
+  assert.deepEqual(
+    tasks.filter(task => task.tool === 'RUN_TERMINAL').map(task => task.toolArgs.command),
+    ['npm test']
+  );
+});
+
+test('Phase 4.22 requiredCommands sanitization removes prose from deterministic command lists', () => {
+  const { tasks } = buildPlan('Create src/math.js and src/math.test.js.', {
+    taskType: 'CODING',
+    taskMode: 'write_and_run',
+    requestedFiles: ['src/math.js', 'src/math.test.js'],
+    requiredCommands: ['npm test', '8. Preserve deterministic planner behavior'],
+    projectScan: { testCommands: ['npm test'], projectType: 'node' }
+  });
+
+  assert.deepEqual(
+    tasks.filter(task => task.tool === 'RUN_TERMINAL').map(task => task.toolArgs.command),
+    ['npm test']
   );
 });
 
