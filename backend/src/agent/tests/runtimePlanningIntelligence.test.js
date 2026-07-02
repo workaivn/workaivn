@@ -21,7 +21,7 @@ function emptyWorkspaceState(existingFiles = []) {
   };
 }
 
-test("runtime planning resolves react-vite-ts for a SaaS landing page and creates a multi-stage graph", () => {
+test("runtime planning resolves generic-static-html for a SaaS landing page and creates a multi-stage graph", () => {
   const intent = detectProjectIntent("Create a SaaS landing page");
   const workspaceState = emptyWorkspaceState();
   const profile = resolveBootstrapProfile(intent, workspaceState);
@@ -39,15 +39,18 @@ test("runtime planning resolves react-vite-ts for a SaaS landing page and create
     workspaceState
   });
 
-  assert.equal(runtimePlan.goalType, "SAAS_APP");
-  assert.equal(runtimePlan.targetProfile.id, "react-vite-ts");
+  assert.equal(runtimePlan.goalType, "LANDING_PAGE");
+  assert.equal(runtimePlan.targetProfile.id, "generic-static-html");
   assert.ok(runtimePlan.filePlan.length > 1);
-  assert.ok(runtimePlan.filePlan.some(file => file.path === "src/App.tsx"));
-  assert.ok(runtimePlan.filePlan.some(file => file.path === "src/components/sections/HeroSection.tsx"));
-  assert.ok(runtimePlan.executionPlan.validationCommands.includes("npm run build"));
-  assert.ok(graph.tasks.length > 1);
-  assert.ok(graph.tasks.some(task => task.goal === "ANALYZE_WORKSPACE"));
-  assert.ok(graph.tasks.some(task => task.tool === "LIST_FILES"));
+  assert.ok(runtimePlan.filePlan.some(file => file.path === "index.html"));
+  assert.ok(runtimePlan.filePlan.some(file => file.path === "assets/css/style.css"));
+  assert.ok(runtimePlan.filePlan.some(file => file.path === "assets/js/app.js"));
+  assert.equal(runtimePlan.filePlan.some(file => file.path === "src/App.tsx"), false);
+  assert.equal(runtimePlan.executionPlan.validationCommands.includes("npm run build"), false);
+  assert.ok(graph.proposals.length > 1);
+  assert.ok(graph.proposals.some(proposal => Array.isArray(proposal.proposalTypes) && proposal.proposalTypes.includes("BOOTSTRAP")));
+  assert.ok(graph.proposals.some(proposal => Array.isArray(proposal.proposalTypes) && proposal.proposalTypes.includes("EXECUTION")));
+  assert.ok(graph.proposals.some(proposal => Array.isArray(proposal.proposalTypes) && proposal.proposalTypes.includes("VALIDATION")));
 });
 
 test("provider failure still yields deterministic skeleton files", () => {
@@ -63,10 +66,12 @@ test("provider failure still yields deterministic skeleton files", () => {
     failure: { message: "provider failed" }
   });
 
-  assert.ok(runtimePlan.filePlan.some(file => file.path === "package.json"));
-  assert.ok(runtimePlan.filePlan.some(file => file.path === "src/App.tsx"));
-  assert.ok(runtimePlan.filePlan.some(file => file.path === "src/components/layout/Layout.tsx"));
-  assert.ok(runtimePlan.validationPlan.commands.includes("npm run build"));
+  assert.ok(runtimePlan.filePlan.some(file => file.path === "index.html"));
+  assert.ok(runtimePlan.filePlan.some(file => file.path === "assets/css/style.css"));
+  assert.ok(runtimePlan.filePlan.some(file => file.path === "assets/js/app.js"));
+  assert.equal(runtimePlan.filePlan.some(file => file.path === "package.json"), false);
+  assert.equal(runtimePlan.filePlan.some(file => file.path === "src/App.tsx"), false);
+  assert.equal(runtimePlan.validationPlan.commands.includes("npm run build"), false);
 });
 
 test("PHP landing page uses php-plain and emits PHP starter files", () => {
@@ -83,6 +88,25 @@ test("PHP landing page uses php-plain and emits PHP starter files", () => {
 
   assert.equal(runtimePlan.targetProfile.id, "php-plain");
   assert.ok(runtimePlan.filePlan.some(file => file.path === "index.php"));
+  assert.ok(runtimePlan.filePlan.some(file => file.path === "assets/css/style.css"));
+  assert.ok(runtimePlan.filePlan.some(file => file.path === "assets/js/app.js"));
+  assert.equal(runtimePlan.filePlan.some(file => /src\/App\.tsx$/i.test(file.path)), false);
+});
+
+test("plain landing page without explicit stack resolves generic-static-html", () => {
+  const intent = detectProjectIntent("Create a landing page");
+  const workspaceState = emptyWorkspaceState();
+  const profile = resolveBootstrapProfile(intent, workspaceState);
+  const runtimePlan = createRuntimePlan({
+    prompt: intent.prompt,
+    projectScan: workspaceState.scan,
+    workspaceState,
+    projectIntent: intent,
+    bootstrapProfile: profile
+  });
+
+  assert.equal(runtimePlan.targetProfile.id, "generic-static-html");
+  assert.ok(runtimePlan.filePlan.some(file => file.path === "index.html"));
   assert.ok(runtimePlan.filePlan.some(file => file.path === "assets/css/style.css"));
   assert.ok(runtimePlan.filePlan.some(file => file.path === "assets/js/app.js"));
   assert.equal(runtimePlan.filePlan.some(file => /src\/App\.tsx$/i.test(file.path)), false);
@@ -121,7 +145,7 @@ test("REST API server defaults to node-express and validates server syntax", () 
   assert.equal(runtimePlan.targetProfile.id, "node-express");
   assert.ok(runtimePlan.filePlan.some(file => file.path === "package.json"));
   assert.ok(runtimePlan.filePlan.some(file => file.path === "src/server.js"));
-  assert.ok(runtimePlan.validationPlan.commands.includes("node --check src/server.js"));
+  assert.deepEqual(runtimePlan.validationPlan.commands, []);
 });
 
 test("existing PHP projects keep php-plain and do not bootstrap React", () => {
@@ -190,7 +214,7 @@ test("build failure reflection selects deterministic dependency repair", () => {
 
   assert.equal(runtimePlan.repairPlan.repairType, "missing_dependency");
   assert.equal(runtimePlan.repairPlan.action, "install_dependency");
-  assert.equal(runtimePlan.repairPlan.tool, "RUN_TERMINAL");
+  assert.equal(runtimePlan.repairPlan.tool, null);
 });
 
 test("missing build script selects package.json repair", () => {
@@ -208,7 +232,7 @@ test("missing build script selects package.json repair", () => {
 
   assert.equal(runtimePlan.repairPlan.repairType, "missing_script");
   assert.equal(runtimePlan.repairPlan.action, "patch_package_json");
-  assert.equal(runtimePlan.repairPlan.retryCommand, "npm run build");
+  assert.equal(runtimePlan.repairPlan.retryCommand, null);
 });
 
 test("component planning captures parent-child and shared component anatomy", () => {
@@ -223,13 +247,18 @@ test("component planning captures parent-child and shared component anatomy", ()
     bootstrapProfile: profile
   });
 
-  const layout = runtimePlan.componentPlan.components.find(component => component.name === "Layout");
-  const navbar = runtimePlan.componentPlan.components.find(component => component.name === "Navbar");
+  const pageShell = runtimePlan.componentPlan.components.find(component => component.name === "PageShell");
+  const header = runtimePlan.componentPlan.components.find(component => component.name === "Header");
+  const footer = runtimePlan.componentPlan.components.find(component => component.name === "Footer");
 
-  assert.ok(layout);
-  assert.ok(navbar);
-  assert.ok(layout.children.length > 0);
-  assert.equal(navbar.shared, true);
-  assert.ok(runtimePlan.componentPlan.shared.some(component => component.name === "Navbar"));
+  assert.ok(pageShell);
+  assert.ok(header);
+  assert.ok(footer);
+  assert.equal(pageShell.root, true);
+  assert.equal(pageShell.shared, true);
+  assert.equal(header.shared, true);
+  assert.equal(footer.shared, true);
+  assert.deepEqual(pageShell.children, []);
+  assert.ok(runtimePlan.componentPlan.shared.some(component => component.name === "PageShell"));
 });
 

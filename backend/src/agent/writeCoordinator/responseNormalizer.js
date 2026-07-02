@@ -139,6 +139,16 @@ function normalizeFileEntry(entry) {
 function collectCandidateEntries(response) {
   if (Array.isArray(response)) return response;
   if (!response || typeof response !== "object") return [];
+  for (const key of ["toolResult", "result", "response", "output", "legacy"]) {
+    if (isPresent(response[key])) {
+      const nested = collectCandidateEntries(response[key]);
+      if (nested.length > 0) return nested;
+    }
+  }
+  if (isPresent(response.args) && typeof response.args === "object") {
+    const nestedArgs = collectCandidateEntries(response.args);
+    if (nestedArgs.length > 0) return nestedArgs;
+  }
   if (isPresent(response.files)) return Array.isArray(response.files) ? response.files : [response.files];
   if (isPresent(response.operations)) return Array.isArray(response.operations) ? response.operations : [response.operations];
   if (Array.isArray(response.changes) || Array.isArray(response.patches) || Array.isArray(response.edits)) {

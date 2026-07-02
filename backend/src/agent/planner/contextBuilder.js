@@ -1,81 +1,54 @@
 import crypto from 'node:crypto';
 import { Task } from './task.js';
+import { getCanonicalWorkspaceFiles } from '../context/ProjectScanSnapshot.js';
 
 const MAX_CONTEXT_FILES = 10;
 
-// Project-type-specific candidate file rules
-function getCandidateFilesForProject(projectType, entryFiles) {
-  const entrySet = new Set((entryFiles || []).map(f => f.replace(/\\/g, '/')));
+function normalizeCandidate(value = "") {
+  return String(value || "").replace(/\\/g, "/").replace(/^\.\//, "").trim();
+}
+
+function collectEvidenceCandidates({
+  projectScan = {},
+  plannerTasks = [],
+  classifierResult = {},
+  executionHistory = null
+} = {}) {
   const candidates = new Set();
 
-  switch (projectType) {
-    case 'next': {
-      for (const f of ['package.json', 'app/layout.tsx', 'app/layout.js', 'app/page.tsx', 'app/page.js', 'pages/index.tsx', 'pages/index.js']) {
-        candidates.add(f);
-      }
-      break;
-    }
-    case 'vite': {
-      for (const f of ['package.json', 'src/main.jsx', 'src/main.js', 'src/main.tsx', 'src/main.ts', 'src/App.jsx', 'src/App.js', 'src/App.tsx', 'src/index.js']) {
-        candidates.add(f);
-      }
-      break;
-    }
-    case 'node_react':
-    case 'react': {
-      for (const f of ['package.json', 'src/App.js', 'src/App.jsx', 'src/App.tsx', 'src/index.js', 'src/index.jsx', 'src/index.tsx', 'src/main.js', 'src/main.jsx']) {
-        candidates.add(f);
-      }
-      break;
-    }
-    case 'flutter': {
-      for (const f of ['pubspec.yaml', 'lib/main.dart']) {
-        candidates.add(f);
-      }
-      break;
-    }
-    case 'python': {
-      for (const f of ['requirements.txt', 'pyproject.toml', 'main.py', 'app.py']) {
-        candidates.add(f);
-      }
-      break;
-    }
-    case 'php': {
-      for (const f of ['composer.json', 'index.php']) {
-        candidates.add(f);
-      }
-      break;
-    }
-    case 'aspnet': {
-      candidates.add('Program.cs');
-      candidates.add('Startup.cs');
-      break;
-    }
-    case 'static_html': {
-      candidates.add('index.html');
-      break;
-    }
-    case 'node':
-    case 'express':
-    case 'generic':
-    default: {
-      for (const f of ['package.json', 'index.js', 'server.js', 'app.js', 'src/index.js', 'src/server.js', 'src/app.js']) {
-        candidates.add(f);
-      }
-      break;
-    }
+  for (const file of Array.isArray(projectScan.discoveredFiles) ? projectScan.discoveredFiles : []) {
+    const normalized = normalizeCandidate(file);
+    if (normalized) candidates.add(normalized);
   }
 
-  // Add any entry files from project scan that aren't already in candidates
-  for (const f of entrySet) {
-    candidates.add(f);
+  for (const file of Array.isArray(projectScan.entryFiles) ? projectScan.entryFiles : []) {
+    const normalized = normalizeCandidate(file);
+    if (normalized) candidates.add(normalized);
+  }
+
+  for (const file of Array.isArray(classifierResult.requestedFiles) ? classifierResult.requestedFiles : []) {
+    const normalized = normalizeCandidate(file);
+    if (normalized) candidates.add(normalized);
+  }
+
+  for (const task of Array.isArray(plannerTasks) ? plannerTasks : []) {
+    const taskFile = normalizeCandidate(task?.toolArgs?.path || task?.toolArgs?.file || task?.toolArgs?.target || "");
+    if (taskFile) candidates.add(taskFile);
+  }
+
+  if (executionHistory) {
+    const records = executionHistory.getAllRecords ? executionHistory.getAllRecords() : [];
+    for (const rec of records) {
+      const completedPath = normalizeCandidate(rec?.path || rec?.args?.path || rec?.args?.file || "");
+      if (completedPath) candidates.add(completedPath);
+    }
   }
 
   return [...candidates];
 }
 
 function getProjectContext(projectType, packageManager) {
-  const pm = packageManager || 'npm';
+  const pm = packageManager || 'unknown';
   const parts = [projectType.charAt(0).toUpperCase() + projectType.slice(1)];
   if (pm) parts.push(`(${pm})`);
   return parts.join(' ');
@@ -152,6 +125,7 @@ export function buildPlannerContext({
   const packageManager = projectScan.packageManager || null;
   const entryFiles = projectScan.entryFiles || [];
   const projectContext = getProjectContext(projectType, packageManager);
+  const canonicalFiles = getCanonicalWorkspaceFiles(projectScan);
 
   // Build set of already-read files from execution history
   const historySet = new Set();
@@ -164,11 +138,36 @@ export function buildPlannerContext({
     }
   }
 
-  // Gather all candidate files for this project type
-  const allCandidates = getCandidateFilesForProject(projectType, entryFiles);
+  // Gather only evidence-backed candidate files.
+  const allCandidates = collectEvidenceCandidates({
+    projectScan,
+    plannerTasks,
+    classifierResult,
+    executionHistory
+  });
 
-  // Filter: remove redundant files (README, node_modules, etc.)
-  const filtered = allCandidates.filter(f => !isRedundantFile(f));
+  const filtered = [];
+  for (const candidate of allCandidates) {
+    if (isRedundantFile(candidate)) continue;
+    const normalized = candidate.replace(/\\/g, '/');
+    if (!canonicalFiles.has(normalized)) {
+      console.log('[PLANNER_CONTEXT_CANDIDATE_REJECTED_NOT_DISCOVERED]', {
+        file: candidate,
+        reason: 'not present in canonical project scan files'
+      });
+      console.log('[CANONICAL_FILE_REJECTED]', {
+        path: candidate,
+        source: 'planner_context',
+        reason: 'not present in canonical project scan files'
+      });
+      continue;
+    }
+    filtered.push(candidate);
+    console.log('[PLANNER_CONTEXT_SELECTED_CANONICAL]', {
+      file: candidate,
+      source: 'planner_context'
+    });
+  }
 
   // Filter: remove files already known to planner or history
   const unknown = filtered.filter(f => !isFileAlreadyKnown(f, plannerTasks, historySet));

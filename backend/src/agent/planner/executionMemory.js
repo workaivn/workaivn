@@ -8,7 +8,14 @@ export const ExecutionMemoryStatus = Object.freeze({
   FAILED: 'FAILED',
   SKIPPED: 'SKIPPED',
   BLOCKED: 'BLOCKED',
-  RECOVERED: 'RECOVERED'
+  RECOVERED: 'RECOVERED',
+  GENERATED: 'GENERATED',
+  VALIDATING: 'VALIDATING',
+  VALIDATION_FAILED: 'VALIDATION_FAILED',
+  READY_TO_COMMIT: 'READY_TO_COMMIT',
+  COMMITTING: 'COMMITTING',
+  COMMITTED: 'COMMITTED',
+  COMMIT_FAILED: 'COMMIT_FAILED'
 });
 
 function normalizePath(value) {
@@ -148,6 +155,9 @@ export function createExecutionMemory() {
       dependencies: [...(task.dependencies || [])],
       resultSummary: summarizeResult(payload.result),
       failureReason: payload.failureReason || payload.reason || task.reason || null,
+      phase: payload.phase || null,
+      committed: payload.committed === true,
+      path: normalizePath(payload.path || args.path || args.file || task.toolArgs?.path || task.toolArgs?.file || ''),
       timestamp: new Date().toISOString()
     };
     byTaskId.set(taskId, recordValue);

@@ -127,8 +127,8 @@ function inferSurfaceType(prompt = "", workspaceState = {}, concepts = []) {
   if (/\bflutter\b/.test(lowerPrompt)) return "flutter";
   if (/\bstatic\s+html\b|\bwithout\s+framework\b/.test(lowerPrompt)) return "static-html";
 
-  if (/\bdashboard\b|\badmin\b|\bsaas\b|\bcrm\b|\berp\b|\bportal\b/.test(lowerPrompt)) return "react-vite";
-  if (concepts.some(concept => /dashboard|admin|portal|crm|erp|saas/i.test(concept))) return "react-vite";
+  if (/\bdashboard\b|\badmin\b|\bcrm\b|\berp\b|\bportal\b/.test(lowerPrompt)) return "react-vite";
+  if (concepts.some(concept => /dashboard|admin|portal|crm|erp/i.test(concept))) return "react-vite";
   return "static-html";
 }
 

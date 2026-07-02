@@ -12,6 +12,7 @@ export function resolveValidationStrategy({
   projectScan = {},
   requiredCommands = []
 } = {}) {
+  const scanFacts = projectScan?.facts || projectScan || {};
   const classification = String(failureClassification?.classification || failureClassification || 'UNKNOWN');
   const commands = Array.isArray(requiredCommands) ? requiredCommands.filter(Boolean) : [];
   let strategy = 'blocked';
@@ -36,6 +37,11 @@ export function resolveValidationStrategy({
   }
 
   const validationStrategy = { strategy, command, reason };
+  logStrategy('COMMAND_VERIFICATION_SOURCE', {
+    source: scanFacts.scanId ? 'project_scan_snapshot' : 'project_scan',
+    scanId: scanFacts.scanId || null,
+    packageJsonFound: scanFacts.packageJsonFound === true
+  });
   logStrategy('VALIDATION_STRATEGY_SELECTED', {
     classification,
     strategy,

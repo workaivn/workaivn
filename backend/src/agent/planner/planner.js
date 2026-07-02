@@ -14,6 +14,7 @@ import { getTaskPriority, sortReadyTasksByPriority, pickNextPlannerTask } from '
 import { createExecutionHistory } from './executionHistory.js';
 import { ExecutionMemoryStatus, createExecutionMemory } from './executionMemory.js';
 import { createAdaptivePlanner } from './adaptivePlanner.js';
+import { approvePlannerAuthority } from '../executionPlanner/plannerAuthorityFirewall.js';
 
 export const PlannerState = Object.freeze({
   WAITING_CONTEXT: 'WAITING_CONTEXT',
@@ -26,7 +27,6 @@ export const PlannerState = Object.freeze({
 export class Planner {
   constructor(tasks = []) {
     this.graph = new TaskGraph();
-    this.graph.create();
     this.taskMap = new Map();
     this.executionMemory = createExecutionMemory();
     this.executionHistory = createExecutionHistory(this.executionMemory);
@@ -35,6 +35,7 @@ export class Planner {
       this._addTask(task);
     }
     this._updateReadyStates();
+    this._finalizeTaskGraph();
     this.totalPlanCost();
 
     // Phase 4.8: Parallel Planner
@@ -84,7 +85,31 @@ export class Planner {
           recoveredNext: task.recoveredNext,
           blockedNext: task.blockedNext,
           skipNext: task.skipNext,
-          priority: task.priority
+          priority: task.priority,
+          promotionSource: task.promotionSource,
+          verificationEvidence: task.verificationEvidence,
+          plannerReason: task.plannerReason,
+          proposalId: task.proposalId,
+          proposalType: task.proposalType,
+          promoted: task.promoted,
+          promotionId: task.promotionId,
+          contextScanId: task.contextScanId,
+          unitType: task.unitType,
+          description: task.description,
+          targetFiles: task.targetFiles,
+          requiredReads: task.requiredReads,
+          requiredWrites: task.requiredWrites,
+          inputs: task.inputs,
+          outputs: task.outputs,
+          acceptanceCriteria: task.acceptanceCriteria,
+          completionPredicate: task.completionPredicate,
+          canonicalTargets: task.canonicalTargets,
+          executionContract: task.executionContract,
+          authoritySource: task.authoritySource,
+          authorityState: task.authorityState,
+          approvalId: task.approvalId,
+          approvedByFirewall: task.approvedByFirewall,
+          requestedKind: task.requestedKind
         });
     if (task.status && task.status !== TaskStatus.PENDING) {
       node.status = task.status;
@@ -186,13 +211,23 @@ export class Planner {
   }
 
   createPlan(tasks) {
-    this.graph.create();
+    this.graph = new TaskGraph();
     this.taskMap = new Map();
     for (const task of tasks) {
       this._addTask(task);
     }
     this._updateReadyStates();
+    this._finalizeTaskGraph();
     this.totalPlanCost();
+  }
+
+  _finalizeTaskGraph() {
+    const nodeCount = this.graph.allNodes().length;
+    console.log('[TASK_GRAPH_FINALIZING]', { nodes: nodeCount });
+    console.log('[TASK_GRAPH_NODE_COUNT]', { nodes: nodeCount });
+    console.log('[TASK_GRAPH_CREATED]', { nodes: nodeCount });
+    console.log('[TASK_GRAPH_FINALIZED]', { nodes: nodeCount });
+    console.log('[GRAPH_SYNC_COMPLETE]', { nodes: nodeCount });
   }
 
   getNextTask() {
@@ -490,8 +525,31 @@ export class Planner {
     const addedIds = [];
     for (let i = 0; i < recoveryTasks.length; i++) {
       const rt = recoveryTasks[i];
+      const needsApproval = rt?.approvedByFirewall !== true || !rt?.approvalId;
+      const approval = needsApproval ? approvePlannerAuthority(rt, this.authorityContext || {}) : { valid: true, candidate: rt, validation: { reason: null } };
+      const approvedTask = approval.candidate || rt;
+      const canonicalTargets = Array.isArray(approvedTask?.canonicalTargets) ? approvedTask.canonicalTargets.filter(Boolean) : [];
+      const approvedByFirewall = approvedTask?.approvedByFirewall === true;
+      const authoritySource = String(approvedTask?.authoritySource || '').toLowerCase();
+      const approvalId = String(approvedTask?.approvalId || '').trim();
+      if (!approval.valid || !approvedByFirewall || authoritySource !== 'validated_recovery' || !approvalId || canonicalTargets.length === 0) {
+        console.log('[RECOVERY_AUTHORITY_REJECTED]', {
+          taskId: approvedTask?.id || rt?.id || null,
+          reason: approval.validation?.reason || 'recovery task missing validated recovery authority',
+          approvedByFirewall,
+          authoritySource: approvedTask?.authoritySource || null,
+          approvalId: approvalId || null,
+          canonicalTargets
+        });
+        continue;
+      }
+      console.log('[RECOVERY_AUTHORITY_VALIDATED]', {
+        taskId: approvedTask.id,
+        canonicalTargets,
+        approvalId
+      });
       // Chain recovery tasks: each depends on the previous one
-      const existingDeps = rt.dependencies || [];
+      const existingDeps = approvedTask.dependencies || [];
       const deps = Array.isArray(existingDeps) ? [...existingDeps] : [];
       if (i > 0) {
         deps.push(addedIds[i - 1]);
@@ -499,10 +557,10 @@ export class Planner {
         // First recovery task depends on the failed task (RECOVERING)
         deps.push(failedTaskId);
       }
-      rt.dependencies = deps;
-      this._addTask(rt);
-      addedIds.push(rt.id);
-      console.log('[PLANNER_RECOVERY_TASK]', { id: rt.id, kind: rt.kind, goal: (rt.goal || '').substring(0, 80) });
+      approvedTask.dependencies = deps;
+      this._addTask(approvedTask);
+      addedIds.push(approvedTask.id);
+      console.log('[PLANNER_RECOVERY_TASK]', { id: approvedTask.id, kind: approvedTask.kind, goal: (approvedTask.goal || '').substring(0, 80) });
     }
     // Manually set first recovery task to READY since it depends on RECOVERING (not SUCCESS)
     if (addedIds.length > 0) {
@@ -620,7 +678,7 @@ export class Planner {
   }
 
   // Replace a completed REASONING task with concrete execution tasks
-  replaceReasoningTask(taskId, executionTasks) {
+  replaceReasoningTask(taskId, executionTasks, { downstreamTaskIds = [] } = {}) {
     const task = this.taskMap.get(taskId);
     if (!task) return false;
 
@@ -636,7 +694,7 @@ export class Planner {
     task.touch();
 
     const addedIds = [];
-    let prevId = taskId;
+    const downstreamIds = Array.isArray(downstreamTaskIds) ? downstreamTaskIds.filter(Boolean) : [];
     for (const execTask of executionTasks) {
       const deps = Array.isArray(execTask.dependencies) ? [...execTask.dependencies] : [];
       if (addedIds.length === 0 && !deps.includes(taskId)) {
@@ -649,6 +707,18 @@ export class Planner {
       this.addTask(execTask);
       addedIds.push(execTask.id);
 
+      if (execTask.tool === 'WRITE_FILE' || execTask.tool === 'APPLY_PATCH') {
+        console.log('[WRITE_TASK_CREATED_FROM_GENERATION]', {
+          taskId: execTask.id,
+          upstreamTask: taskId,
+          downstreamTask: execTask.id,
+          file: execTask.toolArgs?.path || execTask.toolArgs?.file || execTask.toolArgs?.target || null,
+          requiredCommittedFiles: downstreamIds.length > 0 ? [...downstreamIds] : [],
+          committedFiles: [],
+          reason: 'generated content now requires a concrete write commit'
+        });
+      }
+
       console.log('[PLANNER_REASONING_EXECUTION_TASK]', {
         taskId: execTask.id,
         tool: execTask.tool,
@@ -657,8 +727,84 @@ export class Planner {
       });
     }
 
+    const lastExecutionTaskId = addedIds[addedIds.length - 1] || null;
+    if (lastExecutionTaskId && downstreamIds.length > 0) {
+      console.log('[TASK_DEPENDENCY_REWRITTEN_FOR_COMMIT]', {
+        upstreamTask: taskId,
+        downstreamTask: downstreamIds[0] || null,
+        taskId,
+        requiredCommittedFiles: downstreamIds.length,
+        committedFiles: [],
+        reason: 'reasoning replacement now gates downstream tasks on the concrete write task'
+      });
+      for (const childId of downstreamIds) {
+        const child = this.graph.getNode(childId);
+        if (child && child.tool === 'RUN_TERMINAL') {
+          console.log('[WRITE_TASK_LINKED_TO_GENERATION]', {
+            taskId: lastExecutionTaskId,
+            upstreamTask: taskId,
+            downstreamTask: childId,
+            file: child.toolArgs?.command || null,
+            requiredCommittedFiles: [...downstreamIds],
+            committedFiles: [],
+            reason: 'downstream command waits for committed write task'
+          });
+        }
+      }
+      for (const childId of downstreamIds) {
+        try {
+          this.graph.connect(lastExecutionTaskId, childId);
+          const child = this.graph.getNode(childId);
+          if (child && child.tool === 'RUN_TERMINAL') {
+            if (child.status === TaskStatus.READY) {
+              child.status = TaskStatus.PENDING;
+              child.touch();
+            }
+            console.log('[RUN_TERMINAL_WAITING_FOR_WRITES]', {
+              taskId: childId,
+              upstreamTask: lastExecutionTaskId,
+              downstreamTask: childId,
+              requiredCommittedFiles: [...downstreamIds],
+              committedFiles: [],
+              reason: 'waiting for write commit before terminal release'
+            });
+          }
+        } catch {
+          // Edge may already exist or child may be removed.
+        }
+      }
+      console.log('[COMMIT_DEPENDENCY_GRAPH_UPDATED]', {
+        taskId,
+        upstreamTask: taskId,
+        downstreamTask: lastExecutionTaskId,
+        requiredCommittedFiles: [...downstreamIds],
+        committedFiles: [],
+        reason: 'reasoning output linked to commit-gated write task'
+      });
+    }
+
     unlockChildren(this.graph, taskId);
     this._updateReadyStates();
+
+    if (lastExecutionTaskId && downstreamIds.length > 0) {
+      for (const childId of downstreamIds) {
+        const child = this.graph.getNode(childId);
+        if (!child || child.tool !== 'RUN_TERMINAL') continue;
+        const depsSatisfied = [...child.dependencies].every(depId => {
+          const dep = this.graph.getNode(depId);
+          return dep && (
+            dep.status === TaskStatus.SUCCESS ||
+            dep.status === TaskStatus.SKIPPED ||
+            dep.status === TaskStatus.RECOVERED
+          );
+        });
+        if (!depsSatisfied && child.status === TaskStatus.READY) {
+          child.status = TaskStatus.PENDING;
+          child.touch();
+        }
+      }
+    }
+
     this._logCompletion();
 
     return addedIds;

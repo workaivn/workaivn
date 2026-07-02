@@ -4,6 +4,7 @@ import { planUI } from "./uiPlanner.js";
 import { planComponents } from "./componentPlanner.js";
 import { planExecutionStrategy } from "./executionStrategyPlanner.js";
 import { buildBootstrapTaskGraphFromArchitecture } from "./architectureInference.js";
+import { createProposal, createProposalRegistry } from "../planner/proposals/index.js";
 import {
   GOAL_TYPES,
   getGoalKnowledge,
@@ -47,8 +48,11 @@ function resolveRuntimeProfile({
   if (requestedFramework === "generic-static-html" || requestedFramework === "static-html" || /\b(?:static html|plain html|without framework)\b/.test(intentText)) {
     return { ...getProfileKnowledge("generic-static-html"), id: "generic-static-html", label: "Generic Static HTML", framework: "Static", packageManager: "none", canBootstrap: true, resolvedBy: "intent" };
   }
-  if (workspaceState?.hasReactVite || goalType === GOAL_TYPES.SAAS_APP || goalType === GOAL_TYPES.DASHBOARD || goalType === GOAL_TYPES.ADMIN_PANEL || goalType === GOAL_TYPES.LANDING_PAGE || goalType === GOAL_TYPES.FULLSTACK_APP) {
+  if (workspaceState?.hasReactVite || goalType === GOAL_TYPES.DASHBOARD || goalType === GOAL_TYPES.ADMIN_PANEL || goalType === GOAL_TYPES.FULLSTACK_APP || /\b(?:dashboard|admin|frontend)\b/.test(intentText)) {
     return { ...getProfileKnowledge("react-vite-ts"), id: "react-vite-ts", label: "React + Vite + TypeScript", framework: "React/Vite", packageManager: "npm", canBootstrap: true, resolvedBy: "goal" };
+  }
+  if (goalType === GOAL_TYPES.LANDING_PAGE) {
+    return { ...getProfileKnowledge("generic-static-html"), id: "generic-static-html", label: "Generic Static HTML", framework: "Static", packageManager: "none", canBootstrap: false, resolvedBy: "goal" };
   }
   if (goalType === GOAL_TYPES.API_SERVER) {
     return { ...getProfileKnowledge("node-express"), id: "node-express", label: "Node + Express", framework: "Express", packageManager: "npm", canBootstrap: true, resolvedBy: "goal" };
@@ -176,6 +180,18 @@ export function createRuntimePlan({
     const validationPlan = { commands: [], checks: [{ type: "file-existence", files: Array.isArray(projectIntent?.requestedFiles) ? projectIntent.requestedFiles : [] }], skipped: [], strategy: "file-existence", source: "read-only" };
     const repairPlan = { repairType: "none", confidence: 0.25, action: "defer_until_failure", tool: null, args: {}, retryCommand: null, goalType, profileId: "read-only", fallbackCommand: null };
     const filePlan = [];
+    const recommendationPipeline = {
+      projectStructure,
+      featurePlan,
+      uiPlan,
+      componentPlan
+    };
+    const executionPipeline = {
+      filePlan,
+      executionPlan,
+      validationPlan,
+      repairPlan
+    };
     const logs = [
       { event: "PROJECT_STRUCTURE_PLAN_CREATED", goalType },
       { event: "FEATURE_PLAN_CREATED", goalType },
@@ -184,7 +200,9 @@ export function createRuntimePlan({
       { event: "FILE_PLAN_CREATED", goalType },
       { event: "EXECUTION_STRATEGY_CREATED", goalType },
       { event: "VALIDATION_STRATEGY_SELECTED", goalType },
-      { event: "REPAIR_STRATEGY_CREATED", goalType }
+      { event: "REPAIR_STRATEGY_CREATED", goalType },
+      { event: "RECOMMENDATION_PIPELINE_CREATED", goalType },
+      { event: "EXECUTION_PIPELINE_CREATED", goalType }
     ];
     logEvent("PROJECT_STRUCTURE_PLAN_CREATED", { goalType, profileId: "read-only", fileCount: 0, directoryCount: 0 });
     logEvent("FEATURE_PLAN_CREATED", { goalType, featureCount: featurePlan.features.length, featureOrder: featurePlan.featureOrder });
@@ -194,6 +212,8 @@ export function createRuntimePlan({
     logEvent("EXECUTION_STRATEGY_CREATED", { goalType, installCommands: [], buildCommands: [], runCommands: [] });
     logEvent("VALIDATION_STRATEGY_SELECTED", { goalType, strategy: "file-existence", commands: [], skipped: [] });
     logEvent("REPAIR_STRATEGY_CREATED", { goalType, repairType: "none", action: "defer_until_failure", retryCommand: null });
+    logEvent("RECOMMENDATION_PIPELINE_CREATED", { goalType, recommendationCount: 0 });
+    logEvent("EXECUTION_PIPELINE_CREATED", { goalType, executionFileCount: 0, validationCommandCount: 0 });
     return {
       goalType,
       targetProfile,
@@ -201,8 +221,10 @@ export function createRuntimePlan({
       featurePlan,
       uiPlan,
       componentPlan,
+      recommendationPipeline,
       filePlan,
       executionPlan,
+      executionPipeline,
       validationPlan,
       repairPlan,
       logs,
@@ -272,6 +294,18 @@ export function createRuntimePlan({
     fallbackCommand: executionPlan.validationCommands[0] || null
   };
   const filePlan = normalizeFilePlan(projectStructure, goalType, targetProfile?.id || "");
+  const recommendationPipeline = {
+    projectStructure,
+    featurePlan,
+    uiPlan,
+    componentPlan
+  };
+  const executionPipeline = {
+    filePlan,
+    executionPlan,
+    validationPlan,
+    repairPlan
+  };
 
   logEvent("PROJECT_STRUCTURE_PLAN_CREATED", {
     goalType,
@@ -318,6 +352,15 @@ export function createRuntimePlan({
     action: repairPlan.action,
     retryCommand: repairPlan.retryCommand
   });
+  logEvent("RECOMMENDATION_PIPELINE_CREATED", {
+    goalType,
+    recommendationCount: Array.isArray(projectStructure.files) ? projectStructure.files.length : 0
+  });
+  logEvent("EXECUTION_PIPELINE_CREATED", {
+    goalType,
+    executionFileCount: filePlan.length,
+    validationCommandCount: validationPlan.commands.length
+  });
 
   const logs = [
     { event: "PROJECT_STRUCTURE_PLAN_CREATED", goalType },
@@ -327,7 +370,9 @@ export function createRuntimePlan({
     { event: "FILE_PLAN_CREATED", goalType },
     { event: "EXECUTION_STRATEGY_CREATED", goalType },
     { event: "VALIDATION_STRATEGY_SELECTED", goalType },
-    { event: "REPAIR_STRATEGY_CREATED", goalType }
+    { event: "REPAIR_STRATEGY_CREATED", goalType },
+    { event: "RECOMMENDATION_PIPELINE_CREATED", goalType },
+    { event: "EXECUTION_PIPELINE_CREATED", goalType }
   ];
 
   return {
@@ -337,8 +382,10 @@ export function createRuntimePlan({
     featurePlan,
     uiPlan,
     componentPlan,
+    recommendationPipeline,
     filePlan,
     executionPlan,
+    executionPipeline,
     validationPlan,
     repairPlan,
     logs,
@@ -352,7 +399,15 @@ export function createRuntimePlan({
   };
 }
 
-export function buildRuntimeTaskGraph(runtimePlan = {}, {
+function collectFileTargets(filePlan = []) {
+  return unique((Array.isArray(filePlan) ? filePlan : []).map(file => String(file?.path || file?.file || "").replace(/\\/g, "/").trim()).filter(Boolean));
+}
+
+function collectCommandTargets(commands = []) {
+  return unique((Array.isArray(commands) ? commands : []).map(command => String(command || "").trim()).filter(Boolean));
+}
+
+export function buildRuntimeProposalGraph(runtimePlan = {}, {
   objective = "",
   projectIntent = {},
   workspaceState = {},
@@ -383,55 +438,154 @@ export function buildRuntimeTaskGraph(runtimePlan = {}, {
     criteria
   });
 
-  if (!bootstrapGraph?.tasks?.length && !runtimePlan?.targetProfile?.canBootstrap) {
+  if (!bootstrapGraph?.proposals?.length && !runtimePlan?.targetProfile?.canBootstrap) {
     return {
       profileId: runtimePlan?.targetProfile?.id || null,
       intent: projectIntent,
       objective,
-      tasks: [],
+      proposals: [],
       validationSkipped: Array.isArray(runtimePlan?.validationPlan?.skipped) ? runtimePlan.validationPlan.skipped : []
     };
   }
 
-  const tasks = Array.isArray(bootstrapGraph.tasks) ? [...bootstrapGraph.tasks] : [];
-  const writeTaskIds = tasks.filter(task => task.tool === "WRITE_FILE").map(task => task.id);
-  const analysisTaskId = `analyze:${runtimePlan?.targetProfile?.id || "workspace"}`;
-  tasks.unshift({
-    id: analysisTaskId,
-    kind: "CODING",
-    goal: "ANALYZE_WORKSPACE",
-    tool: "LIST_FILES",
-    toolArgs: { path: "." },
-    dependencies: [],
-    priority: 100,
-    stage: "ANALYZE_WORKSPACE"
-  });
-  for (const task of tasks) {
-    if (task.id === analysisTaskId) continue;
-    const deps = Array.isArray(task.dependencies) ? task.dependencies : [];
-    if (!deps.includes(analysisTaskId)) {
-      task.dependencies = [analysisTaskId, ...deps];
+  const registry = createProposalRegistry();
+  const validationSkipped = Array.isArray(bootstrapGraph.validationSkipped) ? bootstrapGraph.validationSkipped : Array.isArray(runtimePlan?.validationPlan?.skipped) ? runtimePlan.validationPlan.skipped : [];
+
+  registry.add(createProposal({
+    proposalType: "PROJECT_STRUCTURE",
+    source: "runtime-plan",
+    proposalSource: "runtime-plan",
+    confidence: 0.88,
+    required: true,
+    description: `Project structure for ${runtimePlan?.goalType || "workspace"}`,
+    suggestedFiles: collectFileTargets(runtimePlan?.projectStructure?.files || []),
+    verificationStatus: "unverified",
+    promotionDecision: "recommendation",
+    evidenceRefs: [`goal:${runtimePlan?.goalType || "unknown"}`],
+    metadata: {
+      goalType: runtimePlan?.goalType || null,
+      projectStructure: runtimePlan?.projectStructure || null,
+      verificationStatus: "unverified",
+      promotionDecision: "recommendation"
     }
-  }
-  for (const task of tasks) {
-    if (task.tool === "RUN_TERMINAL") {
-      const command = String(task.toolArgs?.command || "");
-      if (/install/i.test(command)) {
-        task.stage = "INSTALL_DEPENDENCIES";
-        task.dependencies = [analysisTaskId, ...writeTaskIds];
-      } else if (/build|check|test|analy[sz]e|lint|compile|php -l|dotnet build|node --check/i.test(command)) {
-        task.stage = /build/i.test(command) ? "VALIDATE_BUILD" : "VALIDATE_BUILD";
-        task.dependencies = [analysisTaskId, ...writeTaskIds, ...tasks.filter(item => item.tool === "RUN_TERMINAL" && /install/i.test(String(item.toolArgs?.command || ""))).map(item => item.id)];
-      }
+  }));
+
+  registry.add(createProposal({
+    proposalType: "FEATURE",
+    source: "runtime-plan",
+    proposalSource: "runtime-plan",
+    confidence: 0.82,
+    required: true,
+    description: `Feature proposal for ${runtimePlan?.goalType || "workspace"}`,
+    suggestedFiles: unique((Array.isArray(runtimePlan?.featurePlan?.features) ? runtimePlan.featurePlan.features : []).flatMap(feature => Array.isArray(feature.files) ? feature.files : []).map(file => String(file || "").replace(/\\/g, "/").trim()).filter(Boolean)),
+    verificationStatus: "unverified",
+    promotionDecision: "recommendation",
+    evidenceRefs: [`goal:${runtimePlan?.goalType || "unknown"}`],
+    metadata: {
+      goalType: runtimePlan?.goalType || null,
+      featureOrder: runtimePlan?.featurePlan?.featureOrder || [],
+      verificationStatus: "unverified",
+      promotionDecision: "recommendation"
     }
+  }));
+
+  registry.add(createProposal({
+    proposalType: "UI",
+    source: "runtime-plan",
+    proposalSource: "runtime-plan",
+    confidence: 0.8,
+    required: true,
+    description: `UI proposal for ${runtimePlan?.goalType || "workspace"}`,
+    suggestedFiles: unique([
+      ...(Array.isArray(runtimePlan?.uiPlan?.pages) ? runtimePlan.uiPlan.pages.map(page => page.path) : []),
+      ...(Array.isArray(runtimePlan?.uiPlan?.layouts) ? runtimePlan.uiPlan.layouts.map(layout => layout.path) : []),
+      ...(Array.isArray(runtimePlan?.uiPlan?.widgets) ? runtimePlan.uiPlan.widgets.map(widget => widget.path) : [])
+    ].map(file => String(file || "").replace(/\\/g, "/").trim()).filter(Boolean)),
+    verificationStatus: "unverified",
+    promotionDecision: "recommendation",
+    evidenceRefs: [`goal:${runtimePlan?.goalType || "unknown"}`],
+    metadata: {
+      goalType: runtimePlan?.goalType || null,
+      uiPlan: runtimePlan?.uiPlan || null,
+      verificationStatus: "unverified",
+      promotionDecision: "recommendation"
+    }
+  }));
+
+  registry.add(createProposal({
+    proposalType: "COMPONENT",
+    source: "runtime-plan",
+    proposalSource: "runtime-plan",
+    confidence: 0.8,
+    required: true,
+    description: `Component proposal for ${runtimePlan?.goalType || "workspace"}`,
+    suggestedFiles: unique((Array.isArray(runtimePlan?.componentPlan?.components) ? runtimePlan.componentPlan.components : []).map(component => String(component.path || "").replace(/\\/g, "/").trim()).filter(Boolean)),
+    verificationStatus: "unverified",
+    promotionDecision: "recommendation",
+    evidenceRefs: [`goal:${runtimePlan?.goalType || "unknown"}`],
+    metadata: {
+      goalType: runtimePlan?.goalType || null,
+      componentPlan: runtimePlan?.componentPlan || null,
+      verificationStatus: "unverified",
+      promotionDecision: "recommendation"
+    }
+  }));
+
+  registry.add(createProposal({
+    proposalType: "EXECUTION",
+    source: "runtime-plan",
+    proposalSource: "runtime-plan",
+    confidence: 0.83,
+    required: true,
+    description: `Execution proposal for ${runtimePlan?.goalType || "workspace"}`,
+    suggestedCommands: collectCommandTargets([
+      ...(runtimePlan?.installCommands || []),
+      ...(runtimePlan?.buildCommands || []),
+      ...(runtimePlan?.runCommands || [])
+    ]),
+    verificationStatus: "unverified",
+    promotionDecision: "recommendation",
+    evidenceRefs: [`goal:${runtimePlan?.goalType || "unknown"}`],
+    metadata: {
+      goalType: runtimePlan?.goalType || null,
+      executionPlan: runtimePlan?.executionPlan || null,
+      verificationStatus: "unverified",
+      promotionDecision: "recommendation"
+    }
+  }));
+
+  registry.add(createProposal({
+    proposalType: "VALIDATION",
+    source: "runtime-plan",
+    proposalSource: "runtime-plan",
+    confidence: 0.86,
+    required: true,
+    description: `Validation proposal for ${runtimePlan?.goalType || "workspace"}`,
+    suggestedCommands: collectCommandTargets(runtimePlan?.validationCommands || []),
+    suggestedValidation: collectCommandTargets(runtimePlan?.validationCommands || []),
+    verificationStatus: "unverified",
+    promotionDecision: "recommendation",
+    evidenceRefs: [`goal:${runtimePlan?.goalType || "unknown"}`],
+    metadata: {
+      goalType: runtimePlan?.goalType || null,
+      validationPlan: runtimePlan?.validationPlan || null,
+      verificationStatus: "unverified",
+      promotionDecision: "recommendation"
+    }
+  }));
+
+  for (const proposal of Array.isArray(bootstrapGraph.proposals) ? bootstrapGraph.proposals : []) {
+    registry.add(proposal);
   }
 
   return {
     profileId: runtimePlan?.targetProfile?.id || null,
     intent: projectIntent,
     objective,
-    tasks,
-    validationSkipped: Array.isArray(bootstrapGraph.validationSkipped) ? bootstrapGraph.validationSkipped : Array.isArray(runtimePlan?.validationPlan?.skipped) ? runtimePlan.validationPlan.skipped : [],
+    proposals: registry.list(),
+    validationSkipped,
     runtimePlan
   };
 }
+
+export const buildRuntimeTaskGraph = buildRuntimeProposalGraph;

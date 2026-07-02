@@ -18,22 +18,12 @@ export function planExecutionStrategy({
   failure = null
 } = {}) {
   const profileId = String(bootstrapProfile?.id || bootstrapProfile?.framework || "").trim();
-  const profileKnowledge = getProfileKnowledge(profileId);
   const validationKnowledge = getValidationKnowledge({ profileId, workspaceState, toolAvailability, goalType });
   const repairKnowledge = getRepairKnowledge({ failure, goalType, profileId });
 
-  const installCommands = orderedCommands([
-    ...(profileKnowledge.installCommands || []),
-    ...(Array.isArray(projectScan?.installCommands) ? projectScan.installCommands : [])
-  ]);
-  const buildCommands = orderedCommands([
-    ...(profileKnowledge.buildCommands || []),
-    ...(Array.isArray(projectScan?.buildCommands) ? projectScan.buildCommands : [])
-  ]);
-  const runCommands = orderedCommands([
-    ...(profileKnowledge.runCommands || []),
-    ...(Array.isArray(projectScan?.runCommands) ? projectScan.runCommands : [])
-  ]);
+  const installCommands = orderedCommands(Array.isArray(projectScan?.installCommands) ? projectScan.installCommands : []);
+  const buildCommands = orderedCommands(Array.isArray(projectScan?.buildCommands) ? projectScan.buildCommands : []);
+  const runCommands = orderedCommands(Array.isArray(projectScan?.runCommands) ? projectScan.runCommands : []);
   const validationCommands = orderedCommands([
     ...validationKnowledge.commands,
     ...(Array.isArray(projectScan?.testCommands) ? projectScan.testCommands : [])
@@ -41,7 +31,7 @@ export function planExecutionStrategy({
 
   const validationStrategy = {
     type: validationCommands.length > 0 ? "command" : "file-existence",
-    source: validationCommands.length > 0 ? "bootstrap-profile" : "workspace-files",
+    source: validationCommands.length > 0 ? "workspace-evidence" : "workspace-files",
     commands: validationCommands,
     checks: validationKnowledge.checks,
     skipped: validationKnowledge.skipped

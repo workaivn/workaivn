@@ -1,5 +1,6 @@
 import { toArray, toPosix, unique, collectPathLike, scoreToConfidence } from "./utils.js";
 import { EXECUTION_TASK_KIND, EXECUTION_TASK_STATUS } from "./types.js";
+import { createExecutionPlanner } from "../../agent/executionPlanner/executionPlanner.js";
 
 function pushRecord(records, seen, record) {
   const path = toPosix(record.path || record.targetPath || record.file || record.entryPoint || record.sourcePath || "");
@@ -371,6 +372,28 @@ function createFinalTask(dependencies = []) {
 }
 
 export function buildExecutionTasks(input = {}) {
+  const executionPlanner = createExecutionPlanner({
+    objective: String(input.prompt || input.objective || input.blueprint?.goal || input.featureBlueprint?.goal || "").trim(),
+    verifiedPlanningContext: input.verifiedPlanningContext || input.planningContext || null,
+    knowledgeGraph: input.knowledgeGraph || null,
+    canonicalFileUniverse: Array.isArray(input.canonicalFileUniverse) ? input.canonicalFileUniverse : [],
+    plannerPolicies: input.plannerPolicies || {},
+    projectIntent: input.projectIntent || {},
+    projectScan: input.projectScan || input.workspaceState?.scan || {}
+  });
+  console.log('[LEGACY_PLANNER_REDIRECT]', {
+    source: 'buildExecutionTasks',
+    target: 'createExecutionPlanner',
+    taskCount: executionPlanner.tasks.length
+  });
+  return {
+    tasks: executionPlanner.tasks,
+    evidence: [],
+    allowedPaths: unique(executionPlanner.tasks.flatMap(task => Array.isArray(task.targetFiles) ? task.targetFiles : [])),
+    inspectId: 'execution-planner',
+    finalTaskId: executionPlanner.tasks.at(-1)?.id || null
+  };
+
   const evidence = collectExecutionEvidence(input);
   const implementation = createImplementationTasks(evidence, input);
   const validationPlan = input.validationPlan || {};

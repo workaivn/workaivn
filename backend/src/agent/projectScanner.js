@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { listWorkspaceFiles } from "./workspace.js";
+import { createProjectScanSnapshot } from "./context/ProjectScanSnapshot.js";
 
 function normalizePath(value) {
   return String(value || "").replace(/\\/g, "/").trim();
@@ -12,6 +13,31 @@ function uniqueSorted(values) {
 function hasAnyFile(files, candidates) {
   const lower = new Set(files.map(file => normalizePath(file).toLowerCase()));
   return candidates.some(candidate => lower.has(normalizePath(candidate).toLowerCase()));
+}
+
+function inferPackageManagerEvidence(files = [], pkg = {}) {
+  const lower = new Set((Array.isArray(files) ? files : []).map(file => normalizePath(file).toLowerCase()));
+  const packageManagerField = String(pkg?.packageManager || "").trim().toLowerCase();
+  const packageManagerFromField = packageManagerField ? packageManagerField.split(/[@\s]/)[0] : "";
+  const hasPackageJson = lower.has("package.json");
+
+  if (lower.has("package-lock.json")) {
+    return { packageManager: "npm", packageManagerVerified: true, source: "package-lock.json" };
+  }
+  if (lower.has("pnpm-lock.yaml")) {
+    return { packageManager: "pnpm", packageManagerVerified: true, source: "pnpm-lock.yaml" };
+  }
+  if (lower.has("yarn.lock")) {
+    return { packageManager: "yarn", packageManagerVerified: true, source: "yarn.lock" };
+  }
+  if (lower.has("bun.lockb") || lower.has("bun.lock")) {
+    return { packageManager: "bun", packageManagerVerified: true, source: "bun.lock" };
+  }
+  if (hasPackageJson && ["npm", "pnpm", "yarn", "bun"].includes(packageManagerFromField)) {
+    return { packageManager: packageManagerFromField, packageManagerVerified: true, source: "package.json#packageManager" };
+  }
+
+  return { packageManager: null, packageManagerVerified: false, source: null };
 }
 
 async function readJsonFile(filePath) {
@@ -110,6 +136,9 @@ function detectBackendEvidence(files, pkg) {
 
 function buildScriptCommands(pkg = {}, packageManager = "npm") {
   const scripts = pkg.scripts || {};
+  const resolvedPackageManager = ["npm", "pnpm", "yarn", "bun"].includes(String(packageManager || "").trim())
+    ? String(packageManager || "").trim()
+    : "npm";
   const commands = {
     testCommands: [],
     buildCommands: [],
@@ -118,12 +147,12 @@ function buildScriptCommands(pkg = {}, packageManager = "npm") {
 
   const runForScript = scriptName => {
     if (!scripts[scriptName]) return null;
-    if (packageManager === "npm") {
+    if (resolvedPackageManager === "npm") {
       if (scriptName === "test") return "npm test";
       if (scriptName === "start") return "npm start";
       return `npm run ${scriptName}`;
     }
-    return `${packageManager} ${scriptName}`;
+    return `${resolvedPackageManager} ${scriptName}`;
   };
 
   for (const scriptName of Object.keys(scripts)) {
@@ -299,7 +328,8 @@ export async function scanProject(workspaceRoot, { limit = 5000 } = {}) {
   const lower = new Set(files.map(f => f.toLowerCase()));
   const layout = detectWorkspaceLayout(workspaceRoot, files);
   const pkg = await readWorkspacePackageJson(workspaceRoot);
-  const packageManager = lower.has("yarn.lock") ? "yarn" : lower.has("pnpm-lock.yaml") ? "pnpm" : "npm";
+  const packageManagerEvidence = inferPackageManagerEvidence(files, pkg || {});
+  const packageManager = packageManagerEvidence.packageManager;
   const reactEvidence = await detectReactEvidence(workspaceRoot, files, pkg || {});
   const backendSignals = detectBackendEvidence(files, pkg || {});
   const projectType = detectProjectType({ files, pkg: pkg || {}, reactEvidence, backendEvidence: backendSignals.backendEvidence });
@@ -316,6 +346,7 @@ export async function scanProject(workspaceRoot, { limit = 5000 } = {}) {
   console.log("[PROJECT_SCAN_PACKAGE]", {
     packageJsonFound: !!pkg,
     packageManager,
+    packageManagerVerified: packageManagerEvidence.packageManagerVerified,
     scripts: Object.keys(pkg?.scripts || {})
   });
   console.log("[PROJECT_SCAN_DETECTION]", {
@@ -328,10 +359,15 @@ export async function scanProject(workspaceRoot, { limit = 5000 } = {}) {
     runCommands
   });
 
-  return {
+  return createProjectScanSnapshot({
     workspaceRoot,
     projectType,
     packageManager,
+    packageManagerVerified: packageManagerEvidence.packageManagerVerified,
+    packageManagerSource: packageManagerEvidence.source,
+    packageJsonFound: !!pkg,
+    packageJsonPath: lower.has("package.json") ? "package.json" : null,
+    scripts: Object.keys(pkg?.scripts || {}),
     entryFiles,
     styleFiles,
     testCommands,
@@ -341,6 +377,7 @@ export async function scanProject(workspaceRoot, { limit = 5000 } = {}) {
     sourceRoots: layout.sourceRoots,
     moduleRoots: layout.moduleRoots,
     testRoots: layout.testRoots,
-    existingTopLevelDirs: layout.existingTopLevelDirs
-  };
+    existingTopLevelDirs: layout.existingTopLevelDirs,
+    discoveredFiles: files
+  }, { workspaceRoot });
 }

@@ -2,6 +2,7 @@ import { TaskStatus } from './plannerTypes.js';
 import { Task } from './task.js';
 import { executeTool } from '../toolExecutor.js';
 import { generateRecoveryPlan, determineRecoveryType, inferImplementationFromTestContent, buildRecoveryAssertionContext, analyzeValidationFailure, selectBestRecoveryFrame, assertValidRecoveryTaskPath, extractWorkspaceRelativeStacktracePath } from './recoveryPlanner.js';
+import { approvePlannerAuthority } from '../executionPlanner/plannerAuthorityFirewall.js';
 import { evaluateExecutionStrategy } from '../strategy/index.js';
 import { normalizeWorkspaceRelativePath } from '../workspace.js';
 import { generateId } from './plannerUtils.js';
@@ -474,7 +475,9 @@ function expandTerminalRecoveryAfterTestRead(planner, task, result = {}) {
       testPath,
       recoveryAssertionContext
     },
-    dependencies: []
+    dependencies: [],
+    authoritySource: 'validated_recovery',
+    authorityState: 'candidate'
   });
 
   const repairTask = new Task({
@@ -490,7 +493,9 @@ function expandTerminalRecoveryAfterTestRead(planner, task, result = {}) {
       sourceTestPath: testPath,
       recoveryAssertionContext
     },
-    dependencies: []
+    dependencies: [],
+    authoritySource: 'validated_recovery',
+    authorityState: 'candidate'
   });
 
   const rerunTask = new Task({
@@ -499,7 +504,9 @@ function expandTerminalRecoveryAfterTestRead(planner, task, result = {}) {
     goal: `Recovery: run command${failedCommand ? ` ${failedCommand}` : ''}`,
     tool: 'RUN_TERMINAL',
     toolArgs: { command: failedCommand },
-    dependencies: []
+    dependencies: [],
+    authoritySource: 'validated_recovery',
+    authorityState: 'candidate'
   });
 
   const addedIds = planner.addRecoveryTasks(task.id, [implReadTask, repairTask, rerunTask]);
@@ -548,7 +555,9 @@ function expandTerminalRecoveryAfterModuleLoadRead(planner, task, result = {}) {
       stacktrace: task.toolArgs?.validationContext?.stderr || task.toolArgs?.validationContext?.stdout || '',
       failedCommand
     },
-    dependencies: []
+    dependencies: [],
+    authoritySource: 'validated_recovery',
+    authorityState: 'candidate'
   });
 
   const rerunTask = new Task({
@@ -557,7 +566,9 @@ function expandTerminalRecoveryAfterModuleLoadRead(planner, task, result = {}) {
     goal: `Recovery: run command${failedCommand ? ` ${failedCommand}` : ''}`,
     tool: 'RUN_TERMINAL',
     toolArgs: { command: failedCommand },
-    dependencies: []
+    dependencies: [],
+    authoritySource: 'validated_recovery',
+    authorityState: 'candidate'
   });
 
   const addedIds = planner.addRecoveryTasks(task.id, [repairTask, rerunTask]);
@@ -573,13 +584,41 @@ function expandTerminalRecoveryAfterModuleLoadRead(planner, task, result = {}) {
 
 export function tryRecovery(planner, failedTask, context = {}) {
   if (!planner || !failedTask) return { recoveryStarted: false };
+  if (planner.executionPlanner?.graph && typeof planner.executionPlanner.graph.retryUnit === 'function') {
+    const graph = planner.executionPlanner.graph;
+    const unitId = failedTask.id || null;
+    if (unitId && graph.getUnit(unitId)) {
+      console.log('[TRY_RECOVERY_CANONICAL_PATH]', {
+        taskId: unitId,
+        source: 'executionPlanner.graph.retryUnit'
+      });
+      graph.retryUnit(unitId);
+      console.log('[LEGACY_PLANNER_REDIRECT]', {
+        source: 'tryRecovery',
+        target: 'ExecutionPlanner.graph.retryUnit',
+        taskId: unitId
+      });
+      return {
+        recoveryStarted: false,
+        retryHandled: true,
+        strategyDecision: {
+          decision: 'Retry',
+          owner: 'EXECUTION_PLANNER',
+          retryAllowed: true,
+          reason: 'ExecutionPlanner owns retry scheduling'
+        }
+      };
+    }
+  }
 
   const strategyDecision = evaluateExecutionStrategy({
     failedTask,
     validationResult: context.validationContext || {},
     plannerMetadata: {
       parallelAllowed: planner?.parallelMode !== false,
-      requiredCommands: context.requiredFiles || planner?.requiredCommands || []
+      requiredCommands: context.requiredFiles || planner?.requiredCommands || [],
+      taskSource: failedTask.source || null,
+      classifierRequestedFiles: context.classifierRequestedFiles || []
     },
     workspaceMetadata: {
       workspaceRoot: context.workspaceRoot || '',
@@ -591,6 +630,7 @@ export function tryRecovery(planner, failedTask, context = {}) {
       frameworkSetupAllowed: context.frameworkSetupAllowed === true,
       validationRequired: context.validationRequired !== false
     },
+    workspaceState: context.workspaceState || null,
     projectScan: context.projectScan || {},
     requiredCommands: context.requiredCommands || planner?.requiredCommands || []
   });
@@ -603,6 +643,7 @@ export function tryRecovery(planner, failedTask, context = {}) {
     packageRequired: strategyDecision.packageRequired,
     commandRequired: strategyDecision.commandRequired,
     recoveryRequired: strategyDecision.recoveryRequired,
+    replanRequired: strategyDecision.replanRequired,
     reason: strategyDecision.reason
   });
 
@@ -614,6 +655,58 @@ export function tryRecovery(planner, failedTask, context = {}) {
       strategyDecision
     };
   }
+
+  // Phase 4.24-HF1: Handle REPLAN decisions — remove invalid prerequisite and continue
+  if (strategyDecision.decision === 'Replan') {
+    console.log('[PLANNER_REPLAN_START]', {
+      taskId: failedTask.id,
+      failedPath: strategyDecision.failedPath,
+      assumptionSource: strategyDecision.assumptionSource,
+      reason: strategyDecision.reason,
+      suggestedAction: strategyDecision.suggestedAction
+    });
+    const failedPath = strategyDecision.failedPath || failedTask.toolArgs?.path || '';
+    const suggestedAction = strategyDecision.suggestedAction || 'REMOVE_INVALID_PREREQUISITE';
+
+    if (suggestedAction === 'REMOVE_INVALID_PREREQUISITE' || suggestedAction === 'REPLACE_INVALID_PREREQUISITE') {
+      console.log('[PLANNER_REPLAN_REMOVE_PREREQUISITE]', {
+        taskId: failedTask.id,
+        failedPath,
+        suggestedAction
+      });
+    }
+
+    const dependents = planner.graph ? planner.graph.successors(failedTask.id) : [];
+    if (dependents.length > 0) {
+      console.log('[PLANNER_REPLAN_DEPENDENCY_RELEASED]', {
+        taskId: failedTask.id,
+        releasedTasks: dependents,
+        count: dependents.length
+      });
+    }
+
+    if (suggestedAction === 'REMOVE_INVALID_PREREQUISITE') {
+      planner.markBlocked(failedTask.id, 'INVALID_PREREQUISITE_REMOVED');
+    } else {
+      planner.markFailure(failedTask.id, 'INVALID_PREREQUISITE');
+    }
+
+    console.log('[PLANNER_REPLAN_DONE]', {
+      taskId: failedTask.id,
+      failedPath,
+      suggestedAction,
+      dependentsReleased: dependents.length
+    });
+
+    return {
+      recoveryStarted: false,
+      replanStarted: true,
+      replanAction: suggestedAction,
+      failedPath,
+      strategyDecision
+    };
+  }
+
   if (strategyDecision.decision === 'Block' && failedTask.tool !== 'RUN_TERMINAL') {
     return {
       recoveryStarted: false,
@@ -703,15 +796,60 @@ export function tryRecovery(planner, failedTask, context = {}) {
     requiredFiles: context.requiredFiles || [],
     workspaceRoot: context.workspaceRoot || ''
   });
-  if (!plan || plan.tasks.length === 0) {
-    console.log('[PLANNER_RECOVERY_SKIPPED]', { id: failedTask.id, reason: 'Empty recovery plan' });
-    return { recoveryStarted: false, strategyDecision };
+  const recoveryCandidates = Array.isArray(plan?.tasks) ? plan.tasks : [];
+  if (!plan || recoveryCandidates.length === 0) {
+    console.log('[LEGACY_RECOVERY_BLOCKED]', {
+      taskId: failedTask.id,
+      reason: 'Empty recovery candidate plan'
+    });
+    return { recoveryStarted: false, recoveryBlocked: true, reason: 'EMPTY_RECOVERY_CANDIDATE_PLAN', strategyDecision };
   }
 
+  console.log('[TRY_RECOVERY_FIREWALL_PATH]', {
+    taskId: failedTask.id,
+    recoveryType,
+    candidateCount: recoveryCandidates.length
+  });
+
+  const approvedCandidates = [];
+  for (const candidate of recoveryCandidates) {
+    const approval = approvePlannerAuthority(candidate, planner.authorityContext || {});
+    if (!approval.valid || approval.candidate?.approvedByFirewall !== true || !approval.candidate?.approvalId || !Array.isArray(approval.candidate?.canonicalTargets) || approval.candidate.canonicalTargets.length === 0) {
+      console.log('[RECOVERY_AUTHORITY_REJECTED]', {
+        taskId: failedTask.id,
+        candidateId: candidate?.id || null,
+        reason: approval.validation?.reason || 'recovery candidate rejected'
+      });
+      console.log('[LEGACY_RECOVERY_BLOCKED]', {
+        taskId: failedTask.id,
+        reason: 'Recovery candidate rejected by firewall'
+      });
+      return {
+        recoveryStarted: false,
+        recoveryBlocked: true,
+        reason: approval.validation?.reason || 'RECOVERY_FIREWALL_REJECTED',
+        strategyDecision
+      };
+    }
+    approvedCandidates.push(approval.candidate);
+  }
+
+  console.log('[RECOVERY_AUTHORITY_VALIDATED]', {
+    taskId: failedTask.id,
+    candidateCount: approvedCandidates.length
+  });
+
   // Mark task as RECOVERING and add recovery tasks
-  console.log('[PLANNER_RECOVERY_START]', { id: failedTask.id, kind: failedTask.kind, recoveryType, taskCount: plan.tasks.length });
+  console.log('[PLANNER_RECOVERY_START]', { id: failedTask.id, kind: failedTask.kind, recoveryType, taskCount: approvedCandidates.length });
   planner.markRecovering(failedTask.id);
-  const addedIds = planner.addRecoveryTasks(failedTask.id, plan.tasks);
+  const addedIds = planner.addRecoveryTasks(failedTask.id, approvedCandidates);
+  if (!Array.isArray(addedIds) || addedIds.length === 0) {
+    console.log('[LEGACY_RECOVERY_BLOCKED]', {
+      taskId: failedTask.id,
+      reason: 'No approved recovery tasks were added'
+    });
+    return { recoveryStarted: false, recoveryBlocked: true, reason: 'RECOVERY_TASK_INSERTION_BLOCKED', strategyDecision };
+  }
 
   return { recoveryStarted: true, recoveryTaskIds: addedIds, recoveryPlan: plan, strategyDecision };
 }
@@ -852,7 +990,17 @@ export function notifyToolExecution(planner, toolName, args, result, preferredTa
   }
 
   if (success) {
-    planner.markSuccess(task.id, { tool: toolName, args, result });
+    const writePhase = toolName === 'WRITE_FILE'
+      ? (result?.committed === true || result?.phase === 'COMMITTED' ? 'COMMITTED' : 'READY_TO_COMMIT')
+      : null;
+    planner.markSuccess(task.id, {
+      tool: toolName,
+      args,
+      result,
+      phase: writePhase,
+      committed: toolName === 'WRITE_FILE' ? true : false,
+      path: String(args?.path || args?.file || task?.toolArgs?.path || task?.toolArgs?.file || '').trim()
+    });
     const kind = isRecovery ? 'RECOVERY' : task.kind;
     console.log('[PLANNER_TASK_SUCCESS]', { id: task.id, kind, tool: toolName });
     if (toolName === 'WRITE_FILE') {
@@ -860,6 +1008,8 @@ export function notifyToolExecution(planner, toolName, args, result, preferredTa
         taskId: task.id,
         path: String(args?.path || args?.file || task?.toolArgs?.path || task?.toolArgs?.file || '').trim(),
         status: 'SUCCESS',
+        phase: result?.phase || 'COMMITTED',
+        committed: true,
         reason: result?.changed === false || result?.alreadyUpToDate === true || result?.cached === true ? 'no_change' : 'written'
       };
       if (planner.executionStateRegistry?.logOnce) {
@@ -898,6 +1048,16 @@ export function notifyToolExecution(planner, toolName, args, result, preferredTa
   } else {
     const error = (result?.error || `Tool ${toolName} failed`).slice(0, 200);
     planner.markFailure(task.id, error);
+    if (toolName === 'WRITE_FILE') {
+      planner.executionMemory?.markFailed(task, {
+        tool: toolName,
+        args,
+        failureReason: error,
+        phase: result?.phase || 'COMMIT_FAILED',
+        committed: false,
+        path: String(args?.path || args?.file || task?.toolArgs?.path || task?.toolArgs?.file || '').trim()
+      });
+    }
     const kind = isRecovery ? 'RECOVERY' : task.kind;
     console.log('[PLANNER_TASK_FAILURE]', { id: task.id, kind, tool: toolName, error });
 

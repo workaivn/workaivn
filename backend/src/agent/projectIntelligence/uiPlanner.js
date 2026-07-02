@@ -39,8 +39,9 @@ function buildReactUI(features = [], projectStructure = {}, goalType = GOAL_TYPE
   const isDashboard = goalType === GOAL_TYPES.DASHBOARD || goalType === GOAL_TYPES.ADMIN_PANEL;
   const layoutName = isDashboard ? "DashboardLayout" : "RootLayout";
   const route = isDashboard ? "/dashboard" : "/";
-  const pagePath = projectStructure.profileId === "nextjs-ts" ? "app/page.tsx" : "src/App.tsx";
-  const layoutPath = projectStructure.profileId === "nextjs-ts" ? "app/layout.tsx" : "src/components/layout/Layout.tsx";
+  const hasPathAuthority = Array.isArray(projectStructure?.targetFiles) && projectStructure.targetFiles.length > 0;
+  const pagePath = hasPathAuthority ? (projectStructure.profileId === "nextjs-ts" ? "app/page.tsx" : "src/App.tsx") : null;
+  const layoutPath = hasPathAuthority ? (projectStructure.profileId === "nextjs-ts" ? "app/layout.tsx" : "src/components/layout/Layout.tsx") : null;
   const pages = [
     makePage(isDashboard ? "Dashboard" : "Home", route, pagePath, {
       layout: layoutName,
@@ -77,7 +78,7 @@ function buildReactUI(features = [], projectStructure = {}, goalType = GOAL_TYPE
       ];
 
   for (const [name, kind, path] of widgetDefinitions) {
-    widgets.push(makeWidget(name, { kind, path, shared: /Navbar|Footer|CTASection/.test(name) }));
+    widgets.push(makeWidget(name, { kind, path: hasPathAuthority ? path : null, shared: /Navbar|Footer|CTASection/.test(name) }));
   }
 
   return {
@@ -103,8 +104,9 @@ function buildReactUI(features = [], projectStructure = {}, goalType = GOAL_TYPE
 }
 
 function buildNodeUI(features = [], projectStructure = {}) {
+  const hasPathAuthority = Array.isArray(projectStructure?.targetFiles) && projectStructure.targetFiles.length > 0;
   const pages = [
-    makePage("API", "/health", "src/routes/health.js", { kind: "route", primaryFeature: "health_endpoint" })
+    makePage("API", "/health", hasPathAuthority ? "src/routes/health.js" : null, { kind: "route", primaryFeature: "health_endpoint" })
   ];
   return {
     pages,
@@ -122,12 +124,13 @@ function buildNodeUI(features = [], projectStructure = {}) {
 function buildTextUI(features = [], projectStructure = {}, profileId = "") {
   const isPhp = profileId === "php-plain";
   const entry = isPhp ? "index.php" : "index.html";
+  const hasPathAuthority = Array.isArray(projectStructure?.targetFiles) && projectStructure.targetFiles.length > 0;
   return {
-    pages: [makePage("Home", "/", entry, { kind: "template", primaryFeature: features[0]?.name || "page_shell" })],
+    pages: [makePage("Home", "/", hasPathAuthority ? entry : null, { kind: "template", primaryFeature: features[0]?.name || "page_shell" })],
     layouts: [
       {
         name: isPhp ? "PageShell" : "StaticShell",
-        path: entry,
+        path: hasPathAuthority ? entry : null,
         kind: "template",
         shared: true,
         root: true,
@@ -135,8 +138,8 @@ function buildTextUI(features = [], projectStructure = {}, profileId = "") {
       }
     ],
     widgets: [
-      makeWidget("Header", { kind: "template-part", path: entry, shared: true }),
-      makeWidget("Footer", { kind: "template-part", path: entry, shared: true })
+      makeWidget("Header", { kind: "template-part", path: hasPathAuthority ? entry : null, shared: true }),
+      makeWidget("Footer", { kind: "template-part", path: hasPathAuthority ? entry : null, shared: true })
     ],
     navigation: [],
     flows: [{ name: "entry_to_read", path: entry, labels: ["content", "template"] }],

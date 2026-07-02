@@ -608,6 +608,11 @@ async function executeAgentRun({
     ? result.error || "Agent implementation needs revision"
     : null;
   run.changedFiles = sanitizeRunPayload(sanitizedChanged, { field: 'run.changedFiles' }) || [];
+  run.plannedFiles = sanitizeRunPayload(result.plannedFiles || result.runFileMetadata?.plannedFiles || [], { field: 'run.plannedFiles' }) || [];
+  run.generatedFiles = sanitizeRunPayload(result.generatedFiles || result.runFileMetadata?.generatedFiles || [], { field: 'run.generatedFiles' }) || [];
+  run.validationRejectedFiles = sanitizeRunPayload(result.validationRejectedFiles || result.runFileMetadata?.validationRejectedFiles || [], { field: 'run.validationRejectedFiles' }) || [];
+  run.committedFiles = sanitizeRunPayload(result.committedFiles || result.runFileMetadata?.committedFiles || [], { field: 'run.committedFiles' }) || [];
+  run.failedFiles = sanitizeRunPayload(result.failedFiles || result.runFileMetadata?.failedFiles || [], { field: 'run.failedFiles' }) || [];
   run.validatedFiles = sanitizeRunPayload(sanitizedValidated, { field: 'run.validatedFiles' }) || [];
   run.verifiedExistingFiles = sanitizeRunPayload(sanitizedVerifiedExisting, { field: 'run.verifiedExistingFiles' }) || [];
   run.plannerReadFiles = sanitizeRunPayload(sanitizedPlannerReadFiles, { field: 'run.plannerReadFiles' }) || [];
@@ -622,6 +627,9 @@ async function executeAgentRun({
   run.currentTool = "";
   run.executionSummary = {
     changedFileCount: run.changedFiles.length,
+    committedFileCount: run.committedFiles.length,
+    generatedFileCount: run.generatedFiles.length,
+    validationRejectedFileCount: run.validationRejectedFiles.length,
     validatedFileCount: run.validatedFiles.length,
     verifiedExistingFileCount: run.verifiedExistingFiles.length,
     plannerReadFileCount: run.plannerReadFiles.length,
@@ -629,6 +637,11 @@ async function executeAgentRun({
     eventCount: run.executionEvents.length,
     final: String(sanitizedResult.final || ""),
     qualityScore: result.qualityGate?.score || 0,
+    plannedFiles: sanitizeRunPayload(result.plannedFiles || result.runFileMetadata?.plannedFiles || [], { field: 'run.executionSummary.plannedFiles' }) || [],
+    generatedFiles: sanitizeRunPayload(result.generatedFiles || result.runFileMetadata?.generatedFiles || [], { field: 'run.executionSummary.generatedFiles' }) || [],
+    validationRejectedFiles: sanitizeRunPayload(result.validationRejectedFiles || result.runFileMetadata?.validationRejectedFiles || [], { field: 'run.executionSummary.validationRejectedFiles' }) || [],
+    committedFiles: sanitizeRunPayload(result.committedFiles || result.runFileMetadata?.committedFiles || [], { field: 'run.executionSummary.committedFiles' }) || [],
+    failedFiles: sanitizeRunPayload(result.failedFiles || result.runFileMetadata?.failedFiles || [], { field: 'run.executionSummary.failedFiles' }) || [],
     originalPlannerTasks: sanitizeRunPayload(result.plannerDebugSnapshot?.originalPlannerTasks || null, { field: 'run.executionSummary.originalPlannerTasks' }) || [],
     originalTaskGraph: sanitizeRunPayload(result.plannerDebugSnapshot?.originalTaskGraph || null, { field: 'run.executionSummary.originalTaskGraph' }) || null,
     initialPlannerGraphSnapshot: sanitizeRunPayload(result.plannerDebugSnapshot?.initialPlannerGraphSnapshot || null, { field: 'run.executionSummary.initialPlannerGraphSnapshot' }) || null
@@ -1448,23 +1461,22 @@ export async function getAgentRun(req, res) {
         .filter(Boolean)
     )];
     const filesChanged = (Array.isArray(run.changedFiles) && run.changedFiles.length) ? run.changedFiles : derivedChanged;
-    const patchesApplied = toolCalls
-      .filter(writeOrPatch)
-      .filter(call => !(call?.result?.blocked === true)) // exclude blocked attempts from applied patches
-      .map(call => {
-        const file = call.result?.file || call.args?.file || call.args?.path;
-        const ok = call.success !== false;
-        const blocked = !!call.result?.blocked;
-        const blockedByPolicy = !!call.result?.blockedByPolicy;
-        const reason = call.result?.reason || call.result?.error || null;
-        // Emit patch UI source diagnostics for each included patch
-        try {
-          console.log("[PATCH_UI_SOURCE]", { source: "api_get_run:patchesApplied", file: file || null, iteration: (call.step ?? null) });
-        } catch {}
-        return { file, ok, blocked, blockedByPolicy, reason, tool: call.tool };
-      })
+    const committedFiles = (Array.isArray(run.committedFiles) && run.committedFiles.length) ? run.committedFiles : filesChanged;
+    const patchesApplied = committedFiles
+      .map(file => ({
+        file,
+        ok: true,
+        blocked: false,
+        blockedByPolicy: false,
+        reason: null,
+        tool: "WRITE_FILE",
+        committed: true
+      }))
       .filter(item => !!item.file);
-
+    const validationRejectedFiles = Array.isArray(run.validationRejectedFiles) ? run.validationRejectedFiles : [];
+    const generatedFiles = Array.isArray(run.generatedFiles) ? run.generatedFiles : [];
+    const failedFiles = Array.isArray(run.failedFiles) ? run.failedFiles : [];
+    const plannedFiles = Array.isArray(run.plannedFiles) ? run.plannedFiles : [];
     // Blocked tool attempts (including blocked write/patch) for separate UI rendering
     const blockedTools = toolCalls
       .filter(call => call?.result?.blocked === true)
@@ -1505,6 +1517,11 @@ export async function getAgentRun(req, res) {
         changedFiles: filesChanged,
         filesChanged, // alias for frontend convenience
         patchesApplied,
+        plannedFiles,
+        generatedFiles,
+        validationRejectedFiles,
+        committedFiles,
+        failedFiles,
         terminalCommands,
         toolCalls,
         executionEvents,

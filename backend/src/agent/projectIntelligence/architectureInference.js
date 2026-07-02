@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { inferPrimaryConcepts, inferSurfaceType, normalizeLower, pascalize, slugify, unique } from "./inference.js";
+import { createProposal, createProposalRegistry } from "../planner/proposals/index.js";
 
 function pickFromArray(values = [], fallback = null) {
   const list = unique((Array.isArray(values) ? values : []).filter(Boolean));
@@ -15,22 +16,22 @@ function inferPackageManager(workspaceState = {}, surfaceType = "static-html") {
   if (workspaceState.hasFastapi || workspaceState.hasFlask) return "pip";
   if (workspaceState.hasFlutter) return "pub";
   if (surfaceType === "static-html") return "none";
-  return "npm";
+  return null;
 }
 
 function inferFramework(surfaceType = "static-html", prompt = "", workspaceState = {}) {
   const lowerPrompt = normalizeLower(prompt);
   const scan = workspaceState?.scan || {};
   if (workspaceState.hasNext || scan.projectType === "next" || /\bnext\.?js\b/.test(lowerPrompt)) return "nextjs-ts";
-  if (workspaceState.hasReactVite || scan.projectType === "vite" || /\breact\b|\bvite\b/.test(lowerPrompt)) return "react-vite-ts";
+  if (workspaceState.hasReactVite || scan.projectType === "vite" || /\breact\b|\bvite\b/.test(lowerPrompt) || /\b(?:dashboard|admin|frontend)\b/.test(lowerPrompt)) return "react-vite-ts";
   if (workspaceState.hasNodeExpress || scan.projectType === "express" || /\bapi\b|\bbackend\b|\bserver\b/.test(lowerPrompt)) return "node-express";
   if (workspaceState.hasIndexPhp || workspaceState.hasLaravel || /\bphp\b/.test(lowerPrompt)) return "php-plain";
   if (workspaceState.hasCsproj || /\basp\.?net\b|\baspnet\b|\b\.net\b/.test(lowerPrompt)) return "aspnet-core";
   if (workspaceState.hasFastapi || /\bfastapi\b/.test(lowerPrompt)) return "python-fastapi";
   if (workspaceState.hasFlask || /\bflask\b/.test(lowerPrompt)) return "python-flask";
   if (workspaceState.hasFlutter || /\bflutter\b/.test(lowerPrompt)) return "flutter";
-  if (surfaceType === "static-html") return "generic-static-html";
-  return "react-vite-ts";
+  if (/\b(?:static html|plain html|without framework|landing page|homepage|hero section)\b/.test(lowerPrompt) || surfaceType === "static-html") return "generic-static-html";
+  return "generic-static-html";
 }
 
 function buildValidationCommands({ framework, workspaceState = {}, targetFiles = [] }) {
@@ -40,7 +41,7 @@ function buildValidationCommands({ framework, workspaceState = {}, targetFiles =
   if (framework === "react-vite-ts" || framework === "nextjs-ts") {
     const scan = workspaceState?.scan || {};
     if (scan.buildCommands?.length) commands.push(...scan.buildCommands);
-    else commands.push("npm run build");
+    else if (workspaceState?.hasPackageJson || scan.packageManager) commands.push("npm run build");
   } else if (framework === "node-express") {
     if (lowerFiles.has("src/server.js") || lowerFiles.has("server.js")) {
       commands.push(lowerFiles.has("src/server.js") ? "node --check src/server.js" : "node --check server.js");
@@ -132,6 +133,10 @@ function buildTargetFiles({ framework, surfaceType, concepts = [], workspaceStat
   ["package.json", `src/${concept}.js`].forEach(file => {
     if (!existing.has(normalizeLower(file))) targets.push(file);
   });
+  if (targets.length > 0) return unique(targets);
+  ["index.html", "assets/css/style.css", "assets/js/app.js"].forEach(file => {
+    if (!existing.has(normalizeLower(file))) targets.push(file);
+  });
   return unique(targets);
 }
 
@@ -139,7 +144,7 @@ function buildRunCommands({ framework, targetFiles = [], workspaceState = {} }) 
   const commands = [];
   if (framework === "react-vite-ts" || framework === "nextjs-ts") {
     if (workspaceState?.scan?.runCommands?.length) commands.push(...workspaceState.scan.runCommands);
-    else commands.push("npm run dev");
+    else if (workspaceState?.hasPackageJson || workspaceState?.scan?.packageManager) commands.push("npm run dev");
   } else if (framework === "node-express") {
     commands.push("node src/server.js");
   } else if (framework === "php-plain") {
@@ -160,7 +165,7 @@ function buildRunCommands({ framework, targetFiles = [], workspaceState = {} }) 
 function buildInstallCommands({ framework, workspaceState = {} }) {
   const commands = [];
   if (framework === "react-vite-ts" || framework === "nextjs-ts" || framework === "node-express") {
-    if (!workspaceState.hasPackageJson) commands.push("npm install");
+    if (!workspaceState.hasPackageJson && workspaceState?.scan?.packageManager) commands.push("npm install");
   } else if (framework === "php-plain" && workspaceState.hasLaravel) {
     commands.push("composer install");
   } else if (framework === "python-fastapi" || framework === "python-flask") {
@@ -423,54 +428,71 @@ export function buildBootstrapTaskGraphFromArchitecture(architecture = {}, {
   knowledgeGraph = null,
   criteria = {}
 } = {}) {
-  const tasks = [];
+  const proposals = [];
   const validationSkipped = [];
   const targetFiles = unique(architecture.targetFiles || []);
   const validationCommands = unique(architecture.validationCommands || []);
+  const contentByFile = {};
 
   for (const file of targetFiles) {
-    tasks.push({
-      id: crypto.randomUUID(),
-      kind: "CODING",
-      goal: `Write file: ${file}`,
-      tool: "WRITE_FILE",
-      toolArgs: {
-        path: file,
-        file,
-        content: buildBootstrapContent({
-          file,
-          framework: architecture.framework,
-          concepts: architecture.concepts || [],
-          validationCommands
-        })
-      },
-      dependencies: [],
-      priority: 80
+    contentByFile[file] = buildBootstrapContent({
+      file,
+      framework: architecture.framework,
+      concepts: architecture.concepts || [],
+      validationCommands
     });
   }
 
-  for (const cmd of unique(architecture.installCommands || [])) {
-    tasks.push({
-      id: crypto.randomUUID(),
-      kind: "CODING",
-      goal: `Run command: ${cmd}`,
-      tool: "RUN_TERMINAL",
-      toolArgs: { command: cmd },
-      dependencies: [],
-      priority: 60
-    });
+  const registry = createProposalRegistry();
+  if (targetFiles.length > 0) {
+    registry.add(createProposal({
+      proposalType: "BOOTSTRAP",
+      source: "architecture",
+      proposalSource: "architecture",
+      confidence: 0.92,
+      required: true,
+      description: `Bootstrap ${architecture.framework || "workspace"} starter files`,
+      suggestedFiles: targetFiles,
+      suggestedValidation: validationCommands,
+      verificationStatus: "unverified",
+      promotionDecision: "recommendation",
+      evidenceRefs: [`architecture:${architecture.framework || "unknown"}`],
+      metadata: { framework: architecture.framework || null, contentByFile, verificationStatus: "unverified", promotionDecision: "recommendation" }
+    }));
   }
 
-  for (const cmd of unique(architecture.buildCommands || [])) {
-    tasks.push({
-      id: crypto.randomUUID(),
-      kind: "CODING",
-      goal: `Run command: ${cmd}`,
-      tool: "RUN_TERMINAL",
-      toolArgs: { command: cmd },
-      dependencies: [],
-      priority: 50
-    });
+  const installCommands = unique(architecture.installCommands || []);
+  if (installCommands.length > 0) {
+    registry.add(createProposal({
+      proposalType: "EXECUTION",
+      source: "architecture",
+      proposalSource: "architecture",
+      confidence: 0.8,
+      required: true,
+      description: `Install dependencies for ${architecture.framework || "workspace"}`,
+      suggestedCommands: installCommands,
+      verificationStatus: "unverified",
+      promotionDecision: "recommendation",
+      evidenceRefs: [`architecture:${architecture.framework || "unknown"}`],
+      metadata: { phase: "INSTALL_DEPENDENCIES", verificationStatus: "unverified", promotionDecision: "recommendation" }
+    }));
+  }
+
+  const buildCommands = unique(architecture.buildCommands || []);
+  if (buildCommands.length > 0) {
+    registry.add(createProposal({
+      proposalType: "EXECUTION",
+      source: "architecture",
+      proposalSource: "architecture",
+      confidence: 0.82,
+      required: true,
+      description: `Build ${architecture.framework || "workspace"} project`,
+      suggestedCommands: buildCommands,
+      verificationStatus: "unverified",
+      promotionDecision: "recommendation",
+      evidenceRefs: [`architecture:${architecture.framework || "unknown"}`],
+      metadata: { phase: "VALIDATE_BUILD", verificationStatus: "unverified", promotionDecision: "recommendation" }
+    }));
   }
 
   for (const cmd of validationCommands) {
@@ -478,15 +500,20 @@ export function buildBootstrapTaskGraphFromArchitecture(architecture = {}, {
       validationSkipped.push({ command: cmd, reason: "php executable not found" });
       continue;
     }
-    tasks.push({
-      id: crypto.randomUUID(),
-      kind: "CODING",
-      goal: `Run command: ${cmd}`,
-      tool: "RUN_TERMINAL",
-      toolArgs: { command: cmd },
-      dependencies: [],
-      priority: 40
-    });
+    registry.add(createProposal({
+      proposalType: "VALIDATION",
+      source: "architecture",
+      proposalSource: "architecture",
+      confidence: 0.86,
+      required: true,
+      description: `Validate ${architecture.framework || "workspace"} with ${cmd}`,
+      suggestedCommands: [cmd],
+      suggestedValidation: [cmd],
+      verificationStatus: "unverified",
+      promotionDecision: "recommendation",
+      evidenceRefs: [`architecture:${architecture.framework || "unknown"}`],
+      metadata: { phase: "VALIDATE", verificationStatus: "unverified", promotionDecision: "recommendation" }
+    }));
   }
 
   return {
@@ -494,7 +521,7 @@ export function buildBootstrapTaskGraphFromArchitecture(architecture = {}, {
     profileId: architecture.framework || null,
     intent: projectIntent,
     objective,
-    tasks,
+    proposals: registry.list(),
     validationSkipped
   };
 }

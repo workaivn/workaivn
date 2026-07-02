@@ -6,6 +6,7 @@ export function resolvePackageStrategy({
   workspaceMetadata = {},
   projectScan = {}
 } = {}) {
+  const scanFacts = projectScan?.facts || projectScan || {};
   const classification = String(failureClassification?.classification || failureClassification || 'UNKNOWN');
   const packageManagerAvailable = constraints.packageManagerAvailable !== false;
   const packageEditable = constraints.packageEditable !== false;
@@ -27,7 +28,8 @@ export function resolvePackageStrategy({
     blocked,
     packageManagerAvailable,
     packageEditable,
-    dependencyInstallationAllowed
+    dependencyInstallationAllowed,
+    packageJsonFound: scanFacts.packageJsonFound === true
   });
 
   return {

@@ -98,6 +98,9 @@ export async function evaluateQualityGate(input = {}) {
   const filesRead = Array.isArray(input.filesRead)
     ? unique(input.filesRead)
     : unique(Array.isArray(criteria.plannerReadFiles) ? criteria.plannerReadFiles : []);
+  const committedFiles = Array.isArray(input.committedFiles)
+    ? unique(input.committedFiles)
+    : unique(changedFiles);
   const requiredCommands = Array.isArray(input.requiredValidationCommands)
     ? input.requiredValidationCommands
     : (input.requiredCommands || criteria.requiredCommands || []);
@@ -236,7 +239,7 @@ export async function evaluateQualityGate(input = {}) {
 
   // Remove behavior-based pass: explicit modes now handle read-only logic
 
-    const meaningfulFiles = unique(changedFiles).filter(isMeaningfulFile);
+  const meaningfulFiles = unique(committedFiles).filter(isMeaningfulFile);
     // successfulReads already computed above
   const successfulToolCalls = toolCalls.filter(call =>
     call.success && ["READ_FILE", "LIST_FILES", "SEARCH_CODE", "SEARCH_SYMBOL"].includes(call.tool)
@@ -259,7 +262,7 @@ export async function evaluateQualityGate(input = {}) {
     : terminalCalls.filter(call => call.success && isValidationCommand(call.args?.command));
   const successfulValidations = toolCalls.filter(call => call.tool === "VALIDATE_PATCH" && call.success);
   const failedValidations = toolCalls.filter(call => call.tool === "VALIDATE_PATCH" && !call.success);
-  const changedFileTargets = unique(changedFiles).map(normalizeGatePath).filter(Boolean);
+  const changedFileTargets = unique(committedFiles).map(normalizeGatePath).filter(Boolean);
   const requestedWriteTargets = unique(requestedWriteFiles.map(normalizeGatePath).filter(Boolean));
   const verifiedExistingTargets = unique(Array.isArray(verifiedExistingFiles) ? verifiedExistingFiles : []).map(normalizeGatePath).filter(Boolean);
   const successfulWriteTargets = unique(toolCalls.filter(call =>
@@ -287,7 +290,11 @@ export async function evaluateQualityGate(input = {}) {
   const validationFailureAttribution = validationSuccess
     ? null
     : ((requestedFilesValidated || externalFailureFiles.length > 0) ? "external_project_failure" : "requested_scope_failure");
-  const approvedWriteTargets = new Set(requestedWriteFiles.map(normalizeGatePath).filter(Boolean));
+  const approvedWriteTargets = new Set([
+    ...requestedWriteFiles.map(normalizeGatePath),
+    ...successfulWriteTargets,
+    ...verifiedExistingTargets
+  ].filter(Boolean));
   const packageJsonInspected = successfulReads.some(call =>
     /(^|\/)package\.json$/i.test(call.result?.file || call.args?.path || "")
   );
@@ -335,8 +342,9 @@ export async function evaluateQualityGate(input = {}) {
     const objectiveRequiresTerminal = /\b(?:npm|pnpm|yarn|node|pytest|go\s+test|cargo\s+(?:test|check)|dotnet|mvn|gradle|build|test|run)\b/i.test(objective);
     // Stricter rule: if meaningful files changed in coding mode, require a successful validation command
     // Read-only/analysis are handled above and never reach this branch
-    const meaningfulChanged = meaningfulFiles.length > 0;
-    const mustValidate = (meaningfulChanged || intentMode === "WRITE_AND_RUN" || objectiveRequiresTerminal) && criteria.taskClass !== 'ui_build';
+    const meaningfulCommitted = meaningfulFiles.length > 0;
+    const hasVerifiedExistingEvidence = verifiedExistingTargets.length > 0;
+    const mustValidate = (meaningfulCommitted || intentMode === "WRITE_AND_RUN" || objectiveRequiresTerminal || hasVerifiedExistingEvidence) && criteria.taskClass !== 'ui_build';
     const verifiedExistingCoverage = requestedWriteTargets.length > 0 && requestedWriteTargets.every(file =>
       successfulWriteTargets.includes(file) ||
       changedFileTargets.includes(file) ||
@@ -348,10 +356,29 @@ export async function evaluateQualityGate(input = {}) {
       call.tool === "WRITE_FILE" && call.success && call.result && (call.result.alreadyUpToDate === true || call.result.changed === false)
     );
 
+    // Explicit alreadySatisfied check: all requested writes succeeded without physical change
+    const allWritesAlreadySatisfied = requestedWriteTargets.length > 0 && requestedWriteTargets.every(file =>
+      toolCalls.some(call =>
+        call.tool === "WRITE_FILE" && call.success && call.result &&
+        (call.result.alreadyUpToDate === true || call.result.changed === false) &&
+        normalizeGatePath(call.result?.file || call.args?.path || call.args?.file || call.args?.target || "") === normalizeGatePath(file)
+      )
+    );
+    const alreadySatisfied = allWritesAlreadySatisfied || hasAlreadyUpToDate;
+    if (alreadySatisfied) {
+      console.log('[WRITE_ALREADY_SATISFIED]', {
+        requestedFiles: requestedWriteTargets,
+        physicalChanged: false,
+        note: 'All requested writes already satisfied — content matches existing files'
+      });
+    }
+
     check(
       "workspace_changes",
-      meaningfulChanged || hasAlreadyUpToDate || verifiedExistingCoverage || (intentMode === "WRITE_AND_RUN" && successfulCommands.length > 0),
-      "No meaningful source files were changed.",
+      meaningfulCommitted || alreadySatisfied || verifiedExistingCoverage || (intentMode === "WRITE_AND_RUN" && successfulCommands.length > 0),
+      committedFiles.length > 0
+        ? "No meaningful source files were changed."
+        : "No files were committed.",
       meaningfulFiles.length > 0 ? meaningfulFiles : verifiedExistingTargets
     );
 
@@ -404,7 +431,7 @@ export async function evaluateQualityGate(input = {}) {
       "patch_validation",
       (changedFileTargets.length === 0) || (
         validationSummary.validationPassed === true &&
-        changedFileTargets.every(file => approvedWriteTargets.has(file))
+        changedFileTargets.every(file => approvedWriteTargets.has(file) || successfulWriteTargets.includes(file))
       ),
       "Changed files must pass patch validation.",
       {
@@ -579,7 +606,8 @@ export async function evaluateQualityGate(input = {}) {
     validationSummary,
     evidence: {
       meaningfulFiles,
-      filesChanged: unique(changedFiles),
+      filesChanged: unique(committedFiles),
+      committedFiles: unique(committedFiles),
       filesRead: unique(successfulReads.map(call => call.result?.file || call.args?.path)),
       validationCommands: successfulCommands.map(call => call.args?.command),
       verifiedExistingFiles: verifiedExistingTargets,

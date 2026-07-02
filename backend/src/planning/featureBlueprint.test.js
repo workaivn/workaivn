@@ -38,12 +38,15 @@ test("SaaS landing prompts produce an inferred bootstrap plan without template l
   try {
     const { result: blueprint, logs } = await captureLogs(() => buildFeatureBlueprint("Create a SaaS landing page", { workspaceRoot }));
 
-    assert.equal(blueprint.bootstrapProfile.framework, "react-vite-ts");
+    assert.equal(blueprint.bootstrapProfile.framework, "generic-static-html");
     assert.equal(blueprint.productType, "saas_app");
     assert.equal(blueprint.validation.ok, true);
     assert.ok(blueprint.scaffoldPlan.length > 1);
-    assert.ok(blueprint.filePlan.some(item => item.path === "package.json"));
-    assert.ok(blueprint.filePlan.some(item => /src\/.+\.tsx$/i.test(item.path)));
+    assert.ok(blueprint.filePlan.some(item => item.path === "index.html"));
+    assert.ok(blueprint.filePlan.some(item => item.path === "assets/css/style.css"));
+    assert.ok(blueprint.filePlan.some(item => item.path === "assets/js/app.js"));
+    assert.equal(blueprint.filePlan.some(item => item.path === "package.json"), false);
+    assert.equal(blueprint.filePlan.some(item => /src\/.+\.tsx$/i.test(item.path)), false);
     assert.ok(logs.some(line => line.includes("[FEATURE_BLUEPRINT_START]")));
     assert.ok(logs.some(line => line.includes("[BLUEPRINT_ARCHITECTURE_INFERRED]")));
     assert.ok(!logs.some(line => line.includes("[BLUEPRINT_TEMPLATE_SELECTED]")));
@@ -146,7 +149,7 @@ test("blueprints serialize and reload without losing the inferred framework", as
     const loaded = await loadBlueprint(workspaceRoot);
 
     assert.equal(savedPath.endsWith("feature-blueprint.json"), true);
-    assert.equal(loaded.bootstrapProfile.framework, "react-vite-ts");
+    assert.equal(loaded.bootstrapProfile.framework, "generic-static-html");
     assert.equal(loaded.validation.ok, true);
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });

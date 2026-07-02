@@ -30,10 +30,11 @@ function baseWorkspaceState(existingFiles = []) {
   };
 }
 
-test("bootstrap intelligence resolves react-vite-ts for SaaS landing pages on empty workspaces", () => {
+test("bootstrap intelligence resolves generic-static-html for SaaS landing pages on empty workspaces", () => {
   const intent = detectProjectIntent("Create a SaaS landing page");
   const profile = resolveBootstrapProfile(intent, baseWorkspaceState());
-  assert.equal(profile.id, "react-vite-ts");
+  assert.equal(profile.id, "generic-static-html");
+  assert.notEqual(profile.id, "react-vite-ts");
 });
 
 test("bare package.json does not force React for a plain landing page", () => {
@@ -76,10 +77,10 @@ test("bootstrap task graphs generate framework-specific starter files", () => {
   const intent = detectProjectIntent("Create a static HTML landing page");
   const profile = resolveBootstrapProfile(intent, baseWorkspaceState());
   const graph = createBootstrapTaskGraph(profile, { objective: intent.objective, projectIntent: intent, workspaceState: baseWorkspaceState() });
-  assert.deepEqual(
-    graph.tasks.filter(task => task.tool === "WRITE_FILE").map(task => task.toolArgs?.path || task.toolArgs?.file),
-    ["index.html", "assets/css/style.css", "assets/js/app.js"]
-  );
+  const bootstrapProposal = graph.proposals.find(proposal => Array.isArray(proposal.proposalTypes) && proposal.proposalTypes.includes("BOOTSTRAP"));
+  assert.ok(bootstrapProposal, "bootstrap proposal should be present");
+  assert.deepEqual(bootstrapProposal.suggestedFiles, ["index.html", "assets/css/style.css", "assets/js/app.js"]);
+  assert.equal(typeof bootstrapProposal.metadata.contentByFile["index.html"], "string");
 });
 
 test("planner execution metadata normalizes read, write, run, and protected files", () => {
@@ -136,8 +137,7 @@ test("unsupported bootstrap profiles return a deterministic unsupported plan", (
     projectIntent: intent,
     workspaceState: baseWorkspaceState()
   });
-  assert.equal(plan.tasks.length, 1);
-  assert.match(String(plan.tasks[0].goal || ""), /unsupported framework plan/i);
+  assert.equal(plan.tasks.length, 0);
   assert.equal(plan.tasks.some(task => task.tool === "WRITE_FILE" && /react/i.test(String(task.toolArgs?.path || task.toolArgs?.file || ""))), false);
 });
 

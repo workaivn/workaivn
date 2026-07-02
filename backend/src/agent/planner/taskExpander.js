@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { Task } from './task.js';
 import { TaskKind } from './plannerTypes.js';
 import { extractCommands, expandRepeatedCommands } from './planBuilder.js';
+import { getCanonicalWorkspaceFiles } from '../context/ProjectScanSnapshot.js';
 
 function normalizePath(p) {
   return String(p || '').replace(/\\/g, '/').replace(/\/\.\//g, '/').replace(/^\.\//, '');
@@ -172,69 +173,79 @@ function isBackendFileExcluded(filePath, fileContents) {
   return false;
 }
 
-function pickSingleTarget(candidates, existingFiles, alreadyTargeted, fileContents) {
-  const normalExisting = new Set(existingFiles.map(normalizePath));
+function pickSingleTarget(candidates, canonicalFiles, entryFiles = [], alreadyTargeted, fileContents) {
+  const normalCanonical = new Set((Array.from(canonicalFiles || [])).map(normalizePath));
+  const normalEntryFiles = new Set((Array.isArray(entryFiles) ? entryFiles : []).map(normalizePath));
   const normalTargeted = new Set(alreadyTargeted.map(normalizePath));
 
-  // Build excluded set — files identified as backend must never be selected
-  const excludedTargets = new Set();
-
-  // Filter to files that actually exist on disk
-  let existent = candidates.filter(f => normalExisting.has(normalizePath(f)));
-
-  // Among existent files, filter out backend files (add to excluded set)
-  for (const f of existent) {
-    if (isBackendFileExcluded(f, fileContents)) {
-      excludedTargets.add(normalizePath(f));
-    }
-  }
-  existent = existent.filter(f => !excludedTargets.has(normalizePath(f)));
-
-  // Among remaining existent files, pick the highest priority valid frontend target
-  if (existent.length > 0) {
-    existent.sort((a, b) => entryPriority(a) - entryPriority(b));
-    // Find first that is a valid React landing target
-    for (const f of existent) {
-      const norm = normalizePath(f);
-      if (normalTargeted.has(norm)) {
-        console.log('[PLANNER_REASONING_SKIP_DUPLICATE]', {
-          file: norm,
-          reason: 'already has a WRITE_FILE or REASONING task for this file'
-        });
-        continue;
-      }
-      if (isValidReactLandingTarget(norm, fileContents)) {
-        console.log('[PLANNER_REASONING_TARGET]', {
-          selectedFile: norm,
-          reason: 'existing valid React landing target'
-        });
-        return norm;
-      }
-      console.log('[PLANNER_REASONING_SKIP_NOT_REACT]', {
+  const canonicalList = [...normalCanonical].sort((a, b) => entryPriority(a) - entryPriority(b));
+  for (const norm of canonicalList) {
+    if (normalTargeted.has(norm)) {
+      console.log('[PLANNER_REASONING_SKIP_DUPLICATE]', {
         file: norm,
-        reason: 'file does not appear to be a React component'
-      });
-    }
-  }
-
-  // No existing valid frontend found — try to create a new file.
-  // But never create a file that was excluded as backend.
-  for (const f of candidates) {
-    const norm = normalizePath(f);
-    if (excludedTargets.has(norm)) {
-      console.log('[PLANNER_REASONING_SKIP_EXCLUDED]', {
-        file: norm,
-        reason: 'file is in excludedTargets (backend) — refusing to use as landing page target'
+        reason: 'already has a WRITE_FILE or REASONING task for this file'
       });
       continue;
     }
-    if (!normalTargeted.has(norm)) {
-      console.log('[PLANNER_REASONING_TARGET]', {
+    if (isBackendFileExcluded(norm, fileContents)) {
+      continue;
+    }
+    if (normalEntryFiles.has(norm)) {
+      console.log('[REASONING_TARGET_CANONICAL_SELECTED]', {
         selectedFile: norm,
-        reason: 'new file creation — no existing entry component found'
+        reason: 'ProjectScan entry file is canonical and takes precedence'
       });
       return norm;
     }
+    if (isValidReactLandingTarget(norm, fileContents)) {
+      console.log('[REASONING_TARGET_CANONICAL_SELECTED]', {
+        selectedFile: norm,
+        reason: 'existing canonical workspace file selected'
+      });
+      return norm;
+    }
+    console.log('[PLANNER_REASONING_SKIP_NOT_REACT]', {
+      file: norm,
+      reason: 'file does not appear to be a React component'
+    });
+  }
+
+  for (const candidate of candidates) {
+    const norm = normalizePath(candidate);
+    if (!norm) continue;
+    if (!normalCanonical.has(norm)) {
+      console.log('[REASONING_TARGET_REJECTED_NOT_DISCOVERED]', {
+        file: norm,
+        reason: 'template suggestion is not a canonical workspace file'
+      });
+      console.log('[REASONING_NEW_FILE_POLICY_REQUIRED]', {
+        file: norm,
+        reason: 'new file creation requires explicit policy or user request'
+      });
+      console.log('[REASONING_NEW_FILE_REJECTED]', {
+        file: norm,
+        reason: 'new file creation not authorized for reasoning target selection'
+      });
+      continue;
+    }
+    if (normalTargeted.has(norm)) {
+      console.log('[PLANNER_REASONING_SKIP_DUPLICATE]', {
+        file: norm,
+        reason: 'already has a WRITE_FILE or REASONING task for this file'
+      });
+      continue;
+    }
+    if (isValidReactLandingTarget(norm, fileContents)) {
+      console.log('[REASONING_TARGET_CANONICAL_SELECTED]', {
+        selectedFile: norm,
+        reason: 'existing valid React landing target'
+      });
+      return norm;
+    }
+    console.log('[PLANNER_REASONING_SKIP_NOT_REACT]', {
+      file: norm,
+      reason: 'file does not appear to be a React component'
+    });
   }
 
   return null;
@@ -258,6 +269,18 @@ function inferCommands(goal, scan) {
 
 export function expandPlannerTasks(planner, { goal, projectType, entryFiles, scan, contextFiles = [], fileContents = null } = {}) {
   if (!planner) return [];
+  if (planner.executionPlanner || planner.executionGraph) {
+    console.log('[LEGACY_PLANNER_REDIRECT]', {
+      source: 'expandPlannerTasks',
+      target: 'ExecutionPlanner',
+      taskCount: typeof planner.executionPlanner?.tasks?.length === 'number' ? planner.executionPlanner.tasks.length : 0
+    });
+    console.log('[LEGACY_DEPRECATED]', {
+      source: 'expandPlannerTasks',
+      replacement: 'ExecutionPlanner'
+    });
+    return [];
+  }
   if (!goal || goal.length < 5) {
     console.log('[PLANNER_EXPAND_SKIP]', { reason: 'goal too short', length: (goal || '').length });
     return [];
@@ -297,8 +320,7 @@ export function expandPlannerTasks(planner, { goal, projectType, entryFiles, sca
   if (targetFiles.length === 0) return [];
 
   // Phase 4.15 hotfix: Only generate content for one target file.
-  // Collect existing file paths from entryFiles and contextFiles
-  const knownExistingFiles = [...(entryFiles || []), ...(contextFiles || [])].filter(Boolean);
+  const canonicalFiles = getCanonicalWorkspaceFiles(scan || { entryFiles, discoveredFiles: contextFiles });
 
   // Collect files already targeted by existing WRITE_FILE or REASONING tasks
   const alreadyTargeted = allNodes
@@ -306,9 +328,8 @@ export function expandPlannerTasks(planner, { goal, projectType, entryFiles, sca
     .map(n => n.toolArgs?.path || n.toolArgs?.file || '')
     .filter(Boolean);
 
-  const singleTarget = pickSingleTarget(targetFiles, knownExistingFiles, alreadyTargeted, fileContents);
+  const singleTarget = pickSingleTarget(targetFiles, canonicalFiles, entryFiles, alreadyTargeted, fileContents);
   if (!singleTarget) {
-    // Check if all candidates are backend files — fail safely
     const allBackend = targetFiles.every(f => isBackendFileExcluded(f, fileContents));
     if (allBackend) {
       console.log('[PLANNER_TARGET_SELECTION_FAILED]', {
@@ -317,7 +338,7 @@ export function expandPlannerTasks(planner, { goal, projectType, entryFiles, sca
       });
     } else {
       console.log('[PLANNER_EXPAND_SKIP]', {
-        reason: 'no valid single target after dedup — all candidates already targeted or non-existent',
+        reason: 'no canonical single target after dedup — all candidates already targeted or not discovered',
         candidates: targetFiles
       });
     }

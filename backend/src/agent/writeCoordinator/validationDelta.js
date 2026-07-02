@@ -23,12 +23,61 @@ function detectLanguageFromPath(targetPath = "") {
   const normalized = normalizePath(targetPath).toLowerCase();
   if (normalized.endsWith(".ts") || normalized.endsWith(".tsx")) return "typescript";
   if (normalized.endsWith(".js") || normalized.endsWith(".jsx") || normalized.endsWith(".mjs") || normalized.endsWith(".cjs")) return "javascript";
+  if (normalized.endsWith(".html") || normalized.endsWith(".htm")) return "html";
+  if (normalized.endsWith(".css") || normalized.endsWith(".scss") || normalized.endsWith(".sass")) return "css";
+  if (normalized.endsWith(".md") || normalized.endsWith(".markdown") || normalized.endsWith(".rst")) return "markdown";
+  if (normalized.endsWith(".json") || normalized.endsWith(".jsonc") || normalized.endsWith(".json5")) return "json";
   if (normalized.endsWith(".py")) return "python";
   if (normalized.endsWith(".php")) return "php";
   if (normalized.endsWith(".rb")) return "ruby";
   if (normalized.endsWith(".java")) return "java";
   if (normalized.endsWith(".cs")) return "csharp";
   return "unknown";
+}
+
+function validateJsonLikeContent(text = "") {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) {
+    return { success: false, reason: "empty_content" };
+  }
+  try {
+    JSON.parse(trimmed);
+    return { success: true };
+  } catch (error) {
+    return { success: false, reason: `invalid_json: ${error.message}` };
+  }
+}
+
+function validateHtmlLikeContent(text = "") {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) {
+    return { success: false, reason: "empty_content" };
+  }
+  const hasTag = /<\s*[a-z!][^>]*>/i.test(trimmed);
+  const hasStructuralHint = /<!doctype\s+html|<html\b|<\/[a-z][^>]*>/i.test(trimmed);
+  if (!hasTag) return { success: false, reason: "missing_html_tags" };
+  if (!hasStructuralHint) return { success: true };
+  return { success: true };
+}
+
+function validateCssLikeContent(text = "") {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) {
+    return { success: false, reason: "empty_content" };
+  }
+  const hasCssSyntax = /@(?:tailwind|layer|media|keyframes)\b|:[^;\n{}]+;|{[\s\S]*}/i.test(trimmed);
+  if (!hasCssSyntax) {
+    return { success: false, reason: "non_css_content" };
+  }
+  return { success: true };
+}
+
+function validateMarkdownLikeContent(text = "") {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) {
+    return { success: false, reason: "empty_content" };
+  }
+  return { success: true };
 }
 
 function extractJsonPayload(rawResponse) {
@@ -67,6 +116,15 @@ function parseJsonPayload(rawResponse) {
 
 function detectDeltaSchema(parsed) {
   if (!parsed || typeof parsed !== "object") return "invalid";
+  if (Array.isArray(parsed)) {
+    const looksLikePatches = parsed.every(entry => entry && typeof entry === "object" && (
+      Object.prototype.hasOwnProperty.call(entry, "operation") ||
+      Object.prototype.hasOwnProperty.call(entry, "action") ||
+      Object.prototype.hasOwnProperty.call(entry, "patch") ||
+      Object.prototype.hasOwnProperty.call(entry, "replace")
+    ));
+    return looksLikePatches ? "patches" : "files";
+  }
   if (Array.isArray(parsed.patches)) return "patches";
   if (Array.isArray(parsed.files)) return "files";
   if (parsed.path || parsed.file || parsed.targetPath || parsed.target) return "single";
@@ -152,11 +210,13 @@ function normalizeDeltaPatchList(parsed, expectedPaths = []) {
     hasSingleObject: Boolean(parsed.path || parsed.file || parsed.targetPath || parsed.target)
   });
 
-  const sourceEntries = schema === "patches"
-    ? Array.isArray(parsed.patches) ? parsed.patches : []
-    : schema === "files"
-      ? Array.isArray(parsed.files) ? parsed.files : []
-      : [parsed];
+  const sourceEntries = Array.isArray(parsed)
+    ? parsed
+    : schema === "patches"
+      ? Array.isArray(parsed.patches) ? parsed.patches : []
+      : schema === "files"
+        ? Array.isArray(parsed.files) ? parsed.files : []
+        : [parsed];
 
   for (const entry of sourceEntries) {
     const normalized = normalizeDeltaPatch(entry, {
@@ -505,6 +565,14 @@ export function validateStructuralContent({
   const originalText = String(previousContent || "");
   const normalizedRole = String(role || "").trim().toLowerCase();
   const detectedLanguage = detectLanguageFromPath(targetPath);
+  console.log("[STRUCTURAL_VALIDATION_ROLE_SELECTED]", {
+    targetPath,
+    role: normalizedRole || "implementation"
+  });
+  console.log("[STRUCTURAL_VALIDATION_LANGUAGE_SELECTED]", {
+    targetPath,
+    language: detectedLanguage
+  });
   const supportsJavaScriptStructuralParse = detectedLanguage === "javascript" || detectedLanguage === "typescript" || detectedLanguage === "unknown";
 
   if (!text.trim()) {
@@ -516,6 +584,130 @@ export function validateStructuralContent({
       hasExecutableBody: false,
       hasTestSignal: false,
       details: { targetPath, role: normalizedRole, contentLength: 0 }
+    };
+  }
+
+  if (detectedLanguage === "json") {
+    console.log("[STATIC_FILE_VALIDATION]", { targetPath, language: detectedLanguage, role: normalizedRole });
+    const result = validateJsonLikeContent(text);
+    console.log(result.success ? "[STATIC_FILE_VALIDATION_PASS]" : "[STATIC_FILE_VALIDATION_FAIL]", {
+      targetPath,
+      language: detectedLanguage,
+      role: normalizedRole,
+      reason: result.reason || null
+    });
+    if (!result.success) {
+      return {
+        success: false,
+        reason: result.reason || "invalid_json",
+        retryMode: "full",
+        targetPath,
+        hasExecutableBody: false,
+        hasTestSignal: false,
+        details: { targetPath, role: normalizedRole, contentLength: text.length, language: detectedLanguage }
+      };
+    }
+    return {
+      success: true,
+      reason: null,
+      retryMode: "patch",
+      targetPath,
+      hasExecutableBody: false,
+      hasTestSignal: false,
+      details: { targetPath, role: normalizedRole, contentLength: text.length, language: detectedLanguage }
+    };
+  }
+
+  if (detectedLanguage === "html") {
+    console.log("[STATIC_FILE_VALIDATION]", { targetPath, language: detectedLanguage, role: normalizedRole });
+    const result = validateHtmlLikeContent(text);
+    console.log(result.success ? "[STATIC_FILE_VALIDATION_PASS]" : "[STATIC_FILE_VALIDATION_FAIL]", {
+      targetPath,
+      language: detectedLanguage,
+      role: normalizedRole,
+      reason: result.reason || null
+    });
+    if (!result.success) {
+      return {
+        success: false,
+        reason: result.reason || "invalid_html",
+        retryMode: "full",
+        targetPath,
+        hasExecutableBody: false,
+        hasTestSignal: false,
+        details: { targetPath, role: normalizedRole, contentLength: text.length, language: detectedLanguage }
+      };
+    }
+    return {
+      success: true,
+      reason: null,
+      retryMode: "patch",
+      targetPath,
+      hasExecutableBody: false,
+      hasTestSignal: false,
+      details: { targetPath, role: normalizedRole, contentLength: text.length, language: detectedLanguage }
+    };
+  }
+
+  if (detectedLanguage === "css") {
+    console.log("[STATIC_FILE_VALIDATION]", { targetPath, language: detectedLanguage, role: normalizedRole });
+    const result = validateCssLikeContent(text);
+    console.log(result.success ? "[STATIC_FILE_VALIDATION_PASS]" : "[STATIC_FILE_VALIDATION_FAIL]", {
+      targetPath,
+      language: detectedLanguage,
+      role: normalizedRole,
+      reason: result.reason || null
+    });
+    if (!result.success) {
+      return {
+        success: false,
+        reason: result.reason || "invalid_css",
+        retryMode: "full",
+        targetPath,
+        hasExecutableBody: false,
+        hasTestSignal: false,
+        details: { targetPath, role: normalizedRole, contentLength: text.length, language: detectedLanguage }
+      };
+    }
+    return {
+      success: true,
+      reason: null,
+      retryMode: "patch",
+      targetPath,
+      hasExecutableBody: false,
+      hasTestSignal: false,
+      details: { targetPath, role: normalizedRole, contentLength: text.length, language: detectedLanguage }
+    };
+  }
+
+  if (detectedLanguage === "markdown") {
+    console.log("[STATIC_FILE_VALIDATION]", { targetPath, language: detectedLanguage, role: normalizedRole });
+    const result = validateMarkdownLikeContent(text);
+    console.log(result.success ? "[STATIC_FILE_VALIDATION_PASS]" : "[STATIC_FILE_VALIDATION_FAIL]", {
+      targetPath,
+      language: detectedLanguage,
+      role: normalizedRole,
+      reason: result.reason || null
+    });
+    if (!result.success) {
+      return {
+        success: false,
+        reason: result.reason || "invalid_markdown",
+        retryMode: "full",
+        targetPath,
+        hasExecutableBody: false,
+        hasTestSignal: false,
+        details: { targetPath, role: normalizedRole, contentLength: text.length, language: detectedLanguage }
+      };
+    }
+    return {
+      success: true,
+      reason: null,
+      retryMode: "patch",
+      targetPath,
+      hasExecutableBody: false,
+      hasTestSignal: false,
+      details: { targetPath, role: normalizedRole, contentLength: text.length, language: detectedLanguage }
     };
   }
 

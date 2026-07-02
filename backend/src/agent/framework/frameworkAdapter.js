@@ -23,6 +23,45 @@ function normalizeFramework(value = "") {
   return KNOWN_FRAMEWORKS.has(framework) ? framework : "generic-js-test";
 }
 
+function buildFrameworkCapability(framework, availability = null) {
+  const normalized = normalizeFramework(framework);
+  const nodeMajor = Number.parseInt(String(process.versions?.node || "0").split(".")[0] || "0", 10) || 0;
+  const validationCommand = String(availability?.validationCommand || "").trim() || null;
+  const runner = normalized === "generic-js-test"
+    ? (validationCommand ? `node>=${Math.max(nodeMajor || 18, 18)}` : "unknown")
+    : normalized;
+  const nodeRunnerReady = runner.startsWith("node") && nodeMajor >= 18;
+
+  const capability = {
+    framework: normalized,
+    allowedImports: [],
+    allowedGlobals: [],
+    runner,
+    runnable: Boolean(availability?.runnable ?? (normalized !== "generic-js-test")),
+    validationCommand
+  };
+
+  if (normalized === "node:test") {
+    capability.allowedImports = ["node:test", "node:assert/strict"];
+    capability.allowedGlobals = ["test", "describe", "it", "before", "after", "assert"];
+  } else if (normalized === "jest") {
+    capability.allowedImports = ["@jest/globals"];
+    capability.allowedGlobals = ["describe", "it", "test", "expect", "beforeEach", "afterEach"];
+  } else if (normalized === "vitest") {
+    capability.allowedImports = ["vitest", "@vitest/globals"];
+    capability.allowedGlobals = ["describe", "it", "test", "expect", "beforeEach", "afterEach"];
+  } else if (normalized === "mocha") {
+    capability.allowedImports = ["chai"];
+    capability.allowedGlobals = ["describe", "it", "before", "after", "assert"];
+  } else if (nodeRunnerReady) {
+    capability.allowedImports = ["node:test", "node:assert/strict"];
+    capability.allowedGlobals = ["test", "describe", "it", "before", "after", "assert"];
+  }
+
+  console.log("[FRAMEWORK_CAPABILITY_SELECTED]", capability);
+  return capability;
+}
+
 function classifyFrameworkMode(framework, availability = null) {
   const normalized = normalizeFramework(framework);
   const kind = String(availability?.kind || availability?.mode || "").trim().toLowerCase();
@@ -146,6 +185,11 @@ function buildTestFrameworkAvailability(framework, { packageJson = null, testCom
   const reason = normalized === "generic-js-test"
     ? (kind === "style-only" ? "generic_style_with_command" : "generic_style_only")
     : (runnable ? (script ? "package_json_script" : "detected_framework") : "style_only_framework");
+  const capability = buildFrameworkCapability(normalized, {
+    runnable,
+    validationCommand,
+    source
+  });
 
   const availability = {
     framework: normalized,
@@ -153,7 +197,9 @@ function buildTestFrameworkAvailability(framework, { packageJson = null, testCom
     runnable,
     source,
     reason,
-    validationCommand
+    validationCommand,
+    runner: capability.runner,
+    capability
   };
 
   console.log("[TEST_FRAMEWORK_AVAILABILITY]", availability);
@@ -332,6 +378,7 @@ function detectFrameworkApiMismatch(content, framework, availability = null) {
   const text = normalizeText(content);
   const source = String(availability?.source || "").trim().toLowerCase();
   const runnable = availability ? availability.kind === "runnable" || availability.runnable === true : true;
+  const capability = availability?.capability || buildFrameworkCapability(normalized, availability);
   const allowsFrameworkApis = normalized !== "generic-js-test" && runnable;
 
   const frameworkMarkers = [
@@ -346,11 +393,21 @@ function detectFrameworkApiMismatch(content, framework, availability = null) {
 
   if (normalized === "generic-js-test") {
     for (const entry of frameworkMarkers) {
+      if (entry.api === "node:test" && capability.allowedImports.includes("node:test")) {
+        if (entry.patterns.some(rx => rx.test(text))) {
+          console.log("[FRAMEWORK_API_ALLOWED]", {
+            framework: normalized,
+            api: entry.api,
+            runner: capability.runner
+          });
+        }
+        continue;
+      }
       if (entry.patterns.some(rx => rx.test(text))) {
         mismatches.push(entry.api);
       }
     }
-    if (/\bexpect\s*\(/.test(text) || /\bexpect\s*\.\s*toBe\s*\(/.test(text)) {
+    if (!capability.allowedGlobals.includes("expect") && (/\bexpect\s*\(/.test(text) || /\bexpect\s*\.\s*toBe\s*\(/.test(text))) {
       assertionRejections.push("expect");
     }
     return { mismatches, assertionRejections };
@@ -621,6 +678,7 @@ function validateGeneric(content, availability = null) {
   const imports = extractImports(ast);
   const allModules = imports.map(i => i.module);
   const apiMismatch = detectFrameworkApiMismatch(content, "generic-js-test", availability);
+  const capability = availability?.capability || buildFrameworkCapability("generic-js-test", availability);
   const hasNodeTest = allModules.includes("node:test");
   const hasOtherFramework = allModules.some(m => m === "vitest" || m === "@jest/globals" || m === "chai" || m === "jest");
 
@@ -632,6 +690,14 @@ function validateGeneric(content, availability = null) {
       suggestion: "Keep the test file on one framework only",
       found: ["node:test", "other-test-lib"]
     };
+  }
+
+  if (hasNodeTest && capability.allowedImports.includes("node:test")) {
+    console.log("[FRAMEWORK_API_ALLOWED]", {
+      framework: "generic-js-test",
+      api: "node:test",
+      runner: capability.runner
+    });
   }
 
   if (apiMismatch.mismatches.length > 0 || apiMismatch.assertionRejections.length > 0) {

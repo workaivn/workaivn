@@ -37,6 +37,97 @@ const WRITE_INTENT_PATTERNS = [
 const CLEAR_READ_ONLY_PATTERN =
   /\bdo\s+not\s+(?:modify|change|edit|write)(?:\s+(?:any\s+)?(?:files?|code))?\b|\bdo\s+not\s+modify\s+files?\b|\bkhÃ´ng\s+(?:sá»­a|thay\s*Ä‘á»•i|viáº¿t)\b/i;
 
+export const REQUESTED_FILE_KIND = Object.freeze({
+  EXPLICIT_CREATE: 'EXPLICIT_CREATE',
+  EXPLICIT_MODIFICATION: 'EXPLICIT_MODIFICATION',
+  REFERENCE_ONLY: 'REFERENCE_ONLY',
+  CONDITIONAL: 'CONDITIONAL',
+  DISCOVER_IF_EXISTS: 'DISCOVER_IF_EXISTS',
+  DERIVED: 'DERIVED'
+});
+
+function normalizeRequestedFilePath(value = '') {
+  return String(value || '')
+    .replace(/\\\\/g, '/')
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .trim();
+}
+
+function classifyRequestedFileKind(objective, file) {
+  const text = String(objective || '');
+  const normalizedFile = normalizeRequestedFilePath(file);
+  const lowerText = text.toLowerCase();
+  const lowerFile = normalizedFile.toLowerCase();
+  const fileIndex = lowerText.indexOf(lowerFile);
+  const window = fileIndex >= 0
+    ? lowerText.slice(Math.max(0, fileIndex - 120), Math.min(lowerText.length, fileIndex + lowerFile.length + 120))
+    : lowerText;
+  const local = `${window}\n${lowerText}`;
+
+  const isPackageJson = /(^|\/)package\.json$/i.test(normalizedFile);
+  const isConditional = isPackageJson && /\b(?:unless\s+(?:absolutely\s+)?necessary|only\s+if\s+necessary|if\s+necessary|if\s+needed)\b/i.test(local);
+  const isReferenceOnly = /\b(?:use|read|inspect|check|review|open|view|show|display|look\s+at)\b[\s\S]{0,40}\b(?:if\s+it\s+exists|if\s+exists)\b/i.test(local)
+    || /\b(?:if\s+it\s+exists|if\s+exists)\b[\s\S]{0,40}\b(?:use|read|inspect|check|review|open|view|show|display|look\s+at)\b/i.test(local);
+  const isDerived = /\binfer\b[\s\S]{0,40}\bpackage\.json\b/i.test(local)
+    || (isPackageJson && /\binfer\b/i.test(local));
+  const isDiscoverIfExists = isPackageJson && (
+    /\bdetect\s+framework\b[\s\S]{0,60}\bpackage\.json\b/i.test(local)
+    || /\bframework\b[\s\S]{0,60}\bpackage\.json\b/i.test(local)
+    || /\bdetect\s+framework\s+automatically\b/i.test(local)
+  );
+  const writeCreate = /\b(?:create|build|implement|make|add|write|generate|construct)\b/i.test(window);
+  const writeModify = /\b(?:update|modify|edit|patch|change|rename|delete|remove|refactor|fix|replace|append|prepend|insert)\b/i.test(window);
+
+  if (isDerived) return REQUESTED_FILE_KIND.DERIVED;
+  if (isDiscoverIfExists) return REQUESTED_FILE_KIND.DISCOVER_IF_EXISTS;
+  if (isConditional || (isPackageJson && /\bdo\s+not\s+modify\b/i.test(local))) return REQUESTED_FILE_KIND.CONDITIONAL;
+  if (isReferenceOnly) return REQUESTED_FILE_KIND.REFERENCE_ONLY;
+  if (writeCreate) return REQUESTED_FILE_KIND.EXPLICIT_CREATE;
+  if (writeModify) return REQUESTED_FILE_KIND.EXPLICIT_MODIFICATION;
+  return REQUESTED_FILE_KIND.REFERENCE_ONLY;
+}
+
+export function classifyRequestedFiles(objective = '', requestedFiles = []) {
+  const files = [...new Set((Array.isArray(requestedFiles) ? requestedFiles : []).map(file => normalizeRequestedFilePath(file)).filter(Boolean))];
+  return files.map(file => {
+    const kind = classifyRequestedFileKind(objective, file);
+    const detail = {
+      path: file,
+      kind,
+      authoritySource: kind === REQUESTED_FILE_KIND.DERIVED
+        ? 'verified_planning_context'
+        : 'explicit_user_request',
+      conditional: kind === REQUESTED_FILE_KIND.CONDITIONAL,
+      explicit: kind !== REQUESTED_FILE_KIND.DERIVED,
+      verified: false
+    };
+
+    console.log('[REQUESTED_FILE_CLASSIFIED]', {
+      path: file,
+      kind,
+      authoritySource: detail.authoritySource,
+      conditional: detail.conditional,
+      explicit: detail.explicit
+    });
+
+    console.log('[REQUESTED_KIND]', {
+      path: file,
+      kind
+    });
+
+    if (kind === REQUESTED_FILE_KIND.REFERENCE_ONLY) {
+      console.log('[REFERENCE_ONLY_FILE]', { path: file });
+    } else if (kind === REQUESTED_FILE_KIND.CONDITIONAL) {
+      console.log('[CONDITIONAL_FILE]', { path: file });
+    } else if (kind === REQUESTED_FILE_KIND.DERIVED) {
+      console.log('[DERIVED_FILE_BLOCKED]', { path: file });
+    }
+
+    return detail;
+  });
+}
+
 export function classifyTaskType(prompt) {
   const text = String(prompt || "").trim();
   if (!text) return "CHAT";
@@ -219,6 +310,7 @@ export function buildAcceptanceCriteria(prompt = "") {
     }
     return [...files];
   })();
+  const requestedFileDetails = classifyRequestedFiles(objective, requestedFiles);
 
   // New: taskMode classification (qa | read_only | coding)
   const qaSignals = [
@@ -246,6 +338,7 @@ export function buildAcceptanceCriteria(prompt = "") {
     taskClass: taskClass.toLowerCase(),
     taskMode,
     requestedFiles,
+    requestedFileDetails,
     requestedFeatures,
     requiresWorkspaceChange,
     requiresValidationCommand,

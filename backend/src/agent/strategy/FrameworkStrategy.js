@@ -6,9 +6,10 @@ export function resolveFrameworkStrategy({
   projectScan = {},
   workspaceMetadata = {}
 } = {}) {
+  const scanFacts = projectScan?.facts || projectScan || {};
   const classification = String(failureClassification?.classification || failureClassification || 'UNKNOWN');
   const frameworkRunnable = constraints.frameworkRunnable !== false;
-  const canSetup = workspaceMetadata.frameworkSetupAllowed === true || projectScan?.canBootstrap === true;
+  const canSetup = workspaceMetadata.frameworkSetupAllowed === true || scanFacts?.canBootstrap === true;
   const frameworkUnavailable = classification === 'FRAMEWORK_UNAVAILABLE';
   const setupRequired = frameworkUnavailable && canSetup;
   const blocked = frameworkUnavailable && !canSetup;

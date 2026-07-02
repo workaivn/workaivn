@@ -257,6 +257,9 @@ export function createExecutionStateRegistry({
       taskId,
       tool: role,
       path: normalizedPath,
+      lifecycleStatus: validationPassed === true ? "READY_TO_COMMIT" : "VALIDATION_FAILED",
+      writeStatus: validationPassed === true ? "ready_to_commit" : "validation_failed",
+      committed: false,
       validationPassed: validated,
       frameworkValidated: frameworkValidated === true,
       framework,
@@ -268,6 +271,8 @@ export function createExecutionStateRegistry({
       record.framework = record.framework || framework || null;
       record.validationSource = record.validationSource || validationSource || null;
       record.path = record.path || normalizedPath || null;
+      record.phase = validated ? "READY_TO_COMMIT" : "VALIDATION_FAILED";
+      record.committed = false;
       if (validated && normalizedPath) {
         upsertValidatedFile(normalizedPath, {
           validationPassed: true,
@@ -307,13 +312,17 @@ export function createExecutionStateRegistry({
       path: normalizedPath,
       lifecycleStatus: status,
       writeStatus,
-      physicalChanged: physicalChanged === true
+      physicalChanged: physicalChanged === true,
+      committed: success,
+      phase: success ? "COMMITTED" : "COMMIT_FAILED"
     });
     if (record) {
       record.lifecycleStatus = status || record.lifecycleStatus;
       record.writeStatus = writeStatus || record.writeStatus;
       record.physicalChanged = record.physicalChanged || physicalChanged === true;
       record.path = record.path || normalizedPath || null;
+      record.phase = success ? "COMMITTED" : (writeStatus === "validation_failed" ? "VALIDATION_FAILED" : "COMMIT_FAILED");
+      record.committed = success;
       if (success) {
         record.failureAttribution = null;
       }
@@ -496,6 +505,13 @@ export function createExecutionStateRegistry({
           .filter(Boolean)
           .join("\n");
         const candidateFiles = unique(extractPathCandidatesFromText(failureText));
+        if (candidateFiles.length > 0) {
+          console.log('[RUNTIME_EVIDENCE_CANDIDATE_ONLY]', {
+            taskId,
+            candidateFiles,
+            note: 'failure text is diagnostic only and does not create planner authority'
+          });
+        }
         const externalFiles = filterExistingProjectFailureFiles(workspaceRoot, candidateFiles);
         const exitCode = call?.result?.exitCode;
         const failureAttribution = call?.success === false || (exitCode !== null && exitCode !== undefined && Number(exitCode) !== 0)
@@ -602,9 +618,30 @@ export function createExecutionStateRegistry({
   }
 
   function getSnapshot() {
+    const taskList = [...taskRecords.values()];
+    const plannedFiles = unique([...requestedWriteFiles]);
+    const generatedFiles = unique(taskList
+      .filter(record => record.tool === "WRITE_FILE" && record.path)
+      .map(record => record.path));
+    const validationRejectedFiles = unique(taskList
+      .filter(record => record.tool === "WRITE_FILE" && String(record.lifecycleStatus || "").toUpperCase() === "FAILED")
+      .map(record => record.path)
+      .filter(Boolean));
+    const committedFiles = unique([
+      ...changedFiles,
+      ...getVerifiedExistingFiles()
+    ]);
+    const failedFiles = unique([
+      ...validationRejectedFiles,
+      ...taskList.filter(record => String(record.lifecycleStatus || "").toUpperCase() === "FAILED").map(record => record.path).filter(Boolean)
+    ]);
     return {
       runId,
       workspaceRoot,
+      plannedFiles,
+      generatedFiles,
+      validationRejectedFiles,
+      committedFiles,
       plannerReadFiles: getPlannerReadFiles(),
       plannerWriteFiles: getRequestedWriteFiles(),
       plannerRunCommands: getPlannerRunCommands(),
@@ -623,7 +660,8 @@ export function createExecutionStateRegistry({
       validationCommand: getValidationCommand(),
       validationSuccess: getValidationSuccess(),
       requestedFilesValidated: getRequestedFilesValidated(),
-      tasks: [...taskRecords.values()]
+      failedFiles,
+      tasks: taskList
     };
   }
 

@@ -51,9 +51,11 @@ function buildReactComponents({ goalType, uiPlan, projectStructure, featurePlan 
   const isDashboard = goalType === GOAL_TYPES.DASHBOARD || goalType === GOAL_TYPES.ADMIN_PANEL;
   const layoutName = isDashboard ? "DashboardLayout" : "Layout";
   const route = isDashboard ? "/dashboard" : "/";
+  const hasPathAuthority = Array.isArray(projectStructure?.targetFiles) && projectStructure.targetFiles.length > 0;
+  const componentPath = (value) => hasPathAuthority ? value : null;
   addComponent(components, {
     name: "App",
-    path: projectStructure.profileId === "nextjs-ts" ? "app/page.tsx" : "src/App.tsx",
+    path: componentPath(projectStructure.profileId === "nextjs-ts" ? "app/page.tsx" : "src/App.tsx"),
     framework: projectStructure.profileId,
     type: "page",
     route,
@@ -66,7 +68,7 @@ function buildReactComponents({ goalType, uiPlan, projectStructure, featurePlan 
   });
   addComponent(components, {
     name: layoutName,
-    path: projectStructure.profileId === "nextjs-ts" ? "app/layout.tsx" : "src/components/layout/Layout.tsx",
+    path: componentPath(projectStructure.profileId === "nextjs-ts" ? "app/layout.tsx" : "src/components/layout/Layout.tsx"),
     framework: projectStructure.profileId,
     type: "layout",
     layout: true,
@@ -96,7 +98,7 @@ function buildReactComponents({ goalType, uiPlan, projectStructure, featurePlan 
   for (const [name, path, shared] of widgetDefs) {
     addComponent(components, {
       name,
-      path,
+      path: componentPath(path),
       framework: projectStructure.profileId,
       type: "component",
       route,
@@ -145,11 +147,13 @@ function buildReactComponents({ goalType, uiPlan, projectStructure, featurePlan 
 
 function buildNodeComponents({ projectStructure }) {
   const components = [];
-  addComponent(components, { name: "Server", path: "src/server.js", type: "server", root: true, route: "/health", framework: projectStructure.profileId, imports: ["Routes"], exports: ["default"] });
-  addComponent(components, { name: "Routes", path: "src/routes/index.js", type: "route-group", parent: componentId("Server", "src/server.js"), route: "/health", framework: projectStructure.profileId, imports: ["HealthRoute"] });
-  addComponent(components, { name: "HealthRoute", path: "src/routes/health.js", type: "route", parent: componentId("Routes", "src/routes/index.js"), route: "/health", framework: projectStructure.profileId, shared: true, usageCount: 2 });
-  addComponent(components, { name: "Middleware", path: "src/middleware/errorHandler.js", type: "middleware", framework: projectStructure.profileId, shared: true, usageCount: 2 });
-  addComponent(components, { name: "ErrorHandler", path: "src/middleware/errorHandler.js", type: "middleware", framework: projectStructure.profileId, shared: true, usageCount: 2 });
+  const hasPathAuthority = Array.isArray(projectStructure?.targetFiles) && projectStructure.targetFiles.length > 0;
+  const componentPath = (value) => hasPathAuthority ? value : null;
+  addComponent(components, { name: "Server", path: componentPath("src/server.js"), type: "server", root: true, route: "/health", framework: projectStructure.profileId, imports: ["Routes"], exports: ["default"] });
+  addComponent(components, { name: "Routes", path: componentPath("src/routes/index.js"), type: "route-group", parent: componentId("Server", "src/server.js"), route: "/health", framework: projectStructure.profileId, imports: ["HealthRoute"] });
+  addComponent(components, { name: "HealthRoute", path: componentPath("src/routes/health.js"), type: "route", parent: componentId("Routes", "src/routes/index.js"), route: "/health", framework: projectStructure.profileId, shared: true, usageCount: 2 });
+  addComponent(components, { name: "Middleware", path: componentPath("src/middleware/errorHandler.js"), type: "middleware", framework: projectStructure.profileId, shared: true, usageCount: 2 });
+  addComponent(components, { name: "ErrorHandler", path: componentPath("src/middleware/errorHandler.js"), type: "middleware", framework: projectStructure.profileId, shared: true, usageCount: 2 });
   return {
     components,
     root: components.filter(component => component.root),
@@ -167,9 +171,11 @@ function buildTextComponents({ projectStructure, profileId }) {
   const components = [];
   const isPhp = profileId === "php-plain";
   const entry = isPhp ? "index.php" : "index.html";
-  addComponent(components, { name: "PageShell", path: entry, type: "template", root: true, framework: profileId, route: "/", shared: true, usageCount: 2 });
-  addComponent(components, { name: "Header", path: entry, type: "template-part", framework: profileId, route: "/", shared: true, usageCount: 2 });
-  addComponent(components, { name: "Footer", path: entry, type: "template-part", framework: profileId, route: "/", shared: true, usageCount: 2 });
+  const hasPathAuthority = Array.isArray(projectStructure?.targetFiles) && projectStructure.targetFiles.length > 0;
+  const componentPath = (value) => hasPathAuthority ? value : null;
+  addComponent(components, { name: "PageShell", path: componentPath(entry), type: "template", root: true, framework: profileId, route: "/", shared: true, usageCount: 2 });
+  addComponent(components, { name: "Header", path: componentPath(entry), type: "template-part", framework: profileId, route: "/", shared: true, usageCount: 2 });
+  addComponent(components, { name: "Footer", path: componentPath(entry), type: "template-part", framework: profileId, route: "/", shared: true, usageCount: 2 });
   return {
     components,
     root: components.filter(component => component.root),

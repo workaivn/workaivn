@@ -40,7 +40,7 @@ const reactViteTs = createProfile({
   },
   matchIntent(intent = {}) {
     const requested = String(intent.requestedFramework || "").toLowerCase();
-    return requested === "react-vite-ts" || matchPrompt(intent, ["react", "vite", "spa", "dashboard", "admin", "saas", "frontend"]);
+    return requested === "react-vite-ts" || matchPrompt(intent, ["react", "vite", "dashboard", "admin"]);
   }
 });
 

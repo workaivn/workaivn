@@ -11,6 +11,7 @@ import { resolveExecutionDependencies } from "./dependencyResolver.js";
 import { serializeExecutionPlan, loadExecutionPlan } from "./serializer.js";
 import { EXECUTION_LOG_EVENTS, EXECUTION_PLAN_VERSION } from "./types.js";
 import { unique, toPosix } from "./utils.js";
+import { createExecutionPlanner } from "../../agent/executionPlanner/executionPlanner.js";
 
 function logEvent(eventName, payload = {}) {
   console.log(`[${eventName}]`, payload);
@@ -50,6 +51,58 @@ function collectSummary(plan = {}, validationPlan = {}, risk = {}, workspaceStat
 }
 
 export async function buildExecutionPlan(input = {}) {
+  const executionPlanner = createExecutionPlanner({
+    objective: String(input.prompt || input.objective || ""),
+    verifiedPlanningContext: input.verifiedPlanningContext || input.planningContext || null,
+    knowledgeGraph: input.knowledgeGraph || null,
+    canonicalFileUniverse: Array.isArray(input.canonicalFileUniverse) ? input.canonicalFileUniverse : [],
+    plannerPolicies: input.plannerPolicies || {},
+    projectIntent: input.projectIntent || {},
+    projectScan: input.projectScan || input.workspaceState?.scan || {}
+  });
+  logEvent(EXECUTION_LOG_EVENTS.START, { workspaceRoot: String(input.workspaceRoot || input.workspaceState?.workspaceRoot || "").trim() || null });
+  console.log('[LEGACY_PLANNER_REDIRECT]', {
+    source: 'buildExecutionPlan',
+    target: 'createExecutionPlanner',
+    taskCount: executionPlanner.tasks.length
+  });
+  console.log('[LEGACY_DEPRECATED]', {
+    source: 'buildExecutionPlan',
+    replacement: 'createExecutionPlanner'
+  });
+  return {
+    version: EXECUTION_PLAN_VERSION,
+    planId: input.planId || `execution-plan:${crypto.randomUUID()}`,
+    workspaceId: String(input.workspaceRoot || input.workspaceState?.workspaceRoot || "").trim() || input.workspaceId || "",
+    prompt: String(input.prompt || input.objective || ""),
+    tasks: executionPlanner.tasks,
+    dependencies: executionPlanner.graph?.allUnits?.().flatMap?.(unit => unit.dependencies?.map?.(dep => ({ from: dep, to: unit.id })) || []) || [],
+    validation: [],
+    finalizationRules: [],
+    riskLevel: "unknown",
+    summary: {
+      taskCount: executionPlanner.tasks.length,
+      criticalTaskCount: executionPlanner.tasks.length,
+      implementationTaskCount: executionPlanner.tasks.filter(task => ["WRITE_FILE", "APPLY_PATCH"].includes(task.tool)).length,
+      readTaskCount: executionPlanner.tasks.filter(task => task.tool === "READ_FILE").length,
+      validationTaskCount: executionPlanner.tasks.filter(task => task.tool === "RUN_TERMINAL" || task.tool === "VALIDATE").length,
+      statusCounts: {},
+      targetFiles: unique(executionPlanner.tasks.flatMap(task => Array.isArray(task.targetFiles) ? task.targetFiles : [])),
+      workspaceRoot: String(input.workspaceRoot || input.workspaceState?.workspaceRoot || "").trim(),
+      validationStrategy: "execution-planner",
+      riskLevel: "unknown",
+      validationValid: executionPlanner.validation?.valid !== false,
+      finalizable: true,
+      retryCount: 0
+    },
+    confidence: { overall: 0.8, evidence: 0.9, validation: 0.8 },
+    validationPlan: { commands: executionPlanner.executionContract?.validationCommands || [], checks: [], skipped: [], strategy: "execution-planner" },
+    scope: input.scope || {},
+    blockedTasks: [],
+    validationResult: executionPlanner.validation || { valid: true, errors: [] },
+    executionPlanner
+  };
+
   const workspaceRoot = String(input.workspaceRoot || input.workspaceState?.workspaceRoot || "").trim();
   logEvent(EXECUTION_LOG_EVENTS.START, { workspaceRoot: workspaceRoot || null });
 

@@ -33,6 +33,11 @@ import {
   validateStructuralContent as validateStructuredWriteContent
 } from "./writeCoordinator/validationDelta.js";
 import { normalizeCoordinatorResponse } from "./writeCoordinator/responseNormalizer.js";
+import {
+  classifyModelResponseFailure,
+  extractCanonicalContent,
+  normalizeModelResponse
+} from "./runtime/modelResponseNormalizer.js";
 import { resolveTokenBudget } from "../services/adapters/tokenBudget.js";
 import {
   acceptanceCriteriaToPrompt,
@@ -53,8 +58,15 @@ import {
 } from "./planner/plannerMetrics.js";
 import { isSameCommand, matchValidationCommand } from "./validationCommandMatcher.js";
 import { buildPlannerContext } from "./planner/contextBuilder.js";
+import { buildPlanningContext } from "./planner/context/PlanningContextBuilder.js";
+import { resolvePlannerPolicies } from "./planner/context/PlannerPolicy.js";
+import { checkValidationCommandCandidate } from "./planner/context/PlannerAuthorityFirewall.js";
 import { expandPlannerTasks } from "./planner/taskExpander.js";
-import { buildPlannerExecutionMetadata, detectProjectIntent, detectWorkspaceState, resolveBootstrapProfile } from "./projectIntelligence/index.js";
+import { buildPlannerExecutionMetadata, buildKnowledgeGraph, detectProjectIntent, detectWorkspaceState, resolveBootstrapProfile } from "./projectIntelligence/index.js";
+import { validatePlannerAssumptions, filterUnverifiedFiles, ASSUMPTION_ACTION, decideAssumptionAction } from "./planner/assumptionValidator.js";
+import { createProposal, promoteProposalGraphToTasks } from "./planner/proposals/index.js";
+import { createExecutionPlanner } from "./executionPlanner/executionPlanner.js";
+import { projectMessagesToExecutionContract } from "./executionPlanner/executionContract.js";
 import { buildExecutionStateRegistry, extractExternalFailureFilesFromText } from "./execution/executionStateRegistry.js";
 import { evaluateExecutionStrategy } from "./strategy/index.js";
 import {
@@ -69,6 +81,8 @@ import {
 } from "./planner/executionController.js";
 import { checkTaskTimeout, markTaskStall } from "./planner/taskTimeout.js";
 import { sanitizeRunPayload, truncateRunText } from "./runPayload.js";
+import { validateExecutionResult, serializeValidationReport } from "../validation/validator/index.js";
+export { normalizeToolPayload } from "./runtime/toolDispatcher.js";
 
 const DEBUG = () => process.env.DEBUG_AGENT === "true";
 
@@ -261,57 +275,16 @@ function emitHistoryLookup(history, task, step) {
 }
 
 function parseAgentResponse(response) {
-  const raw = String(response ?? "").trim();
-  const candidates = [raw];
-  const fencedBlocks = raw.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi);
-
-  for (const match of fencedBlocks) {
-    if (match[1]?.trim()) candidates.unshift(match[1].trim());
+  const normalized = normalizeModelResponse(response, { mode: "tool" });
+  if (normalized.success) {
+    return normalized.parsed;
   }
 
-  let lastError = null;
-  for (const candidate of candidates) {
-    try {
-      const direct = JSON.parse(candidate);
-      if (direct && typeof direct === "object" && !Array.isArray(direct)) {
-        return direct;
-      }
-    } catch (error) {
-      lastError = error;
-    }
-
-    const objectText = extractFirstJsonObject(candidate);
-    if (!objectText) continue;
-
-    try {
-      return JSON.parse(objectText);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  // Attempt repair on the raw text (handles unquoted strings, trailing commas, etc.)
-  const repaired = tryParseWithRepair(raw);
-  if (repaired) {
-    console.log("[AgentJSON] repaired invalid JSON successfully");
-    return repaired;
-  }
-
-  // Try extracting the last JSON object as fallback
-  const repairedLast = extractLastJsonObject(raw);
-  if (repairedLast) {
-    try {
-      return JSON.parse(repairedLast);
-    } catch {
-      // fall through
-    }
-  }
-
-  throw new Error(
-    lastError
-      ? `AI returned invalid JSON object: ${lastError.message}`
-      : "AI returned no JSON object"
-  );
+  const error = new Error(normalized.message || "AI returned no JSON object");
+  error.code = normalized.code || "MODEL_FORMAT_ERROR";
+  error.failureType = error.code;
+  error.normalized = normalized;
+  throw error;
 }
 
 function extractFirstJsonObject(text) {
@@ -461,36 +434,16 @@ function isPlannerReasoningTask(task) {
 }
 
 function parseReasoningJson(raw) {
-  const text = String(raw ?? "").trim();
-  if (!text) throw new Error("Reasoning returned empty response");
-
-  const candidates = [text];
-  for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
-    if (match[1]?.trim()) candidates.unshift(match[1].trim());
+  const normalized = normalizeModelResponse(raw, { mode: "reasoning" });
+  if (normalized.success) {
+    return normalized.parsed;
   }
 
-  let lastError = null;
-  for (const candidate of candidates) {
-    try {
-      return JSON.parse(candidate);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  const objectText = extractFirstJsonObject(text);
-  if (objectText) {
-    try {
-      return JSON.parse(objectText);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  const repaired = tryParseWithRepair(text);
-  if (repaired) return repaired;
-
-  throw new Error(lastError ? `Reasoning returned invalid JSON: ${lastError.message}` : "Reasoning returned no JSON object");
+  const error = new Error(normalized.message || "Reasoning returned no JSON object");
+  error.code = normalized.code || "MODEL_FORMAT_ERROR";
+  error.failureType = error.code;
+  error.normalized = normalized;
+  throw error;
 }
 
 function extractReasoningToolPayloads(parsed) {
@@ -504,12 +457,16 @@ function extractReasoningToolPayloads(parsed) {
 }
 
 function createExecutionTasksFromReasoning(parsed, reasoningTask) {
+  console.log('[LEGACY_DEPRECATED]', {
+    source: 'createExecutionTasksFromReasoning',
+    replacement: 'PlannerAuthorityFirewall + ExecutionPlanner'
+  });
   const payloads = extractReasoningToolPayloads(parsed);
   if (payloads.length === 0) {
     throw new Error("Reasoning JSON did not contain executable tool calls");
   }
 
-  const tasks = [];
+  const proposals = [];
   for (const payload of payloads) {
     const norm = normalizeToolPayload(payload);
     const toolName = String(norm.toolName || "").toUpperCase();
@@ -521,13 +478,28 @@ function createExecutionTasksFromReasoning(parsed, reasoningTask) {
       const content = typeof args.content === "string" ? args.content : "";
       if (!file) throw new Error("WRITE_FILE from reasoning is missing path");
       if (!content.trim()) throw new Error(`WRITE_FILE from reasoning has empty content for ${file}`);
-      tasks.push(new Task({
-        kind: "EXECUTION",
-        goal: `Write generated file: ${file}`,
-        tool: "WRITE_FILE",
-        toolArgs: { ...args, path: file, file },
-        dependencies: [],
-        priority: 80
+      console.log("[MODEL_CANDIDATE_ACTION_UNTRUSTED]", {
+        taskId: reasoningTask?.id || null,
+        tool: toolName,
+        path: file,
+        reason: "reasoning output requires planner verification"
+      });
+      proposals.push(createProposal({
+        proposalType: "FILE",
+        source: "model-reasoning",
+        proposalSource: "model-reasoning",
+        proposalId: `model-reasoning:${reasoningTask?.id || "task"}:${file}`,
+        description: `Candidate write for ${file}`,
+        suggestedFiles: [file],
+        verificationStatus: "unverified",
+        promotionDecision: "recommendation",
+        evidenceRefs: [reasoningTask?.id ? `task:${reasoningTask.id}` : "task:unknown"],
+        metadata: {
+          contentByFile: { [file]: content },
+          sourceTool: toolName,
+          verificationStatus: "unverified",
+          promotionDecision: "recommendation"
+        }
       }));
       continue;
     }
@@ -538,13 +510,28 @@ function createExecutionTasksFromReasoning(parsed, reasoningTask) {
       if (!String(args.find || "").length || !String(args.replace || "").length) {
         throw new Error(`APPLY_PATCH from reasoning is missing find/replace for ${file}`);
       }
-      tasks.push(new Task({
-        kind: "EXECUTION",
-        goal: `Apply generated patch: ${file}`,
-        tool: "APPLY_PATCH",
-        toolArgs: { ...args, file },
-        dependencies: [],
-        priority: 80
+      console.log("[MODEL_CANDIDATE_ACTION_UNTRUSTED]", {
+        taskId: reasoningTask?.id || null,
+        tool: toolName,
+        path: file,
+        reason: "reasoning output requires planner verification"
+      });
+      proposals.push(createProposal({
+        proposalType: "FILE",
+        source: "model-reasoning",
+        proposalSource: "model-reasoning",
+        proposalId: `model-reasoning:${reasoningTask?.id || "task"}:${file}:patch`,
+        description: `Candidate patch for ${file}`,
+        suggestedFiles: [file],
+        verificationStatus: "unverified",
+        promotionDecision: "recommendation",
+        evidenceRefs: [reasoningTask?.id ? `task:${reasoningTask.id}` : "task:unknown"],
+        metadata: {
+          patch: args,
+          sourceTool: toolName,
+          verificationStatus: "unverified",
+          promotionDecision: "recommendation"
+        }
       }));
       continue;
     }
@@ -552,13 +539,27 @@ function createExecutionTasksFromReasoning(parsed, reasoningTask) {
     if (toolName === "RUN_TERMINAL") {
       const command = String(args.command || "").trim();
       if (!command) throw new Error("RUN_TERMINAL from reasoning is missing command");
-      tasks.push(new Task({
-        kind: "EXECUTION",
-        goal: `Run command: ${command}`,
-        tool: "RUN_TERMINAL",
-        toolArgs: { ...args, command },
-        dependencies: [],
-        priority: 100
+      console.log("[MODEL_CANDIDATE_ACTION_UNTRUSTED]", {
+        taskId: reasoningTask?.id || null,
+        tool: toolName,
+        command,
+        reason: "reasoning output requires planner verification"
+      });
+      proposals.push(createProposal({
+        proposalType: "EXECUTION",
+        source: "model-reasoning",
+        proposalSource: "model-reasoning",
+        proposalId: `model-reasoning:${reasoningTask?.id || "task"}:${command}`,
+        description: `Candidate command ${command}`,
+        suggestedCommands: [command],
+        verificationStatus: "unverified",
+        promotionDecision: "recommendation",
+        evidenceRefs: [reasoningTask?.id ? `task:${reasoningTask.id}` : "task:unknown"],
+        metadata: {
+          sourceTool: toolName,
+          verificationStatus: "unverified",
+          promotionDecision: "recommendation"
+        }
       }));
       continue;
     }
@@ -566,13 +567,27 @@ function createExecutionTasksFromReasoning(parsed, reasoningTask) {
     if (toolName === "READ_FILE") {
       const file = String(args.path || "").trim();
       if (!file) throw new Error("READ_FILE from reasoning is missing path");
-      tasks.push(new Task({
-        kind: "EXECUTION",
-        goal: `Read file: ${file}`,
-        tool: "READ_FILE",
-        toolArgs: { ...args, path: file },
-        dependencies: [],
-        priority: 60
+      console.log("[MODEL_CANDIDATE_ACTION_UNTRUSTED]", {
+        taskId: reasoningTask?.id || null,
+        tool: toolName,
+        path: file,
+        reason: "reasoning output requires planner verification"
+      });
+      proposals.push(createProposal({
+        proposalType: "FILE",
+        source: "model-reasoning",
+        proposalSource: "model-reasoning",
+        proposalId: `model-reasoning:${reasoningTask?.id || "task"}:${file}:read`,
+        description: `Candidate read for ${file}`,
+        suggestedFiles: [file],
+        verificationStatus: "unverified",
+        promotionDecision: "recommendation",
+        evidenceRefs: [reasoningTask?.id ? `task:${reasoningTask.id}` : "task:unknown"],
+        metadata: {
+          sourceTool: toolName,
+          verificationStatus: "unverified",
+          promotionDecision: "recommendation"
+        }
       }));
       continue;
     }
@@ -580,10 +595,10 @@ function createExecutionTasksFromReasoning(parsed, reasoningTask) {
     throw new Error(`Unsupported reasoning tool: ${toolName}`);
   }
 
-  if (tasks.length === 0) {
+  if (proposals.length === 0) {
     throw new Error(`Reasoning task ${reasoningTask?.id || ""} produced no executable tasks`);
   }
-  return tasks;
+  return { proposals };
 }
 
 function createEvent(type, details = {}) {
@@ -1071,7 +1086,7 @@ async function runSplitWriteCoordinatorFallback({
     targetPath: entry.targetPath,
     ...(entry.writeContext?.validationPolicy || {})
   }));
-  const maxTokenByRole = role => String(role || '').toLowerCase() === 'test' ? 1200 : 800;
+  const maxTokenByRole = role => String(role || '').toLowerCase() === 'test' ? 4096 : 4096;
 
   console.log('[WRITE_COORDINATOR_FALLBACK_SPLIT]', {
     groupIndex,
@@ -1426,7 +1441,8 @@ async function prepareCoordinatorWriteFileArgs({
     writeContext,
     frameworkHintsEmitted: true,
     policySource: 'coordinator',
-    coordinatorValidationFileSet
+    coordinatorValidationFileSet,
+    deferValidation: true
   });
 
   if (!validation.success) {
@@ -1459,6 +1475,52 @@ async function prepareCoordinatorWriteFileArgs({
     validationPolicy: validation.policy || null,
     frameworkValidation: validation.frameworkValidation || null
   };
+}
+
+async function validateCommittedWriteOutput({
+  task,
+  effectiveArgs,
+  workspaceRoot,
+  layout,
+  workspaceFiles = [],
+  requiredSymbols = [],
+  originalPrompt = "",
+  objective = "",
+  writeContext = null,
+  validationSource = "post_commit",
+  policySource = "post_commit",
+  frameworkHintsEmitted = true,
+  coordinatorValidationFileSet = null
+} = {}) {
+  const targetPath = String(task?.toolArgs?.path || task?.toolArgs?.file || task?.toolArgs?.target || effectiveArgs?.path || effectiveArgs?.file || effectiveArgs?.target || "").trim();
+  const content = String(effectiveArgs?.content || "");
+  console.log("[CONTENT_COMMITTED]", {
+    taskId: task?.id || null,
+    path: targetPath,
+    contentLength: content.length
+  });
+  const validation = await validateGeneratedWriteContent({
+    task,
+    workspaceRoot,
+    targetPath,
+    content,
+    projectScan: layout,
+    workspaceFiles,
+    requiredSymbols,
+    prompt: String(originalPrompt || objective || ""),
+    validationSource,
+    writeContext,
+    frameworkHintsEmitted,
+    policySource,
+    coordinatorValidationFileSet
+  });
+  console.log("[POST_COMMIT_VALIDATION]", {
+    taskId: task?.id || null,
+    path: targetPath,
+    success: validation.success === true,
+    reason: validation.error || validation.reason || null
+  });
+  return validation;
 }
 
 function buildRetryDiagnosticBlocks(errors = []) {
@@ -1690,7 +1752,7 @@ async function resolveParallelWriteCoordinator({
       originalPromptLength: fullPromptLength,
       compactPromptLength: promptBundle.user.length,
       targetPaths,
-      maxTokens: 1200
+      maxTokens: 4096
     });
   }
 
@@ -1702,8 +1764,8 @@ async function resolveParallelWriteCoordinator({
   });
 
   const tokenBudget = resolveWriteGenerationTokenBudget({
-    requestedMaxTokens: localModelMode ? 1200 : maxTokens,
-    maxTokensCapOverride: localModelMode ? 1600 : maxTokens,
+    requestedMaxTokens: localModelMode ? 4096 : maxTokens,
+    maxTokensCapOverride: localModelMode ? 4096 : maxTokens,
     source: localModelMode ? 'write_coordinator_local' : 'write_coordinator'
   });
   const effectiveMaxTokens = tokenBudget.effectiveMaxTokens;
@@ -2444,6 +2506,19 @@ async function resolveParallelWriteCoordinator({
       };
     }
 
+    if (attempt < 2) {
+      console.log('[WRITE_COORDINATOR_RETRY]', {
+        groupIndex,
+        attempt,
+        validationErrors: currentErrors.length,
+        validationDeltas: currentDeltas.length
+      });
+      lastErrors = [...currentErrors];
+      lastValidationDeltas = [...currentDeltas];
+      retryCount += 1;
+      continue;
+    }
+
     if (attempt === 0 && currentErrors.some(e => {
       try { const p = JSON.parse(String(e || '')); return p?.frameworkValidation != null; } catch { return false; }
     })) {
@@ -2833,15 +2908,37 @@ export function applyScriptInstructionToPackage(pkgObj, instr) {
 function extractRequestedValidationCommand(objective, projectScan = null) {
   const text = String(objective || "");
   const explicitCommands = extractCommands(text);
-  if (explicitCommands.length > 0) return explicitCommands[0];
+  if (explicitCommands.length > 0) {
+    console.log('[RAW_VALIDATION_COMMAND_CANDIDATE]', {
+      command: explicitCommands[0],
+      source: 'raw_prompt',
+      reason: 'Extracted from raw prompt — candidate only'
+    });
+    return { command: explicitCommands[0], source: 'raw_prompt', status: 'candidate' };
+  }
 
   const scanCommands = Array.isArray(projectScan?.testCommands)
     ? projectScan.testCommands.map(cmd => String(cmd || '').trim()).filter(Boolean)
     : [];
-  if (scanCommands.length > 0) return scanCommands[0];
+  if (scanCommands.length > 0) {
+    console.log('[VALIDATION_COMMAND_AUTHORITY_APPROVED]', {
+      command: scanCommands[0],
+      source: 'workspace_scan',
+      reason: 'Validation command from workspace scan'
+    });
+    return { command: scanCommands[0], source: 'workspace_scan', status: 'approved' };
+  }
 
   const nodeCheck = text.match(/\bnode\s+--check\b[^\n]*/i);
-  if (nodeCheck) return nodeCheck[0].trim();
+  if (nodeCheck) {
+    const cmd = nodeCheck[0].trim();
+    console.log('[RAW_VALIDATION_COMMAND_CANDIDATE]', {
+      command: cmd,
+      source: 'raw_prompt',
+      reason: 'Extracted from raw prompt — candidate only'
+    });
+    return { command: cmd, source: 'raw_prompt', status: 'candidate' };
+  }
   return null;
 }
 
@@ -3075,6 +3172,7 @@ export async function generateValidatedWriteContent({
   task = null,
   args = {},
   objective = '',
+  executionContract = null,
   reason = 'generate_content',
   plan,
   step,
@@ -3085,7 +3183,8 @@ export async function generateValidatedWriteContent({
   workspaceFiles = [],
   requiredSymbols = [],
   maxTokens = WRITE_GENERATION_DEFAULT_MAX_TOKENS,
-  onFailure = () => {}
+  onFailure = () => {},
+  retryDepth = 0
 } = {}) {
   const tokenBudget = resolveWriteGenerationTokenBudget({
     requestedMaxTokens: maxTokens,
@@ -3093,6 +3192,7 @@ export async function generateValidatedWriteContent({
     source: reason || 'write_generation'
   });
   const targetPath = String(args?.path || args?.file || args?.target || '').trim();
+  const effectiveObjective = String(executionContract?.objectiveSummary || objective || '').trim();
   if (!targetPath) {
     return { accepted: false, error: 'WRITE_FILE requires a target path', targetPath: '' };
   }
@@ -3105,7 +3205,7 @@ export async function generateValidatedWriteContent({
       workspaceRoot,
       targetPath,
       projectScan: layout,
-      prompt: objective,
+      prompt: effectiveObjective,
       workspaceFiles,
       requiredSymbols,
       taskId: task?.id || null
@@ -3133,27 +3233,7 @@ export async function generateValidatedWriteContent({
   let resolvedWriteError = null;
 
   const shouldRetryGenerationFailure = (failureText, validationResult = null) => {
-    const decision = evaluateExecutionStrategy({
-      failedTask: task || { tool: 'WRITE_FILE', kind: 'CODING' },
-      validationResult: validationResult || { stderr: failureText || '', stdout: '', output: '', rawOutput: '' },
-      plannerMetadata: {
-        requiredCommands: writeContext?.validationPolicy?.requiredCommands || [],
-        parallelAllowed: true
-      },
-      workspaceMetadata: {
-        workspaceRoot,
-        readOnly: false,
-        packageManagerAvailable: writeContext?.packageJson != null,
-        frameworkRunnable: writeContext?.detectedTestFrameworkAvailability?.runnable !== false,
-        terminalAvailable: true,
-        packageEditable: true,
-        frameworkSetupAllowed: writeContext?.detectedTestFrameworkAvailability?.runnable === false,
-        validationRequired: true
-      },
-      projectScan: layout || {},
-      requiredCommands: writeContext?.validationPolicy?.requiredCommands || []
-    });
-    return decision.retryAllowed === true;
+    return true;
   };
 
   for (let generationAttempt = 1; generationAttempt <= MAX_WRITE_GENERATION_RETRIES; generationAttempt += 1) {
@@ -3164,16 +3244,20 @@ export async function generateValidatedWriteContent({
       moduleSystem,
       requiredSymbols: writeContext.requiredSymbols || [],
       importers,
-      objective
+      objective: effectiveObjective
     });
     const contentResult = await enforceExpectedToolResponse({
       expectedTool: 'WRITE_FILE',
       expectedArgs: args,
-      conversation: [...conversation, { role: 'system', content: contentPrompt }],
+      conversation: [
+        ...projectMessagesToExecutionContract(conversation, executionContract),
+        { role: 'system', content: contentPrompt }
+      ],
       plan,
       step,
-      objective,
+      objective: effectiveObjective,
       generateResponse,
+      purpose: 'write_coordinator',
       responseMode: 'content',
       context: { path: targetPath },
       maxAttempts: 3,
@@ -3308,15 +3392,25 @@ export async function generateValidatedWriteContent({
       targetPath,
       content: generatedContent,
       projectScan: layout,
-      prompt: objective,
+      prompt: effectiveObjective,
       workspaceFiles,
       requiredSymbols: writeContext.requiredSymbols || [],
       validationSource: 'generated_write',
-      // Reuse the writeContext already built above (line ~2038) instead of
-      // rebuilding it. The single-file generator owns this policy.
-      writeContext,
-      policySource: 'write_generator'
-    });
+    // Reuse the writeContext already built above (line ~2038) instead of
+    // rebuilding it. The single-file generator owns this policy.
+    writeContext,
+    policySource: 'write_generator',
+    deferValidation: true
+  });
+    if (validation.deferredValidation) {
+      resolvedWriteContent = String(validation.content || generatedContent);
+      console.log('[WRITE_CONTENT_GENERATED]', {
+        targetPath,
+        contentLength: resolvedWriteContent.length,
+        moduleSystem: validation.moduleSystem || moduleSystem
+      });
+      break;
+    }
     if (!validation.success) {
       rejectedContentHashes.add(generatedHash);
       console.log('[WRITE_CONTENT_VALIDATION_FAILED]', {
@@ -3350,6 +3444,29 @@ export async function generateValidatedWriteContent({
         onFailure(resolvedWriteError);
         console.log('[WRITE_CONTENT_GENERATION_FAILED]', { targetPath, reason: resolvedWriteError });
         break;
+      }
+      if (retryDepth < 1) {
+        return prepareWriteFileArgsForPlannerTask({
+          task,
+          args,
+          originalPrompt,
+          objective,
+          executionContract,
+          workspaceRoot,
+          layout,
+          workspaceFiles,
+          requiredSymbols,
+          generateResponse,
+          conversation: [
+            ...conversation,
+            { role: 'system', content: `${validation.error || 'Content validation failed.'} Do not repeat the same content. Return compatible content only.` }
+          ],
+          plan,
+          step,
+          maxTokens,
+          onFailure,
+          retryDepth: retryDepth + 1
+        });
       }
       conversation.push({ role: 'system', content: `${validation.error || 'Content validation failed.'} Do not repeat the same content. Return compatible content only.` });
       continue;
@@ -3405,6 +3522,32 @@ export async function generateValidatedWriteContent({
         console.log('[WRITE_CONTENT_GENERATION_FAILED]', { targetPath, reason: resolvedWriteError });
         break;
       }
+      if (retryDepth < 1) {
+        return prepareWriteFileArgsForPlannerTask({
+          task,
+          args,
+          originalPrompt,
+          objective,
+          executionContract,
+          workspaceRoot,
+          layout,
+          workspaceFiles,
+          requiredSymbols,
+          generateResponse,
+          conversation: [
+            ...conversation,
+            {
+              role: 'system',
+              content: `${structural.reason || 'Structural validation failed.'} Regenerate the full file from scratch. Do not return partial, import-only, or patch-only output.`
+            }
+          ],
+          plan,
+          step,
+          maxTokens,
+          onFailure,
+          retryDepth: retryDepth + 1
+        });
+      }
       conversation.push({
         role: 'system',
         content: `${structural.reason || 'Structural validation failed.'} Regenerate the full file from scratch. Do not return partial, import-only, or patch-only output.`
@@ -3451,6 +3594,7 @@ export async function prepareWriteFileArgsForPlannerTask({
   args = {},
   originalPrompt = '',
   objective = '',
+  executionContract = null,
   workspaceRoot,
   layout = null,
   workspaceFiles = [],
@@ -3468,6 +3612,7 @@ export async function prepareWriteFileArgsForPlannerTask({
     source: 'prepare_write_file'
   });
   const targetPath = String(args?.path || args?.file || args?.target || '').trim();
+  const effectiveObjective = String(executionContract?.objectiveSummary || objective || originalPrompt || '').trim();
   if (!targetPath) {
     return {
       ok: false,
@@ -3506,7 +3651,7 @@ export async function prepareWriteFileArgsForPlannerTask({
 
   const promptSource = [
     String(originalPrompt || '').trim(),
-    String(objective || '').trim(),
+    effectiveObjective,
     String(task?.goal || '').trim()
   ].filter(Boolean).join('\n');
   const parsedPrompt = parsePromptFileLiterals(promptSource);
@@ -3578,6 +3723,7 @@ export async function prepareWriteFileArgsForPlannerTask({
       file: targetPath
     },
     objective: targetPromptSource || objective,
+    executionContract,
     plan,
     step,
     generateResponse,
@@ -3985,6 +4131,10 @@ export function buildRunFileMetadata({
       : null;
     if (snapshot) {
       return {
+        plannedFiles: snapshot.plannedFiles || [],
+        generatedFiles: snapshot.generatedFiles || [],
+        validationRejectedFiles: snapshot.validationRejectedFiles || [],
+        committedFiles: snapshot.committedFiles || [],
         requestedWriteFiles: snapshot.requestedWriteFiles || [],
         plannerReadFiles: snapshot.plannerReadFiles || [],
         changedFiles: snapshot.changedFiles || [],
@@ -3998,7 +4148,8 @@ export function buildRunFileMetadata({
         validationSuccess: snapshot.validationSuccess === true,
         requestedFilesValidated: snapshot.requestedFilesValidated === true,
         validationFailureAttribution: snapshot.validationFailureAttribution || null,
-        externalFailureFiles: snapshot.externalFailureFiles || []
+        externalFailureFiles: snapshot.externalFailureFiles || [],
+        failedFiles: snapshot.failedFiles || []
       };
     }
   }
@@ -4022,6 +4173,10 @@ export function buildRunFileMetadata({
       ? completionResult.changedFiles
       : changedFiles
   );
+  const committedFiles = uniqueMetadataFiles([
+    ...changedFileList,
+    ...(Array.isArray(verifiedExistingFiles) ? verifiedExistingFiles : [])
+  ]);
   const validationPassed = completionResult
     ? completionResult.validationPassed === true
     : qualityGatePassed === true;
@@ -4059,6 +4214,16 @@ export function buildRunFileMetadata({
     workspaceRoot
   });
   return {
+    plannedFiles: requestedWriteFiles,
+    generatedFiles: uniqueMetadataFiles((Array.isArray(toolCalls) ? toolCalls : [])
+      .filter(call => call && call.tool === "WRITE_FILE" && call.success !== false)
+      .map(call => call.result?.file || call.args?.path || call.args?.file || call.args?.target || "")
+      .filter(Boolean)),
+    validationRejectedFiles: uniqueMetadataFiles((Array.isArray(toolCalls) ? toolCalls : [])
+      .filter(call => call && call.tool === "WRITE_FILE" && call.success === false)
+      .map(call => call.args?.path || call.args?.file || call.args?.target || "")
+      .filter(Boolean)),
+    committedFiles,
     requestedWriteFiles,
     plannerReadFiles: computedPlannerReadFiles,
     changedFiles: changedFileList,
@@ -4155,6 +4320,7 @@ async function enforceExpectedToolResponse({
   step,
   objective,
   generateResponse,
+  purpose = 'code_generation',
   maxAttempts = 3,
   maxTokens = null,
   onMismatch = () => {},
@@ -4168,6 +4334,8 @@ async function enforceExpectedToolResponse({
   let lastRaw = null;
   let lastParsed = null;
   let returnedTool = null;
+  let lastError = null;
+  let lastErrorCode = null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const raw = await generateResponse({
@@ -4176,27 +4344,40 @@ async function enforceExpectedToolResponse({
       step,
       objective,
       maxTokens: maxTokens ?? undefined,
-      maxTokensCapOverride: maxTokens ?? undefined
+      maxTokensCapOverride: maxTokens ?? undefined,
+      purpose
     });
     lastRaw = raw;
     try {
       const parsed = parseAgentResponse(raw);
       lastParsed = parsed;
       if (responseMode === 'content') {
-        const payload = parsed || {};
-        const hasUnexpectedTool = Boolean(payload.tool);
-        const normalizedContentMode = normalizedExpected;
-        if (normalizedContentMode === 'WRITE_FILE') {
-          const content = String(payload.content ?? '');
-        if (!hasUnexpectedTool && content.trim()) {
-            return { accepted: true, parsed: { content, path: payload.path, file: payload.file, target: payload.target }, raw, attempts: attempt + 1 };
+        const content = extractCanonicalContent(parsed);
+        const hasUnexpectedTool = Boolean(parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.tool);
+        if (normalizedExpected === 'WRITE_FILE') {
+          if (!hasUnexpectedTool && content.trim()) {
+            return {
+              accepted: true,
+              parsed: {
+                content,
+                path: parsed?.path || parsed?.file || parsed?.target || parsed?.args?.path || parsed?.args?.file || parsed?.args?.target || null,
+                file: parsed?.file || null,
+                target: parsed?.target || null
+              },
+              raw,
+              attempts: attempt + 1
+            };
           }
-        } else if (normalizedContentMode === 'APPLY_PATCH') {
-          const find = String(payload.find ?? '');
-          const replace = String(payload.replace ?? '');
+          lastErrorCode = hasUnexpectedTool ? 'MODEL_PROTOCOL_ERROR' : (Array.isArray(parsed) ? 'MODEL_PARTIAL_OUTPUT' : 'MODEL_SCHEMA_ERROR');
+          lastError = new Error(lastErrorCode);
+        } else if (normalizedExpected === 'APPLY_PATCH') {
+          const find = String(parsed?.find ?? parsed?.args?.find ?? '');
+          const replace = String(parsed?.replace ?? parsed?.args?.replace ?? '');
           if (!hasUnexpectedTool && find.trim() && replace.trim()) {
             return { accepted: true, parsed: { find, replace }, raw, attempts: attempt + 1 };
           }
+          lastErrorCode = hasUnexpectedTool ? 'MODEL_PROTOCOL_ERROR' : 'MODEL_SCHEMA_ERROR';
+          lastError = new Error(lastErrorCode);
         }
       } else {
         returnedTool = String(parsed?.tool || '').toUpperCase();
@@ -4204,6 +4385,8 @@ async function enforceExpectedToolResponse({
         if (returnedTool === normalizedExpected && isValidExpectedToolResult(normalizedExpected, returnedArgs)) {
           return { accepted: true, parsed, raw, attempts: attempt + 1 };
         }
+        lastErrorCode = parsed?.tool ? 'MODEL_PROTOCOL_ERROR' : 'MODEL_SCHEMA_ERROR';
+        lastError = new Error(lastErrorCode);
       }
 
       onMismatch({
@@ -4231,6 +4414,8 @@ async function enforceExpectedToolResponse({
         content: buildExpectedRecoveryInstruction(normalizedExpected, expectedArgs, context, responseMode)
       });
     } catch (error) {
+      lastError = error;
+      lastErrorCode = classifyModelResponseFailure(error) || error.code || lastErrorCode || 'MODEL_FORMAT_ERROR';
       onMismatch({
         step,
         expectedTool: normalizedExpected,
@@ -4258,7 +4443,7 @@ async function enforceExpectedToolResponse({
     }
   }
 
-  return { accepted: false, parsed: lastParsed, raw: lastRaw, attempts: maxAttempts };
+  return { accepted: false, parsed: lastParsed, raw: lastRaw, attempts: maxAttempts, error: lastError?.message || lastErrorCode || 'MODEL_PROTOCOL_ERROR', errorCode: lastErrorCode || null };
 }
 
 export async function resolveRecoveryToolResponse({
@@ -4288,6 +4473,7 @@ export async function resolveRecoveryToolResponse({
     generateResponse,
     maxAttempts,
     maxTokens: tokenBudget.effectiveMaxTokens,
+    purpose: 'write_coordinator',
     mismatchLog: '[RECOVERY_TOOL_MISMATCH]',
     correctiveLog: '[RECOVERY_CORRECTIVE_INSTRUCTION]',
     context: { path: writePath },
@@ -4327,64 +4513,6 @@ export async function resolveRecoveryPayloadResponse({
     context: { path: writePath },
     responseMode: 'content'
   });
-}
-
-/**
- * Infer a deterministic tool from a planner task's goal when task.tool is not set.
- * Returns { tool, args } or null if inference is not possible.
- */
-function inferToolFromGoal(task, objective) {
-  if (!task || !task.goal) return null;
-  const goal = task.goal;
-
-  const readMatch = goal.match(/^Read file:\s*(.+)/i);
-  if (readMatch) {
-    return { tool: 'READ_FILE', args: { path: readMatch[1].trim() } };
-  }
-
-  const runMatch = goal.match(/^Run command:\s*(.+)/i);
-  if (runMatch) {
-    return { tool: 'RUN_TERMINAL', args: { command: runMatch[1].trim() } };
-  }
-
-  const writeMatch = goal.match(/^Write file:\s*(.+?)\s*—\s*(.+)$/i);
-  if (writeMatch) {
-    const filePath = writeMatch[1].trim();
-    const description = writeMatch[2].trim();
-    let content = '';
-    const contentMatch = description.match(/with:\s*(.+)$/i) || description.match(/with\s+(.+)$/i);
-    if (contentMatch) {
-      let extracted = contentMatch[1].trim();
-      // Strip leading "content " prefix (common in goals: "with content ...")
-      if (/^content\s+/i.test(extracted)) {
-        extracted = extracted.replace(/^content\s+/i, '');
-      }
-      // Truncate at transition words that signal subsequent instructions
-      const transitionWords = /[.;]?\s+(Then|Next|After|Finally|Run|Create)\b/i;
-      const transitionMatch = extracted.match(transitionWords);
-      if (transitionMatch) {
-        extracted = extracted.substring(0, transitionMatch.index);
-      }
-      // Also strip trailing " Then" or " then" at end of extracted content
-      extracted = extracted.replace(/\s+Then\s*$/i, '').trim();
-      content = extracted;
-    } else if (objective) {
-      const escaped = filePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const objMatch = objective.match(new RegExp(escaped + '\\s+with:\\s*(.+?)$', 'im'));
-      if (objMatch) content = objMatch[1].trim();
-    }
-    return {
-      tool: 'WRITE_FILE',
-      args: { file: filePath, content, path: filePath }
-    };
-  }
-
-  const patchMatch = goal.match(/^Apply patch:\s*(.+)/i);
-  if (patchMatch) {
-    return { tool: 'APPLY_PATCH', args: { file: patchMatch[1].trim() } };
-  }
-
-  return null;
 }
 
 function synthesizeDeterministicWriteContent(task, objective) {
@@ -5590,6 +5718,7 @@ export async function runAgentLoop({
         requiresValidationCommand: false,
         requiresFileRead: true,
         requestedFiles: normalizedRequestedFiles,
+        requestedFileDetails: Array.isArray(criteria.requestedFileDetails) ? [...criteria.requestedFileDetails] : [],
         requiredCommands: originalRequiredCommands
       };
     }
@@ -5603,6 +5732,7 @@ export async function runAgentLoop({
         requiresValidationCommand: false,
         requiresFileRead: false,
         requestedFiles: normalizedRequestedFiles,
+        requestedFileDetails: Array.isArray(criteria.requestedFileDetails) ? [...criteria.requestedFileDetails] : [],
         requiredCommands: originalRequiredCommands
       };
     }
@@ -5611,12 +5741,19 @@ export async function runAgentLoop({
       projectScan: scan,
       testCommands: scan?.testCommands || [],
       requestedFiles: normalizedRequestedFiles,
+      requestedFileDetails: Array.isArray(criteria.requestedFileDetails) ? [...criteria.requestedFileDetails] : [],
       requiredCommands: originalRequiredCommands
     };
   })();
   let workspaceState = { existingFiles: [], scan };
   let projectIntent = detectProjectIntent(objective, criteriaEffective);
   let bootstrapProfile = null;
+  const plannerPolicies = resolvePlannerPolicies({
+    workspaceState,
+    projectScan: scan,
+    projectIntent,
+    validatedAssumptions: []
+  });
   if (resolvedWorkspaceRoot) {
     try {
       workspaceState = await detectWorkspaceState(resolvedWorkspaceRoot);
@@ -5624,7 +5761,23 @@ export async function runAgentLoop({
       workspaceState = { existingFiles: [], scan };
     }
   }
-  bootstrapProfile = resolveBootstrapProfile(projectIntent, workspaceState);
+  if (plannerPolicies.ALLOW_PROJECT_BOOTSTRAP === true) {
+    bootstrapProfile = resolveBootstrapProfile(projectIntent, workspaceState);
+    console.log('[BOOTSTRAP_PROFILE_RESOLVED]', {
+      profile: bootstrapProfile?.id || null,
+      label: bootstrapProfile?.label || null,
+      resolvedBy: bootstrapProfile?.resolvedBy || null,
+      goalType: projectIntent.goalType || null,
+      workspaceFiles: Array.isArray(workspaceState.existingFiles) ? workspaceState.existingFiles.length : 0
+    });
+  } else {
+    bootstrapProfile = null;
+    console.log('[BOOTSTRAP_PROFILE_SKIPPED_BY_POLICY]', {
+      policy: 'ALLOW_PROJECT_BOOTSTRAP',
+      goalType: projectIntent.goalType || null,
+      workspaceFiles: Array.isArray(workspaceState.existingFiles) ? workspaceState.existingFiles.length : 0
+    });
+  }
   const criteriaBootstrap = {
     ...criteriaEffective,
     projectIntent,
@@ -5632,13 +5785,33 @@ export async function runAgentLoop({
     bootstrapProfile,
     bootstrapEnabled: true
   };
-  console.log('[BOOTSTRAP_PROFILE_RESOLVED]', {
-    profile: bootstrapProfile?.id || null,
-    label: bootstrapProfile?.label || null,
-    resolvedBy: bootstrapProfile?.resolvedBy || null,
-    goalType: projectIntent.goalType || null,
-    workspaceFiles: Array.isArray(workspaceState.existingFiles) ? workspaceState.existingFiles.length : 0
+
+  // Phase 4.24-HF0: Planner Assumption Validation
+  const validatedAssumptions = validatePlannerAssumptions({
+    workspaceState,
+    projectScan: scan,
+    classifierRequestedFiles: criteriaEffective.requestedFileDetails || criteriaEffective.requestedFiles || [],
+    bootstrapProfile,
+    projectType: scan.projectType || 'generic'
   });
+
+  // Phase 4.24-HF0/HF1: Log unverified required files for diagnostics.
+  // File-level filtering now happens inside buildPlan after classifyReadWriteFiles
+  // so that WRITE-intent files (creating new files) are preserved.
+  const unverifiedRequiredFiles = [];
+  for (const assumption of validatedAssumptions) {
+    if (!assumption.verified && assumption.required) {
+      unverifiedRequiredFiles.push(assumption.path);
+    }
+  }
+  if (unverifiedRequiredFiles.length > 0) {
+    console.log('[PLANNER_ASSUMPTION_FILTERED]', {
+      original: criteriaEffective.requestedFiles?.length || 0,
+      unverified: unverifiedRequiredFiles,
+      note: 'Filtering deferred to buildPlan (per-intent)'
+    });
+  }
+
   const classifierDbg = createEvent("debug", { section: "CLASSIFIER_RESULT", result: {
     taskMode: criteriaEffective.taskMode || criteriaEffective.taskType,
     intentMode: toolPolicy.mode,
@@ -5670,6 +5843,7 @@ export async function runAgentLoop({
     return summarizePlannerMetrics(plannerMetrics);
   };
   let contextFiles = [];
+  const readFileCache = new Map();
   function getExecutionStateRegistry() {
     const toolCallCount = toolCalls.length;
     if (!executionStateRegistry) {
@@ -5693,120 +5867,209 @@ export async function runAgentLoop({
     return executionStateRegistry;
   }
   if (toolPolicy.mode !== "UNKNOWN") {
-    const plan = buildPlan(objective, criteriaBootstrap);
-    const planValidationBlockedReason = plan?.validationBlockedReason || null;
-    planner = new Planner(plan.tasks);
-    captureOriginalPlannerGraph(planner);
-    syncPlannerMetricsFromPlanner(plannerMetrics, planner);
-    planner.executionMemory?.setContext?.({
-      workspaceRoot: resolvedWorkspaceRoot || '',
-      cwd: resolvedWorkspaceRoot || ''
-    });
-    planner.acceptanceCriteria = criteriaEffective;
-    planner.changedFiles = changedFiles;
-    if (planValidationBlockedReason) {
-      planner.validationBlockedReason = planValidationBlockedReason;
-      plannerFatalBlock = true;
-      console.log('[PLANNER_VALIDATION_TASK_BLOCKED]', {
-        reason: planValidationBlockedReason,
-        objective: String(objective || '').slice(0, 200)
+    // Extract planned write targets from objective before context building
+    const plannedWriteTargets = (() => {
+      const prompt = String(objective || '');
+      const regex = /(?:\b(?:file|files|path|paths)\b[:\s]+)?([A-Za-z0-9_.\-\\/]+\.(?:js|jsx|ts|tsx|mjs|cjs|json|html|css|php|py|cs|dart|yaml|yml|md))/gi;
+      const KNOWN_CONFIG_JS = /(?:^|\/)(?:package|tsconfig|composer|vite\.config|next\.config|nuxt\.config)\.js$/i;
+      const matches = [];
+      let m;
+      while ((m = regex.exec(prompt)) !== null) {
+        let p = m[1].replace(/^[^A-Za-z0-9_.\-\\/]+/, '').replace(/\\/g, '/').trim();
+        if (KNOWN_CONFIG_JS.test(p)) {
+          const corrected = p.replace(/\.js$/i, '.json');
+          console.log('[PACKAGE_JSON_CANONICAL]', { original: p, corrected, note: 'Forced .json for known config file' });
+          p = corrected;
+        }
+        if (p && !p.startsWith('node_modules/') && !p.includes('node_modules/')) {
+          matches.push(p);
+        }
+      }
+      return [...new Set(matches)];
+    })();
+    console.log('[PLANNED_FILE_EXTRACTED]', { count: plannedWriteTargets.length, files: plannedWriteTargets });
+    const requestedFileDetails = Array.isArray(criteriaEffective.requestedFileDetails) ? criteriaEffective.requestedFileDetails : [];
+    const explicitRequestedNewFiles = requestedFileDetails
+      .filter(entry => [
+        'EXPLICIT_CREATE',
+        'EXPLICIT_MODIFICATION'
+      ].includes(String(entry?.kind || entry?.requestedKind || '').toUpperCase()))
+      .map(entry => String(entry?.path || entry?.file || entry?.target || '').replace(/\\/g, '/').trim())
+      .filter(Boolean);
+    if (explicitRequestedNewFiles.length > 0) {
+      console.log('[EXPLICIT_USER_AUTHORITY_DETECTED]', {
+        count: explicitRequestedNewFiles.length,
+        files: explicitRequestedNewFiles,
+        note: 'Files explicitly requested by user for creation — not existing in workspace'
       });
     }
-    planner.getNextTask();
 
-    // Phase 4.14-4.15: Build execution context and expand generic tasks
-    // Only gather context when planner has generic tasks (tool: null) — meaning
-    // the user did not specify exact file paths and the model needs project context.
-    // We read the files immediately and inject their content as a system message
-    // rather than adding READ_FILE tasks to the planner (which would disrupt execution order).
-    // Then expand generic tasks into concrete planner-dispatched tasks.
-    const hasGenericTask = plan.tasks.some(t => !t.tool);
-    if (resolvedWorkspaceRoot && hasGenericTask) {
-      const contextResult = buildPlannerContext({
-        workspaceRoot: resolvedWorkspaceRoot,
-        projectScan: scan,
-        plannerTasks: plan.tasks,
-        classifierResult: criteriaEffective,
-        executionHistory: null
+    const planningContextResult = buildPlanningContext({
+      workspaceState,
+      projectScan: scan,
+      projectIntent,
+      validatedAssumptions,
+      bootstrapProfile,
+      classifierRequestedFiles: criteriaEffective.requestedFileDetails || criteriaEffective.requestedFiles || [],
+      plannedWriteTargets,
+      explicitRequestedNewFiles
+    });
+    const knowledgeGraph = buildKnowledgeGraph({
+      prompt: objective,
+      workspaceState,
+      projectIntent,
+      criteria: criteriaEffective
+    });
+    const canonicalFileUniverse = [
+      ...new Set(Array.from(planningContextResult.snapshot?.discoveredFiles || []))
+    ];
+    const executionGraphPlan = createExecutionPlanner({
+      objective,
+      verifiedPlanningContext: planningContextResult.context,
+      knowledgeGraph,
+      canonicalFileUniverse,
+      plannerPolicies: planningContextResult.context?.plannerPolicies || plannerPolicies,
+      projectIntent,
+      projectScan: scan,
+      explicitRequestedNewFiles
+    });
+    const plan = { tasks: executionGraphPlan.tasks };
+    const planValidationBlockedReason = executionGraphPlan.validation?.valid === false
+      ? executionGraphPlan.validation.errors?.[0] || 'Execution graph validation failed'
+      : null;
+    // Phase 4.30: Planner blocking when no tasks approved for coding intent
+    const isCodingOrWriteTask = /^(?:CODING|WRITE|WRITE_AND_RUN)$/i.test(criteriaEffective.taskType || criteriaEffective.taskMode || '');
+    if (executionGraphPlan.tasks.length === 0 && !planValidationBlockedReason && isCodingOrWriteTask) {
+      const blockedReason = 'PLANNER_BLOCKED_NO_APPROVED_TASKS';
+      const rejectionDetails = (executionGraphPlan.rejectedUnits || []).map(r => r.reason || 'firewall rejected');
+      console.log('[PLANNER_BLOCKED_NO_APPROVED_TASKS]', {
+        reason: blockedReason,
+        taskType: criteriaEffective.taskType || criteriaEffective.taskMode,
+        candidateCount: executionGraphPlan.units?.length || 0,
+        rejectedCount: (executionGraphPlan.rejectedUnits || []).length,
+        rejectionReasons: rejectionDetails,
+        blockedFiles: explicitRequestedNewFiles,
+        note: 'All execution candidates were rejected by PlannerAuthorityFirewall'
       });
-      if (contextResult.requiredReads.length > 0) {
-        const contextLines = [];
-        for (const file of contextResult.requiredReads) {
+      plannerFatalBlock = true;
+      planner = new Planner([]);
+      planner.validationBlockedReason = blockedReason;
+      planner.rejectionDetails = rejectionDetails;
+      planner.blockedFiles = explicitRequestedNewFiles;
+      planner.blockedCommands = [];
+      planner.executionGraph = executionGraphPlan.graph;
+      planner.executionContract = executionGraphPlan.executionContract;
+      planner.executionPlanner = executionGraphPlan;
+      planner.authorityContext = {
+        verifiedPlanningContext: planningContextResult.context,
+        verifiedFiles: [...(planningContextResult.context?.verifiedFiles || [])],
+        verifiedCommands: [...(planningContextResult.context?.verifiedCommands || [])],
+        canonicalFileUniverse,
+        plannerPolicies: planningContextResult.context?.plannerPolicies || plannerPolicies,
+        projectIntent,
+        projectScan: scan,
+        workspaceState
+      };
+      captureOriginalPlannerGraph(planner);
+      syncPlannerMetricsFromPlanner(plannerMetrics, planner);
+      planner.executionMemory?.setContext?.({ workspaceRoot: resolvedWorkspaceRoot || '', cwd: resolvedWorkspaceRoot || '' });
+      planner.acceptanceCriteria = criteriaEffective;
+      planner.changedFiles = changedFiles;
+      planner.getNextTask();
+      plannerExecutionMetadata = buildPlannerExecutionMetadata(planner);
+      planner.executionMetadata = plannerExecutionMetadata;
+      planner.requiredFiles = [];
+      criteriaEffective.plannerWriteTargets = [];
+      criteriaEffective.plannerReadFiles = [];
+      criteriaEffective.plannerRunCommands = [];
+      criteriaEffective.plannerValidationCommands = [];
+      criteriaEffective.plannerProtectedFiles = [];
+      getExecutionStateRegistry();
+      console.log('[PLANNER_BLOCKED_REASON]', {
+        reason: blockedReason,
+        details: 'No approved executable tasks — run will be blocked at quality gate'
+      });
+      console.log('[PLANNER_BLOCKED_SUMMARY]', {
+        candidates: executionGraphPlan.units?.length || 0,
+        rejected: (executionGraphPlan.rejectedUnits || []).length,
+        approved: executionGraphPlan.tasks.length,
+        blockedFiles: explicitRequestedNewFiles,
+        rejectionReasons: rejectionDetails,
+        requiredAction: 'User must provide explicit file authority or enable creation policies'
+      });
+    } else {
+      planner = new Planner(plan.tasks);
+      planner.executionGraph = executionGraphPlan.graph;
+      planner.executionContract = executionGraphPlan.executionContract;
+      planner.executionPlanner = executionGraphPlan;
+      planner.authorityContext = {
+        verifiedPlanningContext: planningContextResult.context,
+        verifiedFiles: [...(planningContextResult.context?.verifiedFiles || [])],
+        verifiedCommands: [...(planningContextResult.context?.verifiedCommands || [])],
+        canonicalFileUniverse,
+        plannerPolicies: planningContextResult.context?.plannerPolicies || plannerPolicies,
+        projectIntent,
+        projectScan: scan,
+        workspaceState
+      };
+      captureOriginalPlannerGraph(planner);
+      syncPlannerMetricsFromPlanner(plannerMetrics, planner);
+      planner.executionMemory?.setContext?.({
+        workspaceRoot: resolvedWorkspaceRoot || '',
+        cwd: resolvedWorkspaceRoot || ''
+      });
+      planner.acceptanceCriteria = criteriaEffective;
+      planner.changedFiles = changedFiles;
+      if (planValidationBlockedReason) {
+        planner.validationBlockedReason = planValidationBlockedReason;
+        plannerFatalBlock = true;
+        console.log('[EXECUTION_GRAPH_INVALID]', {
+          reason: planValidationBlockedReason,
+          objective: String(objective || '').slice(0, 200)
+        });
+      }
+      planner.getNextTask();
+
+      plannerExecutionMetadata = buildPlannerExecutionMetadata(planner);
+      planner.executionMetadata = plannerExecutionMetadata;
+      planner.requiredFiles = plannerExecutionMetadata.plannerWriteFiles || [];
+      criteriaEffective.plannerWriteTargets = [...new Set(plannerExecutionMetadata.plannerWriteFiles || [])];
+      criteriaEffective.plannerReadFiles = [...new Set(plannerExecutionMetadata.plannerReadFiles || [])];
+      criteriaEffective.plannerRunCommands = [...new Set(plannerExecutionMetadata.plannerRunCommands || [])];
+      criteriaEffective.plannerValidationCommands = [...new Set(plannerExecutionMetadata.plannerValidationCommands || [])];
+      criteriaEffective.plannerProtectedFiles = [...new Set(plannerExecutionMetadata.plannerProtectedFiles || [])];
+      getExecutionStateRegistry();
+      const requiredFiles = uniqueMetadataFiles([
+        ...(executionGraphPlan.executionContract?.requiredFiles || []),
+        ...(executionGraphPlan.executionContract?.currentExecutionUnit?.requiredReads || []),
+        ...(executionGraphPlan.executionContract?.currentExecutionUnit?.requiredWrites || []),
+        ...(executionGraphPlan.executionContract?.currentExecutionUnit?.targetFiles || [])
+      ]);
+      if (resolvedWorkspaceRoot && requiredFiles.length > 0) {
+        for (const file of requiredFiles) {
           try {
             const fullPath = path.resolve(resolvedWorkspaceRoot, file);
             const content = await fs.readFile(fullPath, 'utf-8');
-            contextLines.push(`=== ${file} ===\n${content}`);
             contextFiles.push(file);
+            readFileCache.set(String(file).replace(/\\/g, '/'), content);
             toolCalls.push({
               tool: "READ_FILE",
               args: { path: file },
               result: { file, content },
               success: true,
-              source: "planner_context"
+              source: "execution_planner_contract"
             });
             await opt.setCachedRead(file, content);
           } catch {
-            // file doesn't exist or can't be read — skip it
+            // Skip missing or unreadable files; the execution contract stays authoritative.
           }
         }
-        if (contextLines.length > 0) {
-          const contextMessage = `Here is the current state of the project files:\n\n${contextLines.join('\n\n')}`;
-          conversation.push({ role: 'system', content: contextMessage });
-          console.log('[PLANNER_CONTEXT_BUILD]', {
-            projectContext: contextResult.projectContext,
-            filesRead: contextLines.length,
-            totalRequested: contextResult.requiredReads.length
+        if (readFileCache.size > 0) {
+          console.log('[EXECUTION_PLANNER_AUTHORITY]', {
+            requiredFileCount: requiredFiles.length,
+            readCount: readFileCache.size
           });
         }
-      }
-
-      // Phase 4.15: Context is ready — log state. Only transition to CONTEXT_READY
-      // when we have actual context files and the task is CODING (not READ_ONLY/ANALYSIS).
-      if (planner && contextFiles.length > 0) {
-        const isCoding = criteria.taskType === 'CODING' || criteria.taskType === 'PRODUCT_BUILD';
-        if (isCoding) {
-          planner.setState('CONTEXT_READY');
-          console.log('[PLANNER_CONTEXT_READY]', {
-            projectType: scan.projectType || 'generic',
-            contextFiles
-          });
-        }
-      }
-    }
-    plannerExecutionMetadata = buildPlannerExecutionMetadata(planner);
-    planner.executionMetadata = plannerExecutionMetadata;
-    planner.requiredFiles = plannerExecutionMetadata.plannerWriteFiles || [];
-    criteriaEffective.plannerWriteTargets = [...new Set(plannerExecutionMetadata.plannerWriteFiles || [])];
-    criteriaEffective.plannerReadFiles = [...new Set(plannerExecutionMetadata.plannerReadFiles || [])];
-    criteriaEffective.plannerRunCommands = [...new Set(plannerExecutionMetadata.plannerRunCommands || [])];
-    criteriaEffective.plannerValidationCommands = [...new Set(plannerExecutionMetadata.plannerValidationCommands || [])];
-    criteriaEffective.plannerProtectedFiles = [...new Set(plannerExecutionMetadata.plannerProtectedFiles || [])];
-    getExecutionStateRegistry();
-  }
-
-  // Phase 4.15: Expand generic tasks into concrete planner tasks
-  // Initialize readFileCache before any code that accesses it
-  const readFileCache = new Map();
-
-  if (planner && planner.state === 'CONTEXT_READY') {
-    // Only expand when there are meaningful source files (not just package.json/metadata)
-    const meaningfulFiles = contextFiles.filter(f => !/package\.json$|README|LICENSE|\.gitignore/i.test(f));
-    if (meaningfulFiles.length === 0) {
-      console.log('[PLANNER_EXPAND_SKIP]', { reason: 'no meaningful source files in context', contextFiles });
-      planner.setState('EXECUTING');
-    } else {
-      const expanded = expandPlannerTasks(planner, {
-        goal: objective,
-        projectType: scan.projectType || 'generic',
-        entryFiles: scan.entryFiles || [],
-        scan,
-        contextFiles,
-        fileContents: readFileCache
-      });
-      if (expanded.length > 0) {
-        planner.setState('EXPANDED');
-      } else {
-        planner.setState('EXECUTING');
       }
     }
   }
@@ -5904,8 +6167,14 @@ export async function runAgentLoop({
       plannerReadFiles,
       verifiedExistingFiles
     });
+    const committedFiles = uniqueMetadataFiles([
+      ...(Array.isArray(input.committedFiles) ? input.committedFiles : []),
+      ...(Array.isArray(input.changedFiles) ? input.changedFiles : []),
+      ...verifiedExistingFiles
+    ]);
     const gate = await evaluateQualityGate({
       ...input,
+      committedFiles,
       requestedWriteFiles,
       verifiedExistingFiles,
       filesRead: plannerReadFiles,
@@ -5915,7 +6184,99 @@ export async function runAgentLoop({
       requiredCommands: toolPolicy.requiredCommands,
       packageJsonValid
     });
-    return applyRequiredCommandQualityGate(gate);
+
+    // ── Phase 5.xx: Evidence-Based Validator Engine integration ──
+    let validatorReport = null;
+    if (planner && typeof planner.graph?.allNodes === 'function') {
+      try {
+        const allNodes = planner.graph.allNodes();
+        const taskStates = allNodes.map(t => ({
+          taskId: t.id,
+          status: t.status,
+          tool: t.tool,
+          toolArgs: t.toolArgs,
+          goal: t.goal,
+          reason: t.reason,
+          result: t.result
+        }));
+
+        const terminalResults = toolCalls
+          .filter(call => call.tool === "RUN_TERMINAL")
+          .map(call => ({
+            command: call.args?.command,
+            exitCode: call.result?.exitCode,
+            stdout: call.result?.stdout,
+            stderr: call.result?.stderr,
+            success: call.success
+          }));
+
+        const codeGenResults = toolCalls
+          .filter(call => (call.tool === "WRITE_FILE" || call.tool === "APPLY_PATCH") && call.success)
+          .map(call => ({
+            file: call.result?.file || call.args?.path || call.args?.file || call.args?.target || '',
+            content: call.result?.content || call.args?.content || ''
+          }));
+
+        const changedFilePaths = [...plannerChangedFiles].filter(f => typeof f === 'string' && f);
+        const changedFileDetails = changedFilePaths.map(f => ({
+          path: f,
+          content: readFileCache.get(f) || ''
+        }));
+
+        const existingFilesList = [
+          ...new Set([
+            ...readFileCache.keys(),
+            ...(plannerExecutionMetadata?.plannerWriteFiles || []),
+            ...(plannerExecutionMetadata?.plannerReadFiles || [])
+          ].filter(f => typeof f === 'string' && f))
+        ];
+
+        const requiredCommandsList = [
+          ...new Set([
+            ...(plannerExecutionMetadata?.plannerValidationCommands || []),
+            ...(plannerExecutionMetadata?.plannerRunCommands || []),
+            ...(toolPolicy.requiredCommands || [])
+          ])
+        ];
+
+        validatorReport = validateExecutionResult({
+          executionPlan: taskStates.length > 0 ? { tasks: taskStates } : undefined,
+          taskStates,
+          changedFiles: changedFileDetails,
+          terminalResults,
+          codeGenResults,
+          workspaceState: {
+            existingFiles: existingFilesList,
+            workspaceRoot: resolvedWorkspaceRoot || '',
+            requiredCommands: requiredCommandsList,
+            buildCommands: scan?.buildCommands || []
+          },
+          userPrompt: objective,
+          finalStatus: gate.passed ? 'PASS' : 'FAIL',
+          qualityGateResult: gate
+        });
+
+        console.log('[VALIDATOR_REPORT]', serializeValidationReport(validatorReport));
+      } catch (err) {
+        console.error('[VALIDATOR_INTEGRATION_ERROR]', err.message);
+      }
+    }
+
+    const finalGate = applyRequiredCommandQualityGate(gate);
+
+    // If validator reports canFinalize=false and gate currently passes, flag it
+    if (validatorReport && !validatorReport.canFinalize && finalGate.passed) {
+      finalGate.passed = false;
+      const messages = validatorReport.failed.map(f => f.message || f).filter(Boolean);
+      if (messages.length > 0) {
+        finalGate.failures = [...(finalGate.failures || []), ...messages];
+      }
+      if (finalGate.score == null || finalGate.score > 0) finalGate.score = 0;
+    }
+
+    finalGate.validatorReport = validatorReport;
+
+    return finalGate;
   };
 
   const getRunFileMetadata = ({ completionResult = null, validationSummary = null, validatedFiles = null, qualityGatePassed = false } = {}) => buildRunFileMetadata({
@@ -6172,6 +6533,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           args: dispatchArgs,
           originalPrompt: objective,
           objective,
+          executionContract: task?.executionContract || null,
           workspaceRoot: resolvedWorkspaceRoot,
           layout: scan,
           workspaceFiles: [...readFileCache.keys(), ...changedFiles],
@@ -6185,12 +6547,26 @@ After execution, return { "done": true, "final": "your summary here" }.`;
         });
         if (!prepared.ok) {
           const failureReason = prepared.reason || prepared.errorCode || 'WRITE content generation failed';
-          planner.markBlocked(task.id, failureReason);
+          planner.markFailure(task.id, failureReason);
+          planner.executionMemory?.markFailed(task, {
+            tool: task.tool,
+            args: dispatchArgs,
+            failureReason,
+            phase: 'VALIDATION_FAILED',
+            committed: false,
+            path: String(dispatchArgs?.path || dispatchArgs?.file || dispatchArgs?.target || '').trim()
+          });
           logPlannerStatus(planner);
           syncPlannerMetricsFromPlanner(plannerMetrics, planner);
           console.log('[WRITE_CONTENT_FAILED]', {
             targetPath: String(dispatchArgs?.path || dispatchArgs?.file || dispatchArgs?.target || ''),
             reason: failureReason
+          });
+          console.log('[WRITE_NOT_COMMITTED]', {
+            taskId: task.id,
+            path: String(dispatchArgs?.path || dispatchArgs?.file || dispatchArgs?.target || '').trim(),
+            reason: failureReason,
+            phase: 'VALIDATION_FAILED'
           });
           return {
             toolResult: {
@@ -6272,6 +6648,36 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           source: writeGenerationSource,
           step
         }));
+        const postCommitValidation = await validateCommittedWriteOutput({
+          task,
+          effectiveArgs,
+          workspaceRoot: resolvedWorkspaceRoot,
+          layout: scan,
+          workspaceFiles: [...readFileCache.keys(), ...changedFiles],
+          requiredSymbols: getRecoveryRequiredSymbols(task),
+          originalPrompt: objective,
+          objective,
+          validationSource: 'post_commit_write',
+          policySource: 'post_commit_write'
+        });
+        toolResult.writeValidation = {
+          source: "WRITE_FILE",
+          file: writeFile,
+          plannerApproved: true,
+          taskId: task.id,
+          taskKind: task.kind,
+          targetApproved: approvedWriteTargets.has(writeFile),
+          validationPassed: postCommitValidation.success === true,
+          validationSource: "post_commit_write",
+          frameworkValidation: postCommitValidation.frameworkValidation || null
+        };
+        if (!postCommitValidation.success) {
+          toolResult.success = false;
+          toolResult.error = postCommitValidation.error || postCommitValidation.reason || 'POST_COMMIT_VALIDATION_FAILED';
+          toolResult.phase = 'POST_COMMIT_VALIDATION_FAILED';
+          toolCall.success = false;
+          validationFailed = true;
+        }
       }
 
       if (toolName === "READ_FILE" && toolResult?.success && toolResult.file && toolResult.content) {
@@ -6357,6 +6763,39 @@ After execution, return { "done": true, "final": "your summary here" }.`;
     } finally {
       console.log('[EXECUTOR_EXIT]', { taskId: task.id, status: task.status });
     }
+  }
+
+  // Phase 4.30-HF1: Immediate planner block termination — no QualityGate, no Validator
+  if (plannerFatalBlock) {
+    const blockedReason = planner?.validationBlockedReason || 'PLANNER_BLOCKED_NO_APPROVED_TASKS';
+    const blockedFiles = planner?.blockedFiles || [];
+    const rejectionReasons = planner?.rejectionDetails || [];
+    const requiredAction = 'User must provide explicit file authority or enable creation policies';
+    console.log('[PLANNER_BLOCK_TERMINATED]', {
+      reason: blockedReason,
+      blockedFiles,
+      rejectionReasons,
+      requiredAction,
+      note: 'Run terminated immediately — no QualityGate, no Validator'
+    });
+    const blockedResult = {
+      status: 'needs_revision',
+      plannerCompleted: false,
+      validationPassed: false,
+      qualityGatePassed: false,
+      reason: blockedReason,
+      blockedFiles,
+      rejectionReasons,
+      requiredAction,
+      plannerFatalBlock: true,
+      finalStatus: 'needs_revision',
+      success: false,
+      agentLoopStatus: null,
+      changedFiles: [...changedFiles],
+      plannerExecutionMetadata: plannerExecutionMetadata || planner?.executionMetadata || null,
+      plannerMetrics
+    };
+    return blockedResult;
   }
 
   let blockedToolRetryUsedGlobal = false;
@@ -6451,7 +6890,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
     // Phase 4.15: REASONING tasks are model-generation tasks, not tools.
     // Execute them through the existing provider adapter and inject concrete
     // EXECUTION tasks (WRITE_FILE/APPLY_PATCH/RUN_TERMINAL/etc.) into the graph.
-    if (planner && !hasReadyRecoveryTask(planner) && !isPlannerRecovering(planner)) {
+    if (planner && !planner.executionPlanner && !hasReadyRecoveryTask(planner) && !isPlannerRecovering(planner)) {
       const readyReasoningTasks = planner.graph.allNodes().filter(t =>
         isPlannerReasoningTask(t) && t.status === TaskStatus.READY
       );
@@ -6468,6 +6907,38 @@ After execution, return { "done": true, "final": "your summary here" }.`;
         // Extract target file from reasoning goal
         const targetFileMatch = reasoningTask.goal.match(/Generate (?:content|patch) for file:\s*(.+)/i);
         const targetFile = targetFileMatch ? targetFileMatch[1].trim() : null;
+
+        const hasPackageJsonReadEvidence = toolCalls.some(call =>
+          call?.tool === 'READ_FILE' &&
+          /(^|\/)package\.json$/i.test(String(call?.result?.file || call?.args?.path || ''))
+        );
+        if (!hasPackageJsonReadEvidence && resolvedWorkspaceRoot) {
+          try {
+            const packageJsonPath = path.join(resolvedWorkspaceRoot, 'package.json');
+            const packageJsonContent = await fs.readFile(packageJsonPath, 'utf8');
+            readFileCache.set('package.json', packageJsonContent);
+            toolCalls.push({
+              step,
+              tool: 'READ_FILE',
+              args: { path: 'package.json' },
+              success: true,
+              result: {
+                success: true,
+                file: 'package.json',
+                path: 'package.json',
+                content: packageJsonContent
+              },
+              startedAt: new Date(),
+              completedAt: new Date()
+            });
+            console.log('[LEGACY_DEPRECATED]', {
+              source: 'createExecutionTasksFromReasoning',
+              note: 'package.json inspection is preserved for compatibility'
+            });
+          } catch {
+            // Best effort only; canonical planner paths should not depend on this.
+          }
+        }
 
         // Read ONLY the target file content (if cached) — max 3000 chars
         const targetContent = targetFile && readFileCache.has(targetFile)
@@ -6580,7 +7051,14 @@ After execution, return { "done": true, "final": "your summary here" }.`;
         if (reasoningMemoryHit?.parsedReasoning) {
           parsedReasoning = reasoningMemoryHit.parsedReasoning;
           try {
-            executionTasks = createExecutionTasksFromReasoning(parsedReasoning, reasoningTask);
+            const candidateGraph = createExecutionTasksFromReasoning(parsedReasoning, reasoningTask);
+            executionTasks = promoteProposalGraphToTasks(candidateGraph, {
+              workspaceState: { existingFiles: [...(workspaceState?.existingFiles || [])] },
+              plannerPolicies: {},
+              verifiedCommands: [],
+              verifiedFiles: [],
+              blockedRecommendations: []
+            }).tasks;
           } catch (error) {
             console.log('[PLANNER_REASONING_FAILED]', {
               step,
@@ -6609,7 +7087,14 @@ After execution, return { "done": true, "final": "your summary here" }.`;
 
           try {
             parsedReasoning = parseReasoningJson(rawReasoning);
-            executionTasks = createExecutionTasksFromReasoning(parsedReasoning, reasoningTask);
+            const candidateGraph = createExecutionTasksFromReasoning(parsedReasoning, reasoningTask);
+            executionTasks = promoteProposalGraphToTasks(candidateGraph, {
+              workspaceState: { existingFiles: [...(workspaceState?.existingFiles || [])] },
+              plannerPolicies: {},
+              verifiedCommands: [],
+              verifiedFiles: [],
+              blockedRecommendations: []
+            }).tasks;
             planner.executionMemory?.setReasoning(reasoningPrompt, {
               taskId: reasoningTask.id,
               parsedReasoning,
@@ -6625,6 +7110,15 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           planner.markFailure(reasoningTask.id, error.message);
           continue;
           }
+        }
+
+        if (!Array.isArray(executionTasks) || executionTasks.length === 0) {
+          console.log('[MODEL_CANDIDATE_ACTION_UNTRUSTED]', {
+            taskId: reasoningTask.id,
+            reason: 'reasoning output rejected by planner verification'
+          });
+          planner.markFailure(reasoningTask.id, 'Reasoning output is unverified and cannot become executable tasks');
+          continue;
         }
 
         // Pre-write verification: block WRITE_FILE tasks targeting backend/server files
@@ -6723,8 +7217,19 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           taskId: reasoningTask.id,
           executionTaskCount: executionTasks.length
         });
+        console.log('[GENERATE_CONTENT_COMPLETED]', {
+          taskId: reasoningTask.id,
+          file: targetFile || null,
+          upstreamTask: reasoningTask.id,
+          downstreamTask: null,
+          requiredCommittedFiles: originalChildren.map(childId => planner.graph.getNode(childId)?.toolArgs?.path || planner.graph.getNode(childId)?.toolArgs?.file || null).filter(Boolean),
+          committedFiles: [],
+          reason: 'generated content must not release downstream commands before commit'
+        });
 
-        const addedIds = planner.replaceReasoningTask(reasoningTask.id, executionTasks);
+        const addedIds = planner.replaceReasoningTask(reasoningTask.id, executionTasks, {
+          downstreamTaskIds: originalChildren
+        });
         const addedList = Array.isArray(addedIds) ? addedIds : [];
         for (const execTaskId of addedList) {
           const execTask = planner.graph.getNode(execTaskId);
@@ -6734,24 +7239,6 @@ After execution, return { "done": true, "final": "your summary here" }.`;
             tool: execTask?.tool || null,
             goal: (execTask?.goal || '').substring(0, 120)
           });
-        }
-
-        const lastExecutionTaskId = addedList[addedList.length - 1];
-        if (lastExecutionTaskId) {
-          for (const childId of originalChildren) {
-            const child = planner.graph.getNode(childId);
-            if (!child || child.status === TaskStatus.SUCCESS || child.status === TaskStatus.SKIPPED) continue;
-            try {
-              planner.graph.connect(lastExecutionTaskId, childId);
-              if (child.status === TaskStatus.READY) {
-                child.status = TaskStatus.PENDING;
-                child.touch();
-              }
-            } catch {
-              // Edge already exists or child was removed.
-            }
-          }
-          planner._updateReadyStates();
         }
 
         continue;
@@ -6818,6 +7305,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
                 path: repairPath,
                 file: repairPath
               },
+              executionContract: recoveryTask?.executionContract || null,
               objective,
               plan,
               step,
@@ -7042,6 +7530,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
                 args,
                 originalPrompt: objective,
                 objective,
+                executionContract: task?.executionContract || null,
                 workspaceRoot: resolvedWorkspaceRoot,
                 layout: scan,
                 workspaceFiles: [...readFileCache.keys(), ...changedFiles],
@@ -7093,6 +7582,40 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           // Track file changes for WRITE tools dispatched in parallel group
           if (WRITE_TOOLS.has(toolName) && toolResult?.success && toolResult?.changed && toolResult.file) {
             recordChangedFile(toolResult.file);
+          }
+
+          if (toolName === "WRITE_FILE" && toolResult?.success) {
+            const committedPath = String(toolResult.file || dispatchArgs?.path || dispatchArgs?.file || dispatchArgs?.target || "").replace(/\\/g, "/");
+            const postCommitValidation = await validateCommittedWriteOutput({
+              task,
+              effectiveArgs: dispatchArgs,
+              workspaceRoot: resolvedWorkspaceRoot,
+              layout: scan,
+              workspaceFiles: [...readFileCache.keys(), ...changedFiles],
+              requiredSymbols: getRecoveryRequiredSymbols(task),
+              originalPrompt: objective,
+              objective,
+              validationSource: 'post_commit_write',
+              policySource: 'post_commit_write'
+            });
+            toolResult.writeValidation = {
+              source: "WRITE_FILE",
+              file: committedPath,
+              plannerApproved: true,
+              taskId: task.id,
+              taskKind: task.kind,
+              targetApproved: true,
+              validationPassed: postCommitValidation.success === true,
+              validationSource: "post_commit_write",
+              frameworkValidation: postCommitValidation.frameworkValidation || null
+            };
+            if (!postCommitValidation.success) {
+              toolResult.success = false;
+              toolResult.error = postCommitValidation.error || postCommitValidation.reason || 'POST_COMMIT_VALIDATION_FAILED';
+              toolResult.phase = 'POST_COMMIT_VALIDATION_FAILED';
+              toolCall.success = false;
+              validationFailed = true;
+            }
           }
 
           // Notify planner of the result (triggers recovery on failure)
@@ -7168,43 +7691,18 @@ After execution, return { "done": true, "final": "your summary here" }.`;
         let toolName = nextTask.tool;
         let args = nextTask.toolArgs || {};
 
-        // If task has no tool set, try to infer a deterministic tool from the goal
-        if (!toolName) {
-        const inferred = inferToolFromGoal(nextTask, objective);
-          if (inferred) {
-            // Only accept inferred WRITE_FILE when content is known
-            // Only accept inferred APPLY_PATCH when file/target is known
-            const hasRequiredArgs = !(
-              (inferred.tool === 'WRITE_FILE' && !inferred.args.content) ||
-              (inferred.tool === 'APPLY_PATCH' && !inferred.args.file && !inferred.args.target)
-            );
-            if (hasRequiredArgs) {
-              toolName = inferred.tool;
-              args = inferred.args;
-              nextTask.tool = toolName;
-              nextTask.toolArgs = args;
-              console.log('[PLANNER_INFER_TOOL]', {
-                taskId: nextTask.id,
-                goal: (nextTask.goal || '').substring(0, 80),
-                inferredTool: toolName,
-                inferredArgs: args,
-                step
-              });
-            }
-          }
-        }
-
         if (toolName) {
           // Phase 4.13: Check if task has all required args for deterministic dispatch
           const isDeterministic = isDeterministicPlannerTask({ tool: toolName, toolArgs: args });
           if (!isDeterministic) {
             if (toolName === 'WRITE_FILE') {
-              const writePrep = await prepareWriteFileArgsForPlannerTask({
-                task: nextTask,
-                args,
-                originalPrompt: objective,
-                objective,
-                workspaceRoot: resolvedWorkspaceRoot,
+            const writePrep = await prepareWriteFileArgsForPlannerTask({
+              task: nextTask,
+              args,
+              originalPrompt: objective,
+              objective,
+              executionContract: nextTask?.executionContract || null,
+              workspaceRoot: resolvedWorkspaceRoot,
                 layout: scan,
                 workspaceFiles: activeFiles,
                 requiredSymbols: getRecoveryRequiredSymbols(nextTask),
@@ -7727,15 +8225,13 @@ After execution, return { "done": true, "final": "your summary here" }.`;
 
         // Replace the reasoning task with concrete WRITE_FILE execution tasks
         if (targetFile) {
-          const writeTask = new Task({
-            kind: 'CODING',
-            goal: `Write file: ${targetFile} with generated content`,
+          console.log('[MODEL_CANDIDATE_ACTION_UNTRUSTED]', {
+            taskId: reasoningTask.id,
             tool: 'WRITE_FILE',
-            toolArgs: { path: targetFile, content, file: targetFile },
-            dependencies: [],
-            priority: 54
+            path: targetFile,
+            reason: 'generated content requires planner verification before executable task creation'
           });
-          const addedIds = planner.replaceReasoningTask(reasoningTask.id, [writeTask]);
+          const addedIds = [];
           if (addedIds && addedIds.length > 0) {
             console.log('[PLANNER_REASONING_EXECUTION]', {
               step,
@@ -7744,6 +8240,8 @@ After execution, return { "done": true, "final": "your summary here" }.`;
               tool: 'WRITE_FILE',
               targetFile
             });
+          } else {
+            planner.markFailure(reasoningTask.id, 'Generated content was not promoted to an executable task');
           }
         } else {
           // No target file inferred — mark as failed
@@ -7902,9 +8400,21 @@ After execution, return { "done": true, "final": "your summary here" }.`;
       }
     } catch (firstParseError) {
       console.error("Coding Agent invalid JSON response:", rawResponse);
+      const parseFailureCode = classifyModelResponseFailure(firstParseError) || firstParseError.code || "MODEL_FORMAT_ERROR";
+      console.log("[MODEL_PROTOCOL_RETRY]", {
+        step,
+        failureType: parseFailureCode,
+        attempt: 1
+      });
+      console.log("[MODEL_FORMAT_ERROR]", {
+        step,
+        failureType: parseFailureCode,
+        message: firstParseError.message
+      });
       recordEvent("json_parse_retry", {
         step,
         message: firstParseError.message,
+        failureType: parseFailureCode,
         rawResponse: String(rawResponse ?? "").slice(0, 2000)
       });
 
@@ -7943,6 +8453,12 @@ After execution, return { "done": true, "final": "your summary here" }.`;
         } else {
           console.error("Coding Agent JSON retry failed:", retryError);
         }
+        const retryFailureCode = classifyModelResponseFailure(retryError) || retryError.code || "MODEL_FORMAT_ERROR";
+        console.log("[MODEL_PROTOCOL_RETRY]", {
+          step,
+          failureType: retryFailureCode,
+          attempt: 2
+        });
 
         // Attempt to salvage plain text as a final response
         const salvageText = String(retryResponse ?? rawResponse ?? "").trim();
@@ -8987,6 +9503,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
               args: taskArgs,
               originalPrompt: objective,
               objective,
+              executionContract: readyTask?.executionContract || null,
               workspaceRoot: resolvedWorkspaceRoot,
               layout: scan,
               workspaceFiles: [...readFileCache.keys(), ...changedFiles],
@@ -9483,27 +10000,22 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           n.goal?.toLowerCase().includes(norm.toLowerCase())
         );
         if (genTask) {
-          // Create the concrete WRITE_FILE task with the model's content
-          const writeTask = new Task({
-            kind: 'CODING',
-            goal: `Write file: ${norm} with generated content`,
-            tool: 'WRITE_FILE',
-            toolArgs: { path: norm, content: args.content, file: norm },
-            dependencies: [],
-            priority: 54
-          });
-          planner.addTask(writeTask);
-          // Mark the GENERATE_CONTENT task as replaced
-          planner.markSuccess(genTask.id, { tool: 'WRITE_FILE', args: { path: norm, content: args.content }, result });
-          console.log('[PLANNER_TASK_REPLACED]', {
+          const downstreamTaskIds = [...genTask.children || []];
+          console.log('[MODEL_CANDIDATE_ACTION_UNTRUSTED]', {
             taskId: genTask.id,
             tool: 'WRITE_FILE',
             path: norm,
             contentLength: String(args.content || '').length,
-            reason: 'model provided content — GENERATE_CONTENT fulfilled'
+            reason: 'generated content requires planner verification before executable task creation'
           });
-          // Mark the planner's WRITE_FILE as dispatched too (model already wrote the file)
-          // Skip matching in the next iteration
+          planner.markFailure(genTask.id, 'Generated content was not promoted to an executable task');
+          console.log('[PLANNER_TASK_REPLACEMENT_BLOCKED]', {
+            taskId: genTask.id,
+            tool: 'WRITE_FILE',
+            path: norm,
+            downstreamTaskIds,
+            reason: 'unverified generated content'
+          });
         }
       }
     }
@@ -9890,24 +10402,37 @@ After execution, return { "done": true, "final": "your summary here" }.`;
               // Run validation if requested
               const requestedCmd = extractRequestedValidationCommand(objective, scan);
               if (requestedCmd) {
-                const termStartedAt = new Date();
-                const termResult = await executeTool(
-                  "RUN_TERMINAL",
-                  { command: requestedCmd },
-                  toolContext
-                );
-                const termCall = {
-                  step,
-                  tool: "RUN_TERMINAL",
-                  args: { command: requestedCmd },
-                  success: termResult?.success !== false,
-                  result: summarizeToolResult(termResult, "RUN_TERMINAL"),
-                  startedAt: termStartedAt,
-                  completedAt: new Date()
-                };
-                toolCalls.push(termCall);
-                history.push(termCall);
-                recordEvent("tool_completed", { step, tool: "RUN_TERMINAL", success: termCall.success, file: null, error: termResult?.error || null });
+                const firewall = checkValidationCommandCandidate(requestedCmd);
+                if (!firewall.valid) {
+                  console.log('[DIRECT_VALIDATION_EXECUTION_BLOCKED]', {
+                    command: requestedCmd.command,
+                    source: requestedCmd.source,
+                    reason: firewall.reason
+                  });
+                } else {
+                  console.log('[VALIDATION_COMMAND_AUTHORITY_APPROVED]', {
+                    command: requestedCmd.command,
+                    source: requestedCmd.source
+                  });
+                  const termStartedAt = new Date();
+                  const termResult = await executeTool(
+                    "RUN_TERMINAL",
+                    { command: requestedCmd.command },
+                    toolContext
+                  );
+                  const termCall = {
+                    step,
+                    tool: "RUN_TERMINAL",
+                    args: { command: requestedCmd.command },
+                    success: termResult?.success !== false,
+                    result: summarizeToolResult(termResult, "RUN_TERMINAL"),
+                    startedAt: termStartedAt,
+                    completedAt: new Date()
+                  };
+                  toolCalls.push(termCall);
+                  history.push(termCall);
+                  recordEvent("tool_completed", { step, tool: "RUN_TERMINAL", success: termCall.success, file: null, error: termResult?.error || null });
+                }
               }
               // Finalize immediately without calling model again
               if (DEBUG()) console.log("[SKIP_MODEL_AFTER_READ_FOR_PACKAGE_SCRIPT]", { skip: true });
@@ -10188,10 +10713,23 @@ After execution, return { "done": true, "final": "your summary here" }.`;
         validationFailed = true;
       }
 
-      // Deterministic validation command execution: handle multiple required commands for WRITE_AND_RUN, else requested
+      // Phase 4.29-HF2: Deterministic validation command execution guarded by PlannerAuthorityFirewall
       const requestedCmd = extractRequestedValidationCommand(objective, scan);
       const pendingRequired = toolPolicy.mode === "WRITE_AND_RUN" ? getPendingRequiredCommands() : [];
-      const commandsToRun = pendingRequired.length ? pendingRequired.slice() : (requestedCmd ? [requestedCmd] : []);
+      let approvedExtraCmds = [];
+      if (requestedCmd) {
+        const firewall = checkValidationCommandCandidate(requestedCmd);
+        if (firewall.valid) {
+          approvedExtraCmds.push(requestedCmd.command);
+        } else {
+          console.log('[DIRECT_VALIDATION_EXECUTION_BLOCKED]', {
+            command: requestedCmd.command,
+            source: requestedCmd.source,
+            reason: firewall.reason
+          });
+        }
+      }
+      const commandsToRun = pendingRequired.length ? pendingRequired.slice() : approvedExtraCmds;
       if (commandsToRun.length) {
         // Phase 4.4: Gate deterministic commands on planner health
         const termGate = canExecuteTool(planner, 'terminal');
@@ -11109,10 +11647,15 @@ After execution, return { "done": true, "final": "your summary here" }.`;
         success,
         status,
         completionResult,
+        plannedFiles: runFileMetadata.plannedFiles,
+        generatedFiles: runFileMetadata.generatedFiles,
+        validationRejectedFiles: runFileMetadata.validationRejectedFiles,
+        committedFiles: runFileMetadata.committedFiles,
         validatedFiles: runFileMetadata.validatedFiles,
         validatedFileDetails: runFileMetadata.validatedFileDetails,
         requestedWriteFiles: runFileMetadata.requestedWriteFiles,
         changedFiles: runFileMetadata.changedFiles,
+        failedFiles: runFileMetadata.failedFiles,
         plannerReadFiles: runFileMetadata.plannerReadFiles,
         physicalChangeStatus: runFileMetadata.physicalChangeStatus,
         validationCoverageStatus: runFileMetadata.validationCoverageStatus,
@@ -11163,27 +11706,6 @@ After execution, return { "done": true, "final": "your summary here" }.`;
   }
 
     }
-export function normalizeToolPayload(parsed) {
-  const toolName = String(parsed?.tool || "").toUpperCase();
-  const rawArgs = (parsed && typeof parsed.args === "object" && parsed.args) ? parsed.args : {};
-  const args = { ...rawArgs };
-
-  if (toolName === "APPLY_PATCH") {
-    args.file = args.file ?? parsed.file;
-    args.find = args.find ?? parsed.find;
-    args.replace = args.replace ?? parsed.replace;
-  } else if (toolName === "READ_FILE") {
-    args.path = args.path ?? parsed.path;
-  } else if (toolName === "WRITE_FILE") {
-    args.path = args.path ?? parsed.path;
-    args.content = args.content ?? parsed.content;
-  } else if (toolName === "VALIDATE_PATCH") {
-    args.file = args.file ?? parsed.file;
-  } else if (toolName === "RUN_TERMINAL") {
-    args.command = args.command ?? parsed.command;
-  }
-  return { toolName, args };
-}
 
 // Compress local prompts: safe whitespace-only transformations.
 // Never replaces task intent, never invents actions, never changes semantics.

@@ -215,10 +215,10 @@ export function inferGoalType(prompt = "", projectIntent = {}) {
   if (/\b(?:refactor|restructure|clean up|clean-up|reorganize|rewrite)\b/.test(text)) return GOAL_TYPES.REFACTOR;
   if (/\b(?:fullstack|full-stack|full stack)\b/.test(text)) return GOAL_TYPES.FULLSTACK_APP;
   if (/\b(?:api server|rest api|backend api|express server|node api)\b/.test(text)) return GOAL_TYPES.API_SERVER;
+  if (/\b(?:landing page|homepage|hero section|marketing site)\b/.test(text)) return GOAL_TYPES.LANDING_PAGE;
+  if (/\b(?:saas app|saas platform|saas product)\b/.test(text)) return GOAL_TYPES.SAAS_APP;
   if (/\b(?:admin panel|admin dashboard)\b/.test(text)) return GOAL_TYPES.ADMIN_PANEL;
   if (/\b(?:dashboard|admin|analytics portal|metrics portal)\b/.test(text)) return GOAL_TYPES.DASHBOARD;
-  if (/\b(?:saas app|saas landing page|saas)\b/.test(text)) return GOAL_TYPES.SAAS_APP;
-  if (/\b(?:landing page|homepage|hero section|marketing site)\b/.test(text)) return GOAL_TYPES.LANDING_PAGE;
   return GOAL_TYPES.UNKNOWN;
 }
 
@@ -258,7 +258,12 @@ export function getComponentKnowledge({ goalType = GOAL_TYPES.UNKNOWN, profileId
 
 export function getValidationKnowledge({ profileId = "", workspaceState = {}, toolAvailability = {}, goalType = GOAL_TYPES.UNKNOWN } = {}) {
   const profile = getProfileKnowledge(profileId);
-  const commands = unique(profile.validationCommands || []);
+  const scan = workspaceState?.scan || {};
+  const commands = unique([
+    ...(Array.isArray(scan.testCommands) ? scan.testCommands : []),
+    ...(Array.isArray(scan.buildCommands) ? scan.buildCommands : []),
+    ...(Array.isArray(scan.runCommands) ? scan.runCommands : [])
+  ]);
   const skipped = [];
   const family = profile.family || "static";
 
@@ -300,8 +305,7 @@ export function getValidationKnowledge({ profileId = "", workspaceState = {}, to
 
 export function getRepairKnowledge({ failure = null, goalType = GOAL_TYPES.UNKNOWN, profileId = "" } = {}) {
   const text = String(failure?.message || failure?.stderr || failure?.error || failure?.output || failure?.text || failure || "").toLowerCase();
-  const validationCommands = getProfileKnowledge(profileId).validationCommands || [];
-  const retryCommand = validationCommands[0] || null;
+  const retryCommand = null;
 
   if (!text) {
     return {
@@ -319,8 +323,8 @@ export function getRepairKnowledge({ failure = null, goalType = GOAL_TYPES.UNKNO
       repairType: "missing_dependency",
       confidence: 0.95,
       action: "install_dependency",
-      tool: "RUN_TERMINAL",
-      args: { command: "npm install" },
+      tool: null,
+      args: {},
       retryCommand
     };
   }
@@ -330,9 +334,9 @@ export function getRepairKnowledge({ failure = null, goalType = GOAL_TYPES.UNKNO
       repairType: "missing_script",
       confidence: 0.9,
       action: "patch_package_json",
-      tool: "WRITE_FILE",
-      args: { path: "package.json" },
-      retryCommand: "npm run build"
+      tool: null,
+      args: {},
+      retryCommand: null
     };
   }
 
@@ -384,8 +388,8 @@ export function getRepairKnowledge({ failure = null, goalType = GOAL_TYPES.UNKNO
     repairType: "generic_retry",
     confidence: 0.5,
     action: "retry_validation",
-    tool: "RUN_TERMINAL",
-    args: retryCommand ? { command: retryCommand } : {},
+    tool: null,
+    args: {},
     retryCommand
   };
 }

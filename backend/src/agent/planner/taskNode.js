@@ -3,7 +3,47 @@ import { TaskStatus } from './plannerTypes.js';
 import { getTimestamp } from './plannerUtils.js';
 
 export class TaskNode {
-  constructor({ id, kind, goal, dependencies = [], tool = null, toolArgs = {}, successNext, failureNext, recoveredNext, blockedNext, skipNext, priority }) {
+  constructor({
+    id,
+    kind,
+    goal,
+    dependencies = [],
+    tool = null,
+    toolArgs = {},
+    successNext,
+    failureNext,
+    recoveredNext,
+    blockedNext,
+    skipNext,
+    priority,
+    source = null,
+    promotionSource = null,
+    verificationEvidence = null,
+    plannerReason = null,
+    proposalId = null,
+    proposalType = null,
+    promoted = false,
+    promotionId = null,
+    contextScanId = null,
+    unitType = null,
+    description = null,
+    targetFiles = [],
+    requiredReads = [],
+    requiredWrites = [],
+    inputs = {},
+    outputs = {},
+    acceptanceCriteria = [],
+    completionPredicate = null,
+    retryPolicy = {},
+    verificationPolicy = {},
+    canonicalTargets = [],
+    executionContract = null,
+    authoritySource = null,
+    authorityState = 'candidate',
+    approvalId = null,
+    approvedByFirewall = false,
+    requestedKind = null
+  }) {
     this.id = id || crypto.randomUUID();
     this.kind = kind;
     this.goal = goal;
@@ -43,6 +83,33 @@ export class TaskNode {
     this.statusReason = null;
     this.timeoutMs = null;
     this.maxAttempts = null;
+    this.source = source;
+    this.promotionSource = promotionSource;
+    this.verificationEvidence = verificationEvidence;
+    this.plannerReason = plannerReason;
+    this.proposalId = proposalId;
+    this.proposalType = proposalType;
+    this.promoted = promoted === true;
+    this.promotionId = promotionId;
+    this.contextScanId = contextScanId;
+    this.unitType = unitType;
+    this.description = description;
+    this.targetFiles = Array.isArray(targetFiles) ? [...targetFiles] : [];
+    this.requiredReads = Array.isArray(requiredReads) ? [...requiredReads] : [];
+    this.requiredWrites = Array.isArray(requiredWrites) ? [...requiredWrites] : [];
+    this.inputs = inputs && typeof inputs === 'object' ? { ...inputs } : {};
+    this.outputs = outputs && typeof outputs === 'object' ? { ...outputs } : {};
+    this.acceptanceCriteria = Array.isArray(acceptanceCriteria) ? [...acceptanceCriteria] : [];
+    this.completionPredicate = completionPredicate;
+    this.retryPolicy = retryPolicy && typeof retryPolicy === 'object' ? { ...retryPolicy } : {};
+    this.verificationPolicy = verificationPolicy && typeof verificationPolicy === 'object' ? { ...verificationPolicy } : {};
+    this.canonicalTargets = Array.isArray(canonicalTargets) ? [...canonicalTargets] : [];
+    this.executionContract = executionContract;
+    this.authoritySource = authoritySource || null;
+    this.authorityState = authorityState || 'candidate';
+    this.approvalId = approvalId || null;
+    this.approvedByFirewall = approvedByFirewall === true;
+    this.requestedKind = requestedKind || null;
   }
 
   touch() {

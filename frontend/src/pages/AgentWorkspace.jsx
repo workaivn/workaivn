@@ -58,9 +58,16 @@ function ExecutionSummary({ run, onCancel }) {
       .map(call => call.args?.path || call.result?.file)
       .filter(Boolean)
   )];
-  // Prefer backend-provided patchesApplied; fallback to derive from toolCalls
-  const patches = Array.isArray(run.patchesApplied) && run.patchesApplied.length
-    ? run.patchesApplied
+  const plannedFiles = Array.isArray(run.plannedFiles) ? run.plannedFiles : [];
+  const committedFiles = Array.isArray(run.committedFiles) && run.committedFiles.length
+    ? run.committedFiles
+    : (Array.isArray(run.changedFiles) ? run.changedFiles : []);
+  const generatedFiles = Array.isArray(run.generatedFiles) ? run.generatedFiles : [];
+  const validationRejectedFiles = Array.isArray(run.validationRejectedFiles) ? run.validationRejectedFiles : [];
+  const failedFiles = Array.isArray(run.failedFiles) ? run.failedFiles : [];
+  // Prefer backend-provided committed files; fallback to derive from toolCalls
+  const patches = committedFiles.length
+    ? committedFiles.map(file => ({ file, ok: true, blocked: false, blockedByPolicy: false, reason: null, tool: "WRITE_FILE", committed: true }))
     : toolCalls
         .filter(call => (call.tool === "APPLY_PATCH" || call.tool === "WRITE_FILE") && !(call?.result?.blocked))
         .map(call => ({
@@ -133,17 +140,35 @@ function ExecutionSummary({ run, onCancel }) {
             : <span className="muted">{isRunning ? "Reading files..." : "None"}</span>}
         </div>
         <div>
-          <h4>Files changed</h4>
-          {(run.filesChanged && run.filesChanged.length ? run.filesChanged : run.changedFiles || []).length
-            ? (run.filesChanged && run.filesChanged.length ? run.filesChanged : run.changedFiles).map(file => <code key={file}>{file}</code>)
+          <h4>Committed files</h4>
+          {committedFiles.length
+            ? committedFiles.map(file => <code key={file}>{file}</code>)
             : <span className="muted">{isRunning ? "No changes yet" : "None"}</span>}
+        </div>
+        <div>
+          <h4>Rejected writes</h4>
+          {validationRejectedFiles.length
+            ? validationRejectedFiles.map(file => <code key={file}>{file} · Validation failed</code>)
+            : <span className="muted">{isRunning ? "Waiting..." : "None"}</span>}
+        </div>
+        <div>
+          <h4>Planned files</h4>
+          {plannedFiles.length
+            ? plannedFiles.map(file => <code key={file}>{file}</code>)
+            : <span className="muted">{isRunning ? "Waiting..." : "None"}</span>}
+        </div>
+        <div>
+          <h4>Generated files</h4>
+          {generatedFiles.length
+            ? generatedFiles.map(file => <code key={file}>{file}</code>)
+            : <span className="muted">{isRunning ? "Waiting..." : "None"}</span>}
         </div>
         <div>
           <h4>Patches applied</h4>
           {patches.length
             ? patches.map((patch, index) => {
                 const file = patch.file || "(unknown)";
-                const label = patch.blocked ? "Blocked by policy" : (patch.ok ? "OK" : "Failed");
+                const label = patch.committed ? "Committed" : (patch.blocked ? "Blocked by policy" : (patch.ok ? "OK" : "Failed"));
                 return (
                   <code key={`${file}-${index}`}>
                     {file} · {label}

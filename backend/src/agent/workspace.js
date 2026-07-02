@@ -106,7 +106,9 @@ const LANGUAGE_BY_EXT = [
   { rx: ASPNET_RX, language: "aspnet" },
   { rx: JAVA_RX, language: "java" },
   { rx: STATIC_RX, language: "static" },
-  { rx: /\.(?:json|yml|yaml|md|txt)$/i, language: "data" }
+  { rx: /\.(?:json|jsonc|json5)$/i, language: "json" },
+  { rx: /\.(?:md|markdown|rst)$/i, language: "markdown" },
+  { rx: /\.(?:yml|yaml|txt)$/i, language: "data" }
 ];
 
 const PROJECT_MARKER_HINTS = [
@@ -1259,7 +1261,8 @@ export async function validateGeneratedWriteContent({
   frameworkHintsEmitted = false,
   policySource = null,
   coordinatorValidationFileSet = null,
-  frameworkAvailability = null
+  frameworkAvailability = null,
+  deferValidation = false
 } = {}) {
   // WriteCoordinator owns ValidationPolicy creation. The Executor (validation step)
   // must CONSUME the already-built writeContext instead of rebuilding it, so that
@@ -1335,6 +1338,29 @@ export async function validateGeneratedWriteContent({
       rulesLog.hints = buildGenerationHints(policy.testFramework || "generic-js-test", frameworkAvailability || writeContext.detectedTestFrameworkAvailability || null);
     }
     console.log("[FRAMEWORK_RULES]", rulesLog);
+  }
+
+  if (deferValidation === true) {
+    console.log("[NEED_CONTENT_CREATED]", {
+      taskId: task?.id || null,
+      targetPath: normalizedTargetPath,
+      role: policy.role,
+      source: policySource || "deferred"
+    });
+    console.log("[CONTENT_GENERATED]", {
+      taskId: task?.id || null,
+      targetPath: normalizedTargetPath,
+      contentLength: nextContent.length,
+      source: policySource || "deferred"
+    });
+    return {
+      success: true,
+      content: nextContent,
+      writeContext,
+      policy,
+      frameworkValidation: null,
+      deferredValidation: true
+    };
   }
 
   const policyValidation = validateGeneratedContentWithPolicy(nextContent, policy, writeContext.detectedTestFrameworkAvailability || frameworkAvailability || null);
@@ -1525,6 +1551,10 @@ function buildRequestedPathCandidates(requestedPath, layout = null) {
   const candidates = [];
 
   uniquePush(candidates, normalized, seen);
+
+  if (segments.length <= 1) {
+    return candidates;
+  }
 
   for (const suffix of suffixes) {
     uniquePush(candidates, suffix, seen);
@@ -1737,6 +1767,11 @@ export async function resolveWorkspacePathSafe(
   if (!normalized) {
     throw new Error("File path escapes selected workspace and must be relative to the selected workspace");
   }
+  console.log("[WRITE_PATH_NORMALIZED]", {
+    requestedPath: String(requestedPath || ""),
+    normalizedPath: normalized,
+    workspaceRoot: root
+  });
   const exactAbsolutePath = path.resolve(root, normalized);
   const workspaceFiles = await listWorkspaceFiles(root, { limit: 5000 }).catch(() => []);
   const layoutRoots = getNormalizedLayoutRoots(layout, workspaceFiles);
@@ -1761,14 +1796,22 @@ export async function resolveWorkspacePathSafe(
 
   for (const relativeCandidate of candidateRelativePaths) {
     const candidateAbsolute = path.resolve(root, relativeCandidate);
+    const candidateHasDirectory = relativeCandidate.includes("/");
     const matchedFile = workspaceFiles.find(file => {
       const normalizedFile = String(file || "").replace(/\\/g, "/");
-      return normalizedFile === relativeCandidate || normalizedFile.endsWith(`/${relativeCandidate}`);
+      return normalizedFile === relativeCandidate || (candidateHasDirectory && normalizedFile.endsWith(`/${relativeCandidate}`));
     });
     if (matchedFile) {
       const realRoot = await fs.realpath(root);
       const realTarget = await fs.realpath(path.resolve(root, matchedFile));
       if (!isInsidePath(realRoot, realTarget)) continue;
+      if (normalizeWorkspaceRelativePath(matchedFile, root) !== normalized) {
+        console.log("[WRITE_PATH_CANONICALIZED]", {
+          requestedPath: normalized,
+          canonicalPath: normalizeWorkspaceRelativePath(matchedFile, root),
+          verifiedMapping: true
+        });
+      }
       return {
         root: realRoot,
         absolutePath: realTarget,
@@ -1800,6 +1843,13 @@ export async function resolveWorkspacePathSafe(
       if (!candidatePrefixAllowed) continue;
       if (await hasExistingAncestor(root, candidateAbsolute)) {
         const realRoot = await fs.realpath(root);
+        if (relativeCandidate !== normalized) {
+          console.log("[WRITE_PATH_CANONICALIZED]", {
+            requestedPath: normalized,
+            canonicalPath: relativeCandidate,
+            verifiedMapping: false
+          });
+        }
         return {
           root: realRoot,
           absolutePath: candidateAbsolute,

@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Planner Debug UI</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; font-size: 13px; line-height: 1.5; }
+a { color: #58a6ff; }
+.container { max-width: 1400px; margin: 0 auto; padding: 16px; }
+header { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px 20px; margin-bottom: 16px; }
+header h1 { font-size: 20px; color: #f0f6fc; margin-bottom: 8px; }
+.run-meta { display: flex; gap: 24px; flex-wrap: wrap; font-size: 12px; color: #8b949e; }
+.run-meta .label { color: #6e7681; }
+.run-meta .value { color: #c9d1d9; font-weight: 600; }
+.search-bar { display: flex; gap: 8px; margin-bottom: 12px; }
+.search-bar input { flex: 1; max-width: 400px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; color: #c9d1d9; font-size: 13px; }
+.search-bar button { background: #238636; color: #fff; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer; font-weight: 600; }
+.search-bar button:hover { background: #2ea043; }
+.search-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
+.error { color: #f85149; background: #2d1b1e; border: 1px solid #f85149; border-radius: 6px; padding: 12px 16px; margin-bottom: 12px; }
+.loading { text-align: center; padding: 48px; color: #8b949e; font-size: 14px; }
+.loading .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid #30363d; border-top-color: #58a6ff; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.tabs { display: flex; gap: 2px; margin-bottom: 0; overflow-x: auto; background: #161b22; border: 1px solid #30363d; border-radius: 8px 8px 0 0; border-bottom: none; }
+.tab-btn { background: none; border: none; color: #8b949e; padding: 10px 16px; cursor: pointer; font-size: 12px; font-weight: 500; white-space: nowrap; border-bottom: 2px solid transparent; transition: all 0.15s; }
+.tab-btn:hover { color: #c9d1d9; background: #21262d; }
+.tab-btn.active { color: #f0f6fc; border-bottom-color: #f78166; background: #21262d; }
+.tab-btn .badge { display: inline-block; background: #30363d; color: #c9d1d9; border-radius: 10px; padding: 0 6px; font-size: 11px; margin-left: 4px; font-weight: 600; }
+.tab-btn.active .badge { background: #1f6feb; color: #fff; }
+.panel { display: none; background: #161b22; border: 1px solid #30363d; border-radius: 0 0 8px 8px; padding: 16px; }
+.panel.active { display: block; }
+.section { margin-bottom: 20px; }
+.section h3 { font-size: 14px; color: #f0f6fc; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid #21262d; }
+.section h4 { font-size: 13px; color: #c9d1d9; margin: 10px 0 6px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #21262d; }
+th { color: #8b949e; font-weight: 500; text-transform: uppercase; font-size: 11px; }
+tr:hover td { background: #1c2128; }
+.status-badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.status-PENDING { background: #21262d; color: #8b949e; }
+.status-READY { background: #1f6feb1a; color: #58a6ff; border: 1px solid #1f6feb44; }
+.status-RUNNING { background: #d299221a; color: #d29922; border: 1px solid #d2992244; }
+.status-SUCCESS { background: #2386361a; color: #3fb950; border: 1px solid #23863644; }
+.status-FAILED { background: #da36331a; color: #f85149; border: 1px solid #da363344; }
+.status-BLOCKED { background: #8b949e1a; color: #8b949e; border: 1px solid #8b949e44; }
+.status-SKIPPED { background: #6e76811a; color: #6e7681; border: 1px solid #6e768144; }
+.status-RECOVERING { background: #d299221a; color: #d29922; border: 1px solid #d2992244; }
+.status-RECOVERED { background: #2386361a; color: #3fb950; border: 1px solid #23863644; }
+.status-RECOVERY_FAILED { background: #da36331a; color: #f85149; border: 1px solid #da363344; }
+.card { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 12px; margin-bottom: 8px; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; }
+.stat-card { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 12px; text-align: center; }
+.stat-card .stat-value { font-size: 24px; font-weight: 700; color: #f0f6fc; }
+.stat-card .stat-label { font-size: 11px; color: #8b949e; text-transform: uppercase; margin-top: 4px; }
+pre { background: #0d1117; border: 1px solid #21262d; border-radius: 4px; padding: 12px; overflow-x: auto; font-size: 11px; line-height: 1.4; color: #c9d1d9; max-height: 400px; overflow-y: auto; }
+code { font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace; }
+.dag-container { position: relative; width: 100%; min-height: 400px; }
+.dag-container svg { width: 100%; height: 100%; min-height: 400px; }
+.dag-node { cursor: pointer; }
+.dag-node rect { stroke-width: 1.5; }
+.dag-node:hover rect { stroke-width: 3; stroke: #f78166; }
+.dag-edge { stroke: #30363d; stroke-width: 1.5; fill: none; }
+.dag-edge.edge-SUCCESS { stroke: #3fb950; }
+.dag-edge.edge-FAILURE { stroke: #f85149; }
+.dag-edge.edge-recovery { stroke: #d29922; stroke-dasharray: 4 3; }
+.node-tooltip { position: absolute; background: #1c2128; border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; font-size: 12px; max-width: 320px; pointer-events: none; z-index: 100; display: none; color: #c9d1d9; }
+.node-tooltip .tt-label { color: #8b949e; font-weight: 500; }
+.json-toggle { cursor: pointer; color: #58a6ff; font-size: 11px; margin-left: 8px; }
+.json-toggle:hover { text-decoration: underline; }
+.pulse { animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+.cost-bar { height: 4px; border-radius: 2px; margin-top: 4px; }
+.cost-low { background: #238636; }
+.cost-medium { background: #d29922; }
+.cost-high { background: #da3633; }
+.filter-bar { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+.filter-bar input, .filter-bar select { background: #0d1117; border: 1px solid #30363d; border-radius: 4px; padding: 4px 8px; color: #c9d1d9; font-size: 12px; }
+.filter-bar label { color: #8b949e; font-size: 12px; display: flex; align-items: center; gap: 4px; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; font-size: 11px; }
+.legend-item { display: flex; align-items: center; gap: 4px; }
+.legend-item .swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #30363d; }
+@media (max-width: 768px) { .tabs { flex-wrap: wrap; } .tab-btn { flex: 1; text-align: center; } }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>Planner Debug UI</h1>
+    <div class="search-bar">
+      <input type="text" id="runIdInput" placeholder="Enter Agent Run ID..." value="">
+      <button id="loadBtn" onclick="loadRun()">Load</button>
+      <button id="listRunsBtn" onclick="showRunList()">List Recent Runs</button>
+    </div>
+    <div id="runMeta" class="run-meta" style="display:none"></div>
+  </header>
+  <div id="error" class="error" style="display:none"></div>
+  <div id="loading" class="loading" style="display:none"><span class="spinner"></span> Loading...</div>
+  <div id="runListPanel" style="display:none; margin-bottom: 16px;"></div>
+  <div id="mainContent" style="display:none">
+    <div class="tabs" id="tabs">
+      <button class="tab-btn active" data-tab="summary">Summary <span class="badge">7</span></button>
+      <button class="tab-btn" data-tab="dag">DAG <span class="badge" id="dagBadge">0</span></button>
+      <button class="tab-btn" data-tab="deps">Dependencies <span class="badge" id="depsBadge">0</span></button>
+      <button class="tab-btn" data-tab="execmem">Execution Memory <span class="badge" id="execmemBadge">0</span></button>
+      <button class="tab-btn" data-tab="costs">Cost Estimates <span class="badge" id="costsBadge">0</span></button>
+      <button class="tab-btn" data-tab="adaptive">Adaptive Planning <span class="badge" id="adaptiveBadge">0</span></button>
+      <button class="tab-btn" data-tab="tasks">Task Inspector</button>
+      <button class="tab-btn" data-tab="raw">Raw JSON</button>
+    </div>
+    <div class="panel active" id="panel-summary"></div>
+    <div class="panel" id="panel-dag">
+      <div class="legend">
+        <span class="legend-item"><span class="swatch" style="background:#3fb950"></span> SUCCESS</span>
+        <span class="legend-item"><span class="swatch" style="background:#f85149"></span> FAILED</span>
+        <span class="legend-item"><span class="swatch" style="background:#58a6ff"></span> READY/RUNNING</span>
+        <span class="legend-item"><span class="swatch" style="background:#8b949e"></span> PENDING/BLOCKED</span>
+        <span class="legend-item"><span class="swatch" style="background:#d29922; border-color:#d29922"></span> RECOVERY</span>
+      </div>
+      <div class="dag-container" id="dagContainer"><svg id="dagSvg"></svg></div>
+      <div class="node-tooltip" id="nodeTooltip"></div>
+    </div>
+    <div class="panel" id="panel-deps"></div>
+    <div class="panel" id="panel-execmem"></div>
+    <div class="panel" id="panel-costs"></div>
+    <div class="panel" id="panel-adaptive"></div>
+    <div class="panel" id="panel-tasks"></div>
+    <div class="panel" id="panel-raw"></div>
+  </div>
+</div>
+
+<script>
+const BASE = window.location.origin;
+let currentData = null;
+
+function $(id) { return document.getElementById(id); }
+function show(el) { if (typeof el === 'string') el = $(el); el.style.display = ''; }
+function hide(el) { if (typeof el === 'string') el = $(el); el.style.display = 'none'; }
+
+function statusColor(status) {
+  const colors = {
+    PENDING: '#8b949e', READY: '#58a6ff', RUNNING: '#d29922',
+    SUCCESS: '#3fb950', FAILED: '#f85149', BLOCKED: '#6e7681',
+    SKIPPED: '#6e7681', RECOVERING: '#d29922', RECOVERED: '#3fb950',
+    RECOVERY_FAILED: '#f85149'
+  };
+  return colors[status] || '#8b949e';
+}
+
+function statusBadge(status) {
+  return `<span class="status-badge status-${status}">${status}</span>`;
+}
+
+function toolBadge(tool) {
+  if (!tool) return '<span class="status-badge" style="background:#21262d;color:#8b949e">generic</span>';
+  return `<span class="status-badge" style="background:#1f6feb1a;color:#58a6ff;border:1px solid #1f6feb44">${tool}</span>`;
+}
+
+// ---- Tab switching ----
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    $(`panel-${btn.dataset.tab}`).classList.add('active');
+    if (btn.dataset.tab === 'dag') renderDag();
+    if (btn.dataset.tab === 'adaptive') renderAdaptive(currentData);
+  });
+});
+
+// ---- Load from URL param on page load ----
+const params = new URLSearchParams(window.location.search);
+if (params.get('runId')) {
+  $('runIdInput').value = params.get('runId');
+  loadRun();
+}
+
+async function apiGet(path) {
+  const res = await fetch(`${BASE}${path}`, { credentials: 'include' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+  return res.json();
+}
+
+async function showRunList() {
+  hide('error');
+  const panel = $('runListPanel');
+  panel.style.display = 'block';
+  panel.innerHTML = '<div class="loading"><span class="spinner"></span> Loading runs...</div>';
+  try {
+    const taskId = prompt('Enter Task ID to list runs for (or leave empty to search all):');
+    const params = new URLSearchParams();
+    if (taskId) params.set('taskId', taskId);
+    params.set('limit', '20');
+    const data = await apiGet(`/api/ai/agent-runs${params.toString() ? `?${params.toString()}` : ''}`);
+    const runs = data.data || [];
+    if (!Array.isArray(runs) || runs.length === 0) {
+      panel.innerHTML = '<div class="card" style="color:#8b949e">No runs found.</div>';
+      return;
+    }
+    let html = '<div class="section"><h3>Recent Runs</h3><table><tr><th>ID</th><th>Status</th><th>Success</th><th>Debug</th><th>Time</th><th></th></tr>';
+    for (const r of runs) {
+      const id = r._id || r.id || '';
+      html += `<tr>
+        <td><code>${id.slice(-8)}</code></td>
+        <td>${statusBadge(r.status)}</td>
+        <td>${r.success ? 'true' : 'false'}</td>
+        <td>${r.hasPlannerDebugSnapshot ? 'yes' : 'no'}</td>
+        <td style="font-size:11px;color:#8b949e">${r.updatedAt ? new Date(r.updatedAt).toLocaleString() : (r.createdAt ? new Date(r.createdAt).toLocaleString() : '-')}</td>
+        <td><button onclick="loadRunById('${id}')" style="background:#1f6feb;color:#fff;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:11px">Inspect</button></td>
+      </tr>`;
+    }
+    html += '</table></div>';
+    panel.innerHTML = html;
+  } catch (err) {
+    panel.innerHTML = `<div class="error">${err.message}</div>`;
+  }
+}
+
+function loadRunById(id) {
+  $('runIdInput').value = id;
+  hide('runListPanel');
+  loadRun();
+}
+
+async function loadRun() {
+  const runId = $('runIdInput').value.trim();
+  if (!runId) { showError('Enter a run ID'); return; }
+  hide('error');
+  hide('runListPanel');
+  hide('mainContent');
+  show('loading');
+  try {
+    const json = await apiGet(`/api/ai/agent-runs/${encodeURIComponent(runId)}`);
+    if (!json.success) throw new Error(json.message || 'API returned unsuccessful');
+    currentData = json.data;
+    history.replaceState(null, '', `?runId=${runId}`);
+    renderAll();
+    hide('loading');
+    show('mainContent');
+  } catch (err) {
+    hide('loading');
+    showError(`Failed to load run: ${err.message}`);
+  }
+}
+
+function showError(msg) {
+  const el = $('error');
+  el.textContent = msg;
+  el.style.display = '';
+}
+
+function getPlannerSnapshot(d) {
+  return d?.plannerDebugSnapshot || {};
+}
+
+function getDagNodes(snap) {
+  const dagNodes = normalizePlannerTasks(snap?.dag?.nodes);
+  if (dagNodes.length > 0) return dagNodes;
+  return normalizePlannerTasks(snap?.tasks);
+}
+
+function normalizePlannerTasks(value) {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (!value || typeof value !== 'object') return [];
+  return Object.values(value).filter(task => task && typeof task === 'object' && typeof task.id === 'string');
+}
+
+function getPlannerTasks(snap) {
+  const dagNodes = normalizePlannerTasks(snap?.dag?.nodes);
+  if (dagNodes.length > 0) return dagNodes;
+  return normalizePlannerTasks(snap?.tasks);
+}
+
+function getDagEdges(snap) {
+  return Array.isArray(snap?.dag?.edges) ? snap.dag.edges : (Array.isArray(snap?.dependencyGraph?.edges) ? snap.dependencyGraph.edges : []);
+}
+
+function getExecutionMemoryEntries(snap) {
+  return Array.isArray(snap?.executionMemory?.entries)
+    ? snap.executionMemory.entries
+    : (Array.isArray(snap?.executionMemory?.records) ? snap.executionMemory.records : []);
+}
+
+function formatQualityScore(score) {
+  if (score == null || Number.isNaN(Number(score))) return '-';
+  const numeric = Number(score);
+  if (numeric <= 1) return `${Math.round(numeric * 100)}/100`;
+  if (numeric <= 100) return `${Math.round(numeric)}/100`;
+  return `${Math.round(numeric)}%`;
+}
+
+function formatCostValue(value) {
+  if (value == null) return '-';
+  if (typeof value !== 'number' || Number.isNaN(value)) return String(value);
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function formatEstimatedTime(value) {
+  if (value == null || value === '') return '-';
+  if (typeof value === 'number' && !Number.isNaN(value)) {
+    return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)}s`;
+  }
+  const parsed = Number(value);
+  if (!Number.isNaN(parsed) && Number.isFinite(parsed)) {
+    return `${Number.isInteger(parsed) ? parsed.toFixed(0) : parsed.toFixed(1)}s`;
+  }
+  return String(value);
+}
+
+function formatEstimatedMetric(value) {
+  if (value == null || value === '') return '-';
+  if (typeof value === 'number' && !Number.isNaN(value)) {
+    return Number.isInteger(value) ? String(value) : value.toFixed(1);
+  }
+  const parsed = Number(value);
+  if (!Number.isNaN(parsed) && Number.isFinite(parsed)) {
+    return Number.isInteger(parsed) ? String(parsed) : parsed.toFixed(1);
+  }
+  return String(value);
+}
+
+function formatNodeLabel(node) {
+  if (!node) return '-';
+  const prefix = node.toolArgs?.path || node.toolArgs?.file || '';
+  const tool = node.tool || node.kind || '?';
+  return prefix ? `${prefix} ${tool}` : tool;
+}
+
+// ---- Render all panels ----
+function renderAll() {
+  const d = currentData;
+  renderSummary(d);
+  renderDag();
+  renderDeps(d);
+  renderExecMem(d);
+  renderCosts(d);
+  renderAdaptive(d);
+  renderTasks(d);
+  renderRaw(d);
+  updateBadges(d);
+}
+
+function updateBadges(d) {
+  const snap = getPlannerSnapshot(d);
+  const nodes = getDagNodes(snap);
+  const edges = getDagEdges(snap);
+  const execEntries = getExecutionMemoryEntries(snap);
+  const adaptive = snap?.adaptivePlanning || {};
+  $('dagBadge').textContent = nodes.length;
+  $('depsBadge').textContent = edges.length;
+  $('execmemBadge').textContent = execEntries.length;
+  $('costsBadge').textContent = snap?.costSummary ? 1 : nodes.filter(t => t.estimatedCost != null).length;
+  $('adaptiveBadge').textContent = adaptive?.priorityAdjustments?.length || 0;
+}
+
+// ---- Summary Panel ----
+function renderSummary(d) {
+  const snap = getPlannerSnapshot(d);
+  const metrics = d.plannerMetrics || {};
+  const qg = d.qualityGate || {};
+  const tasks = getDagNodes(snap);
+  const dagEdges = getDagEdges(snap);
+  const execEntries = getExecutionMemoryEntries(snap);
+
+  const statusCounts = {};
+  for (const t of tasks) { statusCounts[t.status] = (statusCounts[t.status] || 0) + 1; }
+  const kindCounts = {};
+  for (const t of tasks) { kindCounts[t.kind] = (kindCounts[t.kind] || 0) + 1; }
+
+  const execMemStats = snap?.executionMemory?.stats || {};
+
+  let html = `
+    <div class="section">
+      <h3>Run Status</h3>
+      <div class="card-grid">
+        <div class="stat-card"><div class="stat-value">${d.status || '-'}</div><div class="stat-label">Status</div></div>
+        <div class="stat-card"><div class="stat-value">${d.currentStep || 0}</div><div class="stat-label">Steps</div></div>
+        <div class="stat-card"><div class="stat-value">${qg.passed !== undefined ? (qg.passed ? 'PASS' : 'FAIL') : '-'}</div><div class="stat-label">Quality Gate</div></div>
+        <div class="stat-card"><div class="stat-value">${formatQualityScore(qg.score)}</div><div class="stat-label">Score</div></div>
+        <div class="stat-card"><div class="stat-value">${d.changedFiles?.length || 0}</div><div class="stat-label">Changed Files</div></div>
+        <div class="stat-card"><div class="stat-value">${d.toolCalls?.length || 0}</div><div class="stat-label">Tool Calls</div></div>
+        <div class="stat-card"><div class="stat-value">${d.executionEvents?.length || 0}</div><div class="stat-label">Events</div></div>
+      </div>
+    </div>
+    <div class="section">
+      <h3>Planner State: ${snap?.plannerState || snap?.state || '-'} ${snap?.parallelMode ? 'Parallel' : ''}</h3>
+      <div class="card-grid">
+        <div class="stat-card"><div class="stat-value">${snap?.dag?.nodes?.length || 0}</div><div class="stat-label">DAG Nodes</div></div>
+        <div class="stat-card"><div class="stat-value">${dagEdges.length}</div><div class="stat-label">DAG Edges</div></div>
+        <div class="stat-card"><div class="stat-value">${execEntries.length}</div><div class="stat-label">Exec Memory</div></div>
+        ${Object.entries(statusCounts).map(([s, c]) => `<div class="stat-card"><div class="stat-value">${statusBadge(s)}</div><div class="stat-label" style="margin-top:2px">${c} tasks</div></div>`).join('')}
+      </div>
+    </div>
+    <div class="section">
+      <h3>Task Kinds</h3>
+      <div class="card-grid">
+        ${Object.entries(kindCounts).map(([k, c]) => `<div class="stat-card"><div class="stat-value" style="font-size:18px">${k}</div><div class="stat-label">${c} tasks</div></div>`).join('')}
+      </div>
+    </div>
+    <div class="section">
+      <h3>Execution Memory Stats</h3>
+      <div class="card-grid">
+        <div class="stat-card"><div class="stat-value">${snap?.executionMemory?.stores ?? execMemStats.tasksRemembered ?? 0}</div><div class="stat-label">Stores</div></div>
+        <div class="stat-card"><div class="stat-value">${snap?.executionMemory?.lookups ?? execMemStats.memoryLookups ?? 0}</div><div class="stat-label">Lookups</div></div>
+        <div class="stat-card"><div class="stat-value">${snap?.executionMemory?.hits ?? execMemStats.memoryHits ?? 0}</div><div class="stat-label">Hits</div></div>
+        <div class="stat-card"><div class="stat-value">${snap?.executionMemory?.reused ?? execMemStats.reasoningReused ?? 0}</div><div class="stat-label">Reasoning Reused</div></div>
+        <div class="stat-card"><div class="stat-value">${snap?.executionMemory?.retriesAvoided ?? execMemStats.retriesAvoided ?? 0}</div><div class="stat-label">Retries Avoided</div></div>
+        <div class="stat-card"><div class="stat-value">${snap?.executionMemory?.skippedDupes ?? execMemStats.skippedDuplicateExecutions ?? 0}</div><div class="stat-label">Skipped Dupes</div></div>
+      </div>
+    </div>
+    <div class="section">
+      <h3>Cost Summary</h3>
+      ${snap?.costSummary ? `
+      <div class="card-grid">
+        <div class="stat-card"><div class="stat-value">${formatCostValue(snap.costSummary.totalScore)}</div><div class="stat-label">Total Score</div></div>
+        <div class="stat-card"><div class="stat-value">${snap.costSummary.taskCount ?? 0}</div><div class="stat-label">Task Count</div></div>
+        <div class="stat-card"><div class="stat-value">${formatCostValue(snap.costSummary.avgScore)}</div><div class="stat-label">Avg Score</div></div>
+        <div class="stat-card"><div class="stat-value">${snap.costSummary.category || '-'}</div><div class="stat-label">Category</div></div>
+      </div>` : '<div style="color:#8b949e">No cost summary available</div>'}
+    </div>
+    <div class="section">
+      <h3>Parallel Groups</h3>
+      ${snap?.parallelGroups?.length > 0 ? snap.parallelGroups.map((g, i) =>
+        `<div class="card" style="margin-bottom:4px"><strong>Group ${i}:</strong> ${g.map(id => {
+          const t = getPlannerTasks(snap).find(n => n.id === id);
+          return t ? `<span class="status-badge status-${t.status}">${t.tool || t.kind} (${t.status})</span>` : `<code>${id.slice(0,8)}</code>`;
+        }).join(' ')}</div>`
+      ).join('') : '<div style="color:#8b949e">No parallel groups (sequential execution)</div>'}
+    </div>
+  `;
+  $('panel-summary').innerHTML = html;
+}
+
+// ---- DAG Panel ----
+function renderDag() {
+  const d = currentData;
+  const panel = $('panel-dag');
+  const snap = d.plannerDebugSnapshot;
+  if (!panel) return;
+  if (!snap) { panel.innerHTML = '<div style="color:#8b949e">No planner snapshot data</div>'; return; }
+  const tasks = getPlannerTasks(snap);
+  if (tasks.length === 0) { panel.innerHTML = '<div style="color:#8b949e">No tasks in planner graph</div>'; return; }
+
+  let svg = $('dagSvg');
+  let container = $('dagContainer');
+  if (!container || !svg) {
+    panel.innerHTML = `
+      <div class="legend">
+        <span class="legend-item"><span class="swatch" style="background:#3fb950"></span> SUCCESS</span>
+        <span class="legend-item"><span class="swatch" style="background:#f85149"></span> FAILED</span>
+        <span class="legend-item"><span class="swatch" style="background:#58a6ff"></span> READY/RUNNING</span>
+        <span class="legend-item"><span class="swatch" style="background:#8b949e"></span> PENDING/BLOCKED</span>
+        <span class="legend-item"><span class="swatch" style="background:#d29922; border-color:#d29922"></span> RECOVERY</span>
+      </div>
+      <div class="dag-container" id="dagContainer"><svg id="dagSvg"></svg></div>
+      <div class="node-tooltip" id="nodeTooltip"></div>`;
+    svg = $('dagSvg');
+    container = $('dagContainer');
+  }
+  if (!container || !svg) {
+    panel.innerHTML = '<div style="color:#8b949e">Planner DAG view is unavailable.</div>';
+    return;
+  }
+
+  const W = container.clientWidth || panel.clientWidth || 900;
+  const H = Math.max(400, Math.ceil(tasks.length / 5) * 120);
+
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  // Compute layers
+  const taskMap = {};
+  tasks.forEach(t => taskMap[t.id] = t);
+  const layers = [];
+  const assigned = new Set();
+  let current = tasks.filter(t => t.dependencies.length === 0);
+  while (current.length > 0) {
+    const layer = [];
+    for (const t of current) {
+      if (!assigned.has(t.id)) {
+        layer.push(t);
+        assigned.add(t.id);
+      }
+    }
+    if (layer.length === 0) break;
+    layers.push(layer);
+    const next = new Set();
+    for (const t of layer) {
+      for (const cid of t.children) {
+        if (!assigned.has(cid) && taskMap[cid]) {
+          const deps = taskMap[cid].dependencies;
+          if (deps.every(d => assigned.has(d))) next.add(cid);
+        }
+      }
+    }
+    current = [...next].map(id => taskMap[id]).filter(Boolean);
+  }
+  // Add any unassigned tasks
+  for (const t of tasks) {
+    if (!assigned.has(t.id)) {
+      if (layers.length === 0) layers.push([]);
+      layers[layers.length - 1].push(t);
+      assigned.add(t.id);
+    }
+  }
+
+  const NODE_W = 140, NODE_H = 40, GX = 180, GY = 70, PAD = 20;
+  const layout = {};
+
+  layers.forEach((layer, li) => {
+    const x = PAD + li * GX;
+    const totalH = layer.length * (NODE_H + 10) - 10;
+    const startY = (H - totalH) / 2;
+    layer.forEach((t, ti) => {
+      layout[t.id] = { x, y: startY + ti * (NODE_H + 10), layer: li };
+    });
+  });
+
+  let defs = '<defs>';
+  defs += '<marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#30363d"/></marker>';
+  defs += '<marker id="arrowhead-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3fb950"/></marker>';
+  defs += '<marker id="arrowhead-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#f85149"/></marker>';
+  defs += '<marker id="arrowhead-yellow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#d29922"/></marker>';
+  defs += '</defs>';
+
+  let edges = '';
+  for (const t of tasks) {
+    if (!layout[t.id]) continue;
+    const from = layout[t.id];
+    const isRecovery = t.kind === 'RECOVERY' || t.status === 'RECOVERING' || t.status === 'RECOVERED' || t.status === 'RECOVERY_FAILED';
+
+    for (const depId of (t.dependencies || [])) {
+      if (!layout[depId]) continue;
+      const to = layout[depId];
+      const x1 = to.x + NODE_W, y1 = to.y + NODE_H / 2;
+      const x2 = from.x, y2 = from.y + NODE_H / 2;
+      const marker = isRecovery ? 'url(#arrowhead-yellow)' : (t.status === 'FAILED' || t.status === 'RECOVERY_FAILED' ? 'url(#arrowhead-red)' : to.status === 'SUCCESS' ? 'url(#arrowhead-green)' : 'url(#arrowhead)');
+      const cls = isRecovery ? 'dag-edge edge-recovery' : (t.status === 'FAILED' || t.status === 'RECOVERY_FAILED' ? 'dag-edge edge-FAILURE' : 'dag-edge');
+      edges += `<line class="${cls}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" marker-end="${marker}"/>`;
+    }
+  }
+
+  const tooltip = $('nodeTooltip');
+  let nodes = '';
+  for (const t of tasks) {
+    if (!layout[t.id]) continue;
+    const p = layout[t.id];
+    const isRecovery = t.kind === 'RECOVERY' || t.status === 'RECOVERING' || t.status === 'RECOVERED' || t.status === 'RECOVERY_FAILED';
+    const fill = t.status === 'SUCCESS' ? '#238636' :
+                 t.status === 'FAILED' || t.status === 'RECOVERY_FAILED' ? '#da3633' :
+                 t.status === 'READY' || t.status === 'RUNNING' ? '#1f6feb' :
+                 t.status === 'RECOVERING' || isRecovery ? '#7a5d1a' :
+                 t.status === 'RECOVERED' ? '#238636' :
+                 '#21262d';
+    const stroke = t.status === 'SUCCESS' ? '#3fb950' :
+                   t.status === 'FAILED' || t.status === 'RECOVERY_FAILED' ? '#f85149' :
+                   t.status === 'READY' || t.status === 'RUNNING' ? '#58a6ff' :
+                   t.status === 'RECOVERING' || isRecovery ? '#d29922' :
+                   t.status === 'RECOVERED' ? '#3fb950' :
+                   '#30363d';
+    const label = (t.tool || t.kind || '?').length > 14 ? (t.tool || t.kind || '?').slice(0, 12) + '..' : (t.tool || t.kind || '?');
+
+    nodes += `<g class="dag-node" data-id="${t.id}" transform="translate(${p.x},${p.y})"
+      onmouseenter="showNodeTooltip(event, '${t.id}')" onmouseleave="hideNodeTooltip()">
+      <rect width="${NODE_W}" height="${NODE_H}" rx="6" fill="${fill}" stroke="${stroke}"/>
+      <text x="${NODE_W/2}" y="${NODE_H/2 - 4}" text-anchor="middle" fill="#f0f6fc" font-size="10" font-weight="600">${label}</text>
+      <text x="${NODE_W/2}" y="${NODE_H/2 + 10}" text-anchor="middle" fill="#8b949e" font-size="9">${t.status} ${t.retryCount > 0 ? '('+t.retryCount+')' : ''}</text>
+    </g>`;
+  }
+
+  svg.innerHTML = defs + edges + nodes;
+}
+
+function showNodeTooltip(ev, id) {
+  const d = currentData;
+  const snap = d.plannerDebugSnapshot;
+  const t = getPlannerTasks(snap).find(n => n.id === id);
+  if (!t) return;
+  const tooltip = $('nodeTooltip');
+  const plannerTasks = getPlannerTasks(snap);
+  const depNames = (t.dependencies || []).map(did => plannerTasks.find(n => n.id === did)?.tool || did.slice(0,8)).join(', ');
+  const childNames = (t.children || []).map(cid => plannerTasks.find(n => n.id === cid)?.tool || cid.slice(0,8)).join(', ');
+  tooltip.innerHTML = `
+    <div><span class="tt-label">ID:</span> <code>${t.id.slice(0,12)}</code></div>
+    <div><span class="tt-label">Kind:</span> ${t.kind} ${t.tool ? '| Tool: ' + t.tool : ''}</div>
+    <div><span class="tt-label">Goal:</span> ${(t.goal || '').slice(0, 80)}</div>
+    <div><span class="tt-label">Status:</span> ${statusBadge(t.status)}</div>
+    <div><span class="tt-label">Priority:</span> ${t.priority != null ? t.priority : 'N/A'} | <span class="tt-label">Retries:</span> ${t.retryCount} | <span class="tt-label">Attempts:</span> ${t.attempts}</div>
+    ${t.dependencies?.length ? '<div><span class="tt-label">Depends on:</span> ' + depNames + '</div>' : ''}
+    ${t.children?.length ? '<div><span class="tt-label">Children:</span> ' + childNames + '</div>' : ''}
+    ${t.branchType ? '<div><span class="tt-label">Branch:</span> ' + t.branchType + (t.branchReason ? ': ' + t.branchReason : '') + '</div>' : ''}
+    ${t.error ? '<div><span class="tt-label">Error:</span> ' + t.error.slice(0, 100) + '</div>' : ''}
+  `;
+  const rect = ev.target.closest('.dag-container').getBoundingClientRect();
+  tooltip.style.display = 'block';
+  tooltip.style.left = Math.min(ev.clientX - rect.left + 10, rect.width - 330) + 'px';
+  tooltip.style.top = Math.min(ev.clientY - rect.top + 10, rect.height - 200) + 'px';
+}
+
+function hideNodeTooltip() {
+  $('nodeTooltip').style.display = 'none';
+}
+
+// ---- Dependencies Panel ----
+function renderDeps(d) {
+  const snap = getPlannerSnapshot(d);
+  if (!snap) { $('panel-deps').innerHTML = '<div style="color:#8b949e">No planner snapshot data</div>'; return; }
+  const tasks = getPlannerTasks(snap);
+
+  let html = '<div class="section"><h3>Dependency Graph (Task -> Dependencies)</h3><table><tr><th>From</th><th>Task</th><th>To</th><th>Branch</th></tr>';
+  const nodeMap = new Map(tasks.map(node => [node.id, node]));
+  const edges = getDagEdges(snap);
+  for (const edge of edges) {
+    const fromNode = nodeMap.get(edge.from);
+    const toNode = nodeMap.get(edge.to);
+    const fromLabel = fromNode ? formatNodeLabel(fromNode) : edge.from.slice(0, 8);
+    const toLabel = toNode ? (toNode.tool || toNode.kind || 'TASK') : edge.to.slice(0, 8);
+    const branchInfo = toNode?.branchType ? `${toNode.branchType}${toNode.branchReason ? ': ' + toNode.branchReason.slice(0, 40) : ''}` : '-';
+    html += `<tr>
+      <td><code>${fromLabel}</code></td>
+      <td>${toolBadge(fromNode?.tool)} ${fromNode?.kind || '-'}</td>
+      <td><code>${toLabel}</code></td>
+      <td style="font-size:11px">${branchInfo}</td>
+    </tr>`;
+  }
+  if (edges.length === 0) {
+    html += `<tr><td colspan="4" style="color:#8b949e">No dependency edges</td></tr>`;
+  }
+  html += '</table></div>';
+  $('panel-deps').innerHTML = html;
+}
+
+// ---- Execution Memory Panel ----
+function renderExecMem(d) {
+  const snap = getPlannerSnapshot(d);
+  if (!snap) { $('panel-execmem').innerHTML = '<div style="color:#8b949e">No planner snapshot data</div>'; return; }
+  const records = getExecutionMemoryEntries(snap);
+  const stats = snap.executionMemory?.stats || {};
+
+  let html = '<div class="section"><h3>Execution Memory Stats</h3><div class="card-grid">';
+  for (const [k, v] of Object.entries(stats)) {
+    html += `<div class="stat-card"><div class="stat-value" style="font-size:16px">${v}</div><div class="stat-label">${k.replace(/([A-Z])/g, ' $1').trim()}</div></div>`;
+  }
+  html += '</div></div>';
+
+  if (records.length > 0) {
+    html += '<div class="section"><h3>Execution Records</h3><table><tr><th>Key</th><th>Tool</th><th>Status</th><th>Attempts</th><th>Result</th></tr>';
+    for (const r of records) {
+      const keyShort = r.executionKey ? r.executionKey.slice(0, 50) + (r.executionKey.length > 50 ? '...' : '') : '-';
+      const resultStr = r.resultSummary ? (r.resultSummary.success ? 'Success' : 'Failed') + (r.resultSummary.file ? ' ' + r.resultSummary.file : '') + (r.resultSummary.error ? ' err:' + r.resultSummary.error.slice(0, 30) : '') : '-';
+      html += `<tr>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis"><code style="font-size:10px">${keyShort}</code></td>
+        <td>${toolBadge(r.tool)}</td>
+        <td>${statusBadge(r.status)}</td>
+        <td>${r.attemptCount}</td>
+        <td style="font-size:11px;max-width:200px">${resultStr}</td>
+      </tr>`;
+    }
+    html += '</table></div>';
+  } else {
+    html += '<div style="color:#8b949e">No execution memory records</div>';
+  }
+
+  const memorySummary = snap.memorySummary;
+  if (memorySummary) {
+    html += '<div class="section"><h3>Memory Summary</h3><div class="card-grid">';
+    for (const [k, v] of Object.entries(memorySummary)) {
+      html += `<div class="stat-card"><div class="stat-value" style="font-size:16px">${v}</div><div class="stat-label">${k.replace(/([A-Z])/g, ' $1').trim()}</div></div>`;
+    }
+    html += '</div></div>';
+  }
+
+  $('panel-execmem').innerHTML = html;
+}
+
+// ---- Cost Estimates Panel ----
+function renderCosts(d) {
+  const snap = getPlannerSnapshot(d);
+  if (!snap) { $('panel-costs').innerHTML = '<div style="color:#8b949e">No planner snapshot data</div>'; return; }
+  const tasks = getDagNodes(snap).filter(t => t.estimatedCost != null);
+  const costSummary = snap.costSummary;
+
+  let html = '';
+  if (costSummary) {
+    html += '<div class="section"><h3>Overall Cost</h3><div class="card-grid">';
+    html += `<div class="stat-card"><div class="stat-value" style="font-size:16px">${formatCostValue(costSummary.totalScore)}</div><div class="stat-label">Total Score</div></div>`;
+    html += `<div class="stat-card"><div class="stat-value" style="font-size:16px">${costSummary.taskCount ?? 0}</div><div class="stat-label">Task Count</div></div>`;
+    html += `<div class="stat-card"><div class="stat-value" style="font-size:16px">${formatCostValue(costSummary.avgScore)}</div><div class="stat-label">Avg Score</div></div>`;
+    html += `<div class="stat-card"><div class="stat-value" style="font-size:16px">${costSummary.category || '-'}</div><div class="stat-label">Category</div></div>`;
+    html += '</div></div>';
+  }
+
+  if (tasks.length > 0) {
+    html += '<div class="section"><h3>Per-Task Cost Estimates</h3><table><tr><th>Task</th><th>Kind</th><th>Status</th><th>Score</th><th>Category</th><th>Time</th><th>Tokens</th><th>IO</th><th>CPU</th><th>Memory</th><th>Risk</th></tr>';
+    for (const t of tasks) {
+      const cls = t.estimatedCategory === 'LOW' ? 'cost-low' : t.estimatedCategory === 'MEDIUM' ? 'cost-medium' : 'cost-high';
+      const estimatedCost = typeof t.estimatedCost === 'number' ? t.estimatedCost : Number(t.estimatedCost);
+      const costWidth = Number.isFinite(estimatedCost) ? Math.min(estimatedCost * 10, 100) : 0;
+      html += `<tr>
+        <td><code>${t.id.slice(0,8)}</code> ${toolBadge(t.tool)}</td>
+        <td>${t.kind}</td>
+        <td>${statusBadge(t.status)}</td>
+        <td><div class="cost-bar ${cls}" style="width:${costWidth}%"></div>${formatCostValue(t.estimatedCost)}</td>
+        <td>${t.estimatedCategory || '-'}</td>
+        <td>${formatEstimatedTime(t.estimatedTime)}</td>
+        <td>${t.estimatedTokens || '-'}</td>
+        <td>${formatEstimatedMetric(t.estimatedIO)}</td>
+        <td>${formatEstimatedMetric(t.estimatedCPU)}</td>
+        <td>${formatEstimatedMetric(t.estimatedMemory)}</td>
+        <td>${formatEstimatedMetric(t.estimatedRisk)}</td>
+      </tr>`;
+    }
+    html += '</table></div>';
+  } else {
+    html += '<div style="color:#8b949e">No cost estimates available</div>';
+  }
+  $('panel-costs').innerHTML = html;
+}
+
+// ---- Adaptive Planning Panel ----
+function renderAdaptive(d) {
+  const snap = getPlannerSnapshot(d);
+  const adaptive = snap?.adaptivePlanning;
+  if (!adaptive) { $('panel-adaptive').innerHTML = '<div style="color:#8b949e">No adaptive planning data</div>'; return; }
+
+  const metrics = adaptive.metrics || {};
+  const prediction = adaptive.prediction || {};
+  const bottlenecks = adaptive.bottlenecks || {};
+  const priorityAdjustments = Array.isArray(adaptive.priorityAdjustments) ? adaptive.priorityAdjustments : [];
+  const cacheDecisions = Array.isArray(adaptive.cacheDecisions) ? adaptive.cacheDecisions : [];
+  const retryAnalysis = Array.isArray(adaptive.retryAnalysis) ? adaptive.retryAnalysis : [];
+  const groups = adaptive.parallelOptimization?.groups || [];
+  const readyTasks = adaptive.parallelOptimization?.readyTasks || [];
+
+  let html = `
+    <div class="section">
+      <h3>Adaptive Metrics</h3>
+      <div class="card-grid">
+        <div class="stat-card"><div class="stat-value">${formatEstimatedMetric(metrics.parallelEfficiency)}</div><div class="stat-label">Parallel Efficiency</div></div>
+        <div class="stat-card"><div class="stat-value">${formatEstimatedMetric(metrics.cacheUtilization)}</div><div class="stat-label">Cache Utilization</div></div>
+        <div class="stat-card"><div class="stat-value">${formatEstimatedMetric(metrics.plannerEfficiency)}</div><div class="stat-label">Planner Efficiency</div></div>
+        <div class="stat-card"><div class="stat-value">${formatEstimatedMetric(metrics.retryEfficiency)}</div><div class="stat-label">Retry Efficiency</div></div>
+        <div class="stat-card"><div class="stat-value">${formatEstimatedMetric(metrics.executionThroughput)}</div><div class="stat-label">Execution Throughput</div></div>
+        <div class="stat-card"><div class="stat-value">${formatEstimatedMetric(metrics.criticalPathDuration)}</div><div class="stat-label">Critical Path Duration</div></div>
+      </div>
+    </div>
+    <div class="section">
+      <h3>Execution Prediction</h3>
+      <div class="card-grid">
+        <div class="stat-card"><div class="stat-value">${formatEstimatedTime(prediction.expectedTotalRuntime)}</div><div class="stat-label">Expected Runtime</div></div>
+        <div class="stat-card"><div class="stat-value">${formatEstimatedTime(prediction.expectedCompletionTime)}</div><div class="stat-label">Expected Completion</div></div>
+        <div class="stat-card"><div class="stat-value">${formatEstimatedMetric(prediction.parallelEfficiency)}</div><div class="stat-label">Parallel Efficiency</div></div>
+        <div class="stat-card"><div class="stat-value">${formatEstimatedMetric(prediction.expectedRisk)}</div><div class="stat-label">Expected Risk</div></div>
+      </div>
+      <div class="card" style="margin-top:8px"><strong>Critical Path:</strong> ${(prediction?.criticalPath?.taskIds || []).map(id => `<code>${String(id).slice(0,8)}</code>`).join(' &rarr; ') || '-'}</div>
+    </div>
+    <div class="section">
+      <h3>Priority Adjustments</h3>
+      <table><tr><th>Task</th><th>Base</th><th>Adaptive</th><th>Delta</th><th>Depth</th><th>Cache</th><th>Retry</th></tr>
+      ${priorityAdjustments.map(item => `<tr>
+        <td><code>${String(item.taskId || '').slice(0,8)}</code></td>
+        <td>${formatEstimatedMetric(item.basePriority)}</td>
+        <td>${formatEstimatedMetric(item.adaptivePriority)}</td>
+        <td>${formatEstimatedMetric(item.adjustment)}</td>
+        <td>${formatEstimatedMetric(item.dependencyDepth)}</td>
+        <td>${formatEstimatedMetric(item.cacheProbability)}</td>
+        <td>${formatEstimatedMetric(item.retryRisk)}</td>
+      </tr>`).join('')}
+      </table>
+    </div>
+    <div class="section">
+      <h3>Cache Decisions</h3>
+      <table><tr><th>Task</th><th>Tool</th><th>Hit</th><th>Probability</th><th>Reason</th></tr>
+      ${cacheDecisions.map(item => `<tr>
+        <td><code>${String(item.taskId || '').slice(0,8)}</code></td>
+        <td>${toolBadge(item.tool)}</td>
+        <td>${item.hit ? 'HIT' : 'MISS'}</td>
+        <td>${formatEstimatedMetric(item.probability)}</td>
+        <td style="font-size:11px">${item.reason || '-'}</td>
+      </tr>`).join('')}
+      </table>
+    </div>
+    <div class="section">
+      <h3>Retry Analysis</h3>
+      <table><tr><th>Task</th><th>Attempts</th><th>Retries</th><th>Remaining</th><th>Risk</th></tr>
+      ${retryAnalysis.map(item => `<tr>
+        <td><code>${String(item.taskId || '').slice(0,8)}</code></td>
+        <td>${formatEstimatedMetric(item.attempts)}</td>
+        <td>${formatEstimatedMetric(item.retryCount)}</td>
+        <td>${formatEstimatedMetric(item.remainingBudget)}</td>
+        <td>${formatEstimatedMetric(item.ratio)}</td>
+      </tr>`).join('')}
+      </table>
+    </div>
+    <div class="section">
+      <h3>Bottlenecks</h3>
+      <div class="card-grid">
+        <div class="stat-card"><div class="stat-value">${bottlenecks.longestTask?.taskId ? String(bottlenecks.longestTask.taskId).slice(0,8) : '-'}</div><div class="stat-label">Longest Task</div></div>
+        <div class="stat-card"><div class="stat-value">${bottlenecks.mostExpensiveTask?.taskId ? String(bottlenecks.mostExpensiveTask.taskId).slice(0,8) : '-'}</div><div class="stat-label">Most Expensive</div></div>
+        <div class="stat-card"><div class="stat-value">${bottlenecks.dependencyBottleneck?.taskId ? String(bottlenecks.dependencyBottleneck.taskId).slice(0,8) : '-'}</div><div class="stat-label">Dependency Bottleneck</div></div>
+        <div class="stat-card"><div class="stat-value">${bottlenecks.cacheMissHotspot?.taskId ? String(bottlenecks.cacheMissHotspot.taskId).slice(0,8) : '-'}</div><div class="stat-label">Cache Miss Hotspot</div></div>
+        <div class="stat-card"><div class="stat-value">${bottlenecks.retryHotspot?.taskId ? String(bottlenecks.retryHotspot.taskId).slice(0,8) : '-'}</div><div class="stat-label">Retry Hotspot</div></div>
+      </div>
+    </div>
+    <div class="section">
+      <h3>Parallel Optimization</h3>
+      <div class="card"><strong>Ready Tasks:</strong> ${readyTasks.map(id => `<code>${String(id).slice(0,8)}</code>`).join(' ') || '-'}</div>
+      <div class="card"><strong>Groups:</strong> ${(groups || []).map((group, idx) => `<div style="margin-top:6px"><strong>Group ${idx + 1}:</strong> ${group.map(id => `<code>${String(id).slice(0,8)}</code>`).join(' ')}</div>`).join('') || '-'}</div>
+    </div>
+  `;
+
+  $('panel-adaptive').innerHTML = html;
+}
+
+// ---- Task Inspector Panel ----
+function renderTasks(d) {
+  const snap = d.plannerDebugSnapshot;
+  if (!snap) { $('panel-tasks').innerHTML = '<div style="color:#8b949e">No planner snapshot data</div>'; return; }
+  const tasks = getPlannerTasks(snap);
+  const toolCalls = d.toolCalls || [];
+  const events = d.executionEvents || [];
+
+  let html = `
+    <div class="section">
+      <div class="filter-bar">
+        <label>Filter: <input type="text" id="taskFilter" placeholder="Search tasks..." oninput="filterTasks()" style="width:200px"></label>
+        <label>Status: <select id="statusFilter" onchange="filterTasks()">
+          <option value="">All</option>
+          <option value="PENDING">PENDING</option>
+          <option value="READY">READY</option>
+          <option value="RUNNING">RUNNING</option>
+          <option value="SUCCESS">SUCCESS</option>
+          <option value="FAILED">FAILED</option>
+          <option value="BLOCKED">BLOCKED</option>
+          <option value="SKIPPED">SKIPPED</option>
+          <option value="RECOVERING">RECOVERING</option>
+          <option value="RECOVERED">RECOVERED</option>
+          <option value="RECOVERY_FAILED">RECOVERY_FAILED</option>
+        </select></label>
+        <label>Kind: <select id="kindFilter" onchange="filterTasks()">
+          <option value="">All</option>
+          ${[...new Set(tasks.map(t => t.kind).filter(Boolean))].map(k => `<option value="${k}">${k}</option>`).join('')}
+        </select></label>
+        <label style="font-size:12px;color:#8b949e">${tasks.length} tasks</label>
+      </div>
+    </div>
+    <div id="taskList"></div>
+  `;
+  $('panel-tasks').innerHTML = html;
+  filterTasks();
+}
+
+function filterTasks() {
+  const d = currentData;
+  const snap = d.plannerDebugSnapshot;
+  const tasks = getPlannerTasks(snap);
+  const filter = ($('taskFilter')?.value || '').toLowerCase();
+  const statusFilter = $('statusFilter')?.value || '';
+  const kindFilter = $('kindFilter')?.value || '';
+
+  const filtered = tasks.filter(t => {
+    if (statusFilter && t.status !== statusFilter) return false;
+    if (kindFilter && t.kind !== kindFilter) return false;
+    if (filter) {
+      const searchable = `${t.id} ${t.tool || ''} ${t.kind} ${t.goal || ''} ${t.status} ${t.reason || ''} ${t.error || ''}`.toLowerCase();
+      if (!searchable.includes(filter)) return false;
+    }
+    return true;
+  });
+
+  let html = '<table><tr><th>ID</th><th>Kind/Tool</th><th>Status</th><th>Goal</th><th>Deps</th><th>Result</th><th>Branch</th></tr>';
+  for (const t of filtered) {
+    const goalShort = (t.goal || '').slice(0, 60);
+    const resultShort = t.result ? (typeof t.result === 'object' ? JSON.stringify(t.result).slice(0, 60) : String(t.result).slice(0, 60)) : (t.error ? '❌ ' + t.error.slice(0, 40) : '-');
+    const branchStr = t.branchType ? `${t.branchType} ${t.branchReason ? t.branchReason.slice(0, 30) : ''}` : '';
+    html += `<tr>
+      <td><code>${t.id.slice(0,8)}</code></td>
+      <td>${toolBadge(t.tool)} ${t.kind}</td>
+      <td>${statusBadge(t.status)}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${(t.goal || '').replace(/"/g, '&quot;')}">${goalShort}</td>
+      <td>${t.dependencies?.length || 0}</td>
+      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;font-size:11px">${resultShort}</td>
+      <td style="font-size:11px">${branchStr}</td>
+    </tr>`;
+  }
+  html += '</table>';
+  if (filtered.length === 0) html = '<div style="color:#8b949e">No tasks match filter</div>';
+  $('taskList').innerHTML = html;
+}
+
+// ---- Raw JSON Panel ----
+function renderRaw(d) {
+  let json = JSON.stringify(d.plannerDebugSnapshot || { noData: true }, null, 2);
+  $('panel-raw').innerHTML = `<pre><code>${escapeHtml(json)}</code></pre>
+    <div style="margin-top:8px">
+      <button onclick="copyToClipboard()" style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:4px;padding:6px 12px;cursor:pointer;font-size:12px">📋 Copy JSON</button>
+    </div>`;
+}
+
+function copyToClipboard() {
+  const text = JSON.stringify(currentData?.plannerDebugSnapshot || {}, null, 2);
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = event.target;
+    btn.textContent = '✅ Copied!';
+    setTimeout(() => btn.textContent = '📋 Copy JSON', 2000);
+  });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// ---- Window resize handler for DAG ----
+let dagResizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(dagResizeTimer);
+  dagResizeTimer = setTimeout(() => { if (currentData) renderDag(); }, 300);
+});
+</script>
+</body>
+</html>

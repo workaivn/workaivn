@@ -210,6 +210,11 @@ export function buildProjectStructure({
     structure = buildStaticFiles({ existingFiles });
   }
 
+  const explicitRequestedFiles = unique([
+    ...(Array.isArray(projectIntent?.requestedFiles) ? projectIntent.requestedFiles : []),
+    ...(Array.isArray(projectIntent?.explicitFiles) ? projectIntent.explicitFiles : []),
+    ...(Array.isArray(projectIntent?.paths) ? projectIntent.paths : [])
+  ].map(file => String(file || "").replace(/\\/g, "/").trim()).filter(Boolean));
   const directories = unique([
     ...(profileKnowledge.baseDirectories || []),
     ...(goalKnowledge.directories || []),

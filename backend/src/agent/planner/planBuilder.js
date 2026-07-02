@@ -2,6 +2,10 @@ import crypto from 'node:crypto';
 import { Task } from './task.js';
 import { parsePromptFileLiterals } from './promptLiteralParser.js';
 import { createBootstrapTaskGraph } from '../projectIntelligence/index.js';
+import { promoteProposalGraphToTasks } from './proposals/index.js';
+import { resolvePlannerPolicies } from './context/PlannerPolicy.js';
+import { buildPlanningContext } from './context/PlanningContextBuilder.js';
+import { createExecutionPlanner } from '../executionPlanner/executionPlanner.js';
 
 function prioritizeValidationCommands(commands = []) {
   const specific = [];
@@ -25,31 +29,86 @@ function uniqueCommands(commands = []) {
   return prioritizeValidationCommands([...new Set((Array.isArray(commands) ? commands : []).map(cmd => String(cmd || '').trim()).filter(Boolean))]);
 }
 
-function inferValidationPlan(objective, criteria = {}, bootstrapProfile = null) {
+function logVerifiedCommandResolution(command, source, resolved, reason = null) {
+  const payload = { source, command };
+  if (resolved) {
+    console.log('[VERIFIED_COMMAND_RESOLVED]', payload);
+  } else {
+    console.log('[VERIFIED_COMMAND_UNAVAILABLE]', { ...payload, reason });
+  }
+}
+
+function inferValidationPlan(objective, criteria = {}, bootstrapProfile = null, planningContext = null) {
   const text = String(objective || '');
   const wantsTests = /\b(?:test|tests|testing|validation)\b/i.test(text);
   const packageJson = criteria?.workspaceState?.packageJson || null;
   const projectScan = criteria?.projectScan || {};
+  const packageJsonFound = projectScan?.packageJsonFound === true || criteria?.workspaceState?.packageJsonFound === true;
   const packageScripts = packageJson?.scripts || {};
-  const doNotModifyPackageJson = /do\s+not\s+modify\s+package\.json/i.test(text);
+  const doNotModifyPackageJson = /do\s+not\+modify\s+package\.json/i.test(text);
 
-  const explicitCommands = uniqueCommands([
-    ...(Array.isArray(criteria?.requiredCommands) ? criteria.requiredCommands : []),
+  // Phase 4.24-HF4: Use verified commands from planning context when available.
+  const verifiedCommands = planningContext?.verifiedCommands || [];
+  const verifiedCommandSet = new Set(verifiedCommands.map(command => String(command || '').trim().toLowerCase()));
+  const packageCommandSet = new Set([
     ...(Array.isArray(projectScan?.testCommands) ? projectScan.testCommands : []),
-    ...(Array.isArray(projectScan?.buildCommands) ? projectScan.buildCommands : [])
-  ]);
-  if (explicitCommands.length > 0) {
-    console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'explicit_or_scan', command: explicitCommands[0], commands: explicitCommands });
-    return { commands: explicitCommands, validationBlockedReason: null, packageJsonTestSetupRequired: false, packageJsonTestSetupSkipped: false };
+    ...(Array.isArray(projectScan?.buildCommands) ? projectScan.buildCommands : []),
+    ...(Array.isArray(projectScan?.runCommands) ? projectScan.runCommands : [])
+  ].map(command => String(command || '').trim().toLowerCase()));
+  const explicitRequiredCommands = uniqueCommands(Array.isArray(criteria?.requiredCommands) ? criteria.requiredCommands : [])
+    .filter(isValidShellCommand)
+    .filter(command => !isRuntimeValidationCommand(command));
+  const scanCommands = uniqueCommands([
+    ...(Array.isArray(projectScan?.testCommands) ? projectScan.testCommands : []),
+    ...(Array.isArray(projectScan?.buildCommands) ? projectScan.buildCommands : []),
+    ...(Array.isArray(projectScan?.runCommands) ? projectScan.runCommands : [])
+  ]).filter(isValidShellCommand)
+    .filter(command => !isRuntimeValidationCommand(command));
+
+  function isVerifiedCommand(command, { allowUnverifiedExplicit = false } = {}) {
+    const normalized = String(command || '').trim().toLowerCase();
+    if (!normalized) return false;
+    if (isRuntimeValidationCommand(normalized)) return false;
+    if (allowUnverifiedExplicit) return true;
+    if (verifiedCommandSet.has(normalized)) return true;
+    if (packageCommandSet.has(normalized)) return true;
+    if (packageJsonFound && packageScripts.test && normalized === 'npm test') return true;
+    if (packageJsonFound && packageScripts.build && normalized === 'npm run build') return true;
+    return false;
+  }
+
+  function resolveCommandList(commands, source, options = {}) {
+    const resolved = [];
+    for (const command of uniqueCommands(commands)) {
+      if (isVerifiedCommand(command, options)) {
+        logVerifiedCommandResolution(command, source, true);
+        resolved.push(command);
+      } else {
+        logVerifiedCommandResolution(command, source, false, 'command not verified by workspace evidence');
+      }
+    }
+    return resolved;
+  }
+
+  const resolvedRequiredCommands = resolveCommandList(explicitRequiredCommands, 'explicit_required_commands', { allowUnverifiedExplicit: true });
+  if (resolvedRequiredCommands.length > 0) {
+    console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'explicit_required_commands', command: resolvedRequiredCommands[0], commands: resolvedRequiredCommands });
+    return { commands: resolvedRequiredCommands, validationBlockedReason: null, packageJsonTestSetupRequired: false, packageJsonTestSetupSkipped: false };
+  }
+
+  const resolvedExplicitCommands = resolveCommandList([...scanCommands, ...verifiedCommands], 'explicit_or_scan');
+  if (resolvedExplicitCommands.length > 0) {
+    console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'explicit_or_scan', command: resolvedExplicitCommands[0], commands: resolvedExplicitCommands });
+    return { commands: resolvedExplicitCommands, validationBlockedReason: null, packageJsonTestSetupRequired: false, packageJsonTestSetupSkipped: false };
   }
 
   if (wantsTests) {
-    if (packageScripts.test) {
+    if (packageJsonFound && packageScripts.test) {
       console.log('[PACKAGE_JSON_TEST_SETUP_SKIPPED]', { reason: 'test_script_already_present', script: packageScripts.test });
       console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'package_json_script', command: 'npm test' });
       return { commands: ['npm test'], validationBlockedReason: null, packageJsonTestSetupRequired: false, packageJsonTestSetupSkipped: true };
     }
-    if (packageScripts.build) {
+    if (packageJsonFound && packageScripts.build) {
       console.log('[PACKAGE_JSON_TEST_SETUP_REQUIRED]', { reason: 'explicit_tests_requested_without_test_script', canModifyPackageJson: !doNotModifyPackageJson });
       console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'package_json_build', command: 'npm run build' });
       return { commands: ['npm run build'], validationBlockedReason: null, packageJsonTestSetupRequired: !doNotModifyPackageJson, packageJsonTestSetupSkipped: doNotModifyPackageJson };
@@ -59,22 +118,43 @@ function inferValidationPlan(objective, criteria = {}, bootstrapProfile = null) 
       console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'project_scan_build_commands', command: projectScan.buildCommands[0] });
       return { commands: [String(projectScan.buildCommands[0]).trim()].filter(Boolean), validationBlockedReason: null, packageJsonTestSetupRequired: !doNotModifyPackageJson, packageJsonTestSetupSkipped: doNotModifyPackageJson };
     }
+
+    if (verifiedCommands.length > 0) {
+      const resolvedVerified = resolveCommandList(verifiedCommands, 'verified_planning_context');
+      if (resolvedVerified.length > 0) {
+        console.log('[PACKAGE_JSON_TEST_SETUP_SKIPPED]', { reason: 'verified_commands_available', command: resolvedVerified[0] });
+        console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'verified_planning_context', command: resolvedVerified[0], commands: resolvedVerified });
+        return { commands: resolvedVerified, validationBlockedReason: null, packageJsonTestSetupRequired: false, packageJsonTestSetupSkipped: true };
+      }
+    }
+
     if (bootstrapProfile?.validationCommands && bootstrapProfile.validationCommands.length > 0) {
-      console.log('[PACKAGE_JSON_TEST_SETUP_SKIPPED]', { reason: 'bootstrap_profile_validation_only', profile: bootstrapProfile.id || null });
-      console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'bootstrap_profile', command: bootstrapProfile.validationCommands[0] });
-      return { commands: [bootstrapProfile.validationCommands[0]], validationBlockedReason: null, packageJsonTestSetupRequired: false, packageJsonTestSetupSkipped: true };
+      for (const command of bootstrapProfile.validationCommands) {
+        logVerifiedCommandResolution(command, 'bootstrap_profile', false, 'bootstrap profile commands are recommendations only');
+      }
     }
 
     console.log('[PACKAGE_JSON_TEST_SETUP_REQUIRED]', { reason: 'explicit_tests_requested_but_no_runnable_framework', canModifyPackageJson: !doNotModifyPackageJson });
-    console.log('[PACKAGE_JSON_TEST_SETUP_SKIPPED]', { reason: doNotModifyPackageJson ? 'package_json_modification_forbidden' : 'no_package_json_script_available' });
+    console.log('[PACKAGE_JSON_TEST_SETUP_SKIPPED]', { reason: doNotModifyPackageJson ? 'package_json_modification_forbidden' : !packageJsonFound ? 'no_package_json_found' : 'no_package_json_script_available' });
     console.log('[VALIDATION_COMMAND_BLOCKED]', { reason: 'no_runnable_test_framework', objective: text.slice(0, 200) });
     return { commands: [], validationBlockedReason: 'NO_RUNNABLE_TEST_FRAMEWORK', packageJsonTestSetupRequired: !doNotModifyPackageJson, packageJsonTestSetupSkipped: true };
   }
 
-  const buildCommands = uniqueCommands(projectScan?.buildCommands || bootstrapProfile?.buildCommands || []);
+  // Phase 4.24-HF4: Prefer verifiedCommands over raw bootstrap profile as fallback.
+  const buildCommands = resolveCommandList(
+    projectScan?.buildCommands ||
+    (verifiedCommands.length > 0 ? verifiedCommands : []),
+    'build_commands'
+  );
   if (buildCommands.length > 0) {
     console.log('[VALIDATION_COMMAND_DERIVED]', { source: 'build_commands', command: buildCommands[0], commands: buildCommands });
     return { commands: buildCommands, validationBlockedReason: null, packageJsonTestSetupRequired: false, packageJsonTestSetupSkipped: false };
+  }
+
+  if (bootstrapProfile?.buildCommands && bootstrapProfile.buildCommands.length > 0) {
+    for (const command of bootstrapProfile.buildCommands) {
+      logVerifiedCommandResolution(command, 'bootstrap_profile', false, 'bootstrap profile commands are recommendations only');
+    }
   }
 
   console.log('[VALIDATION_COMMAND_BLOCKED]', { reason: 'no_validation_command_available', objective: text.slice(0, 200) });
@@ -105,6 +185,13 @@ function isValidShellCommand(candidate) {
     'mocha', 'tsc', 'eslint', 'go', 'cargo', 'dotnet', 'mvn',
     'gradle', 'flutter', 'dart'
   ].includes(token);
+}
+
+function isRuntimeValidationCommand(command = "") {
+  const cleaned = String(command || "").trim().toLowerCase();
+  if (!cleaned) return false;
+  if (!/^(?:npm|yarn|pnpm|node|bun|deno)\b/.test(cleaned)) return false;
+  return /\b(?:dev|preview|start|serve|watch|run)\b/.test(cleaned) && !/\b(?:test|build|lint|check|typecheck|analy[sz]e|compile)\b/.test(cleaned);
 }
 
 export { isValidShellCommand };
@@ -264,7 +351,13 @@ export function classifyReadWriteFiles(objective, files) {
   for (const file of files) {
     const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const normalizedFile = String(file || '').replace(/\\/g, '/').toLowerCase();
-    if (/(^|\/)package\.json$/.test(normalizedFile) && /do\s+not\s+modify\s+package\.json(?:\s+unless\s+absolutely\s+necessary)?/i.test(text)) {
+    if (/(^|\/)package\.json$/.test(normalizedFile) && (
+      /do\s+not\s+modify\s+package\.json(?:\s+unless\s+(?:absolutely\s+)?necessary)?/i.test(text) ||
+      /modify\s+package\.json\s+only\s+if\s+necessary/i.test(text) ||
+      /use\s+package\.json\s+if\s+it\s+exists/i.test(text) ||
+      /detect\s+framework(?:\s+automatically)?/i.test(text) ||
+      /infer\s+package\.json/i.test(text)
+    )) {
       if (!readFiles.includes(file)) readFiles.push(file);
       console.log('[PLANNER_PROTECTED_PACKAGE_JSON_READ_ONLY]', { file });
       continue;
@@ -344,14 +437,87 @@ export function extractWriteContent(objective, file) {
   return content || null;
 }
 
-export function buildPlan(objective, criteria) {
+function _getAssumptionSource(file, validatedAssumptions, assumptionMap) {
+  if (!validatedAssumptions) return null;
+  const normalized = file.replace(/\\/g, '/').toLowerCase();
+  const assumption = assumptionMap.get(normalized);
+  if (assumption && assumption.source) return assumption.source;
+  return null;
+}
+
+export function buildPlan(objective, criteria, validatedAssumptions = null, planningContext = null) {
+  const planRedirectPlanningContext = planningContext || (Array.isArray(validatedAssumptions) ? buildPlanningContext({
+    workspaceState: criteria?.workspaceState || {},
+    projectScan: criteria?.projectScan || {},
+    projectIntent: criteria?.projectIntent || {},
+    validatedAssumptions,
+    bootstrapProfile: criteria?.bootstrapProfile || null
+  }).context : null);
+  const planRedirectCanonicalFileUniverse = Array.from((planRedirectPlanningContext?.discoveredFiles || []));
+  const executionPlanner = createExecutionPlanner({
+    objective,
+    verifiedPlanningContext: planRedirectPlanningContext,
+    knowledgeGraph: criteria?.knowledgeGraph || null,
+    canonicalFileUniverse: planRedirectCanonicalFileUniverse,
+    plannerPolicies: planRedirectPlanningContext?.plannerPolicies || resolvePlannerPolicies({
+      workspaceState: criteria?.workspaceState || {},
+      projectScan: criteria?.projectScan || {},
+      projectIntent: criteria?.projectIntent || {},
+      validatedAssumptions: validatedAssumptions || []
+    }),
+    projectIntent: criteria?.projectIntent || {},
+    projectScan: criteria?.projectScan || {}
+  });
+  console.log('[LEGACY_PLANNER_REDIRECT]', {
+    source: 'buildPlan',
+    target: 'createExecutionPlanner',
+    taskCount: executionPlanner.tasks.length
+  });
+  console.log('[LEGACY_DEPRECATED]', {
+    source: 'buildPlan',
+    replacement: 'createExecutionPlanner'
+  });
+  return {
+    tasks: executionPlanner.tasks,
+    validationCommands: executionPlanner.executionContract?.validationCommands || [],
+    validationBlockedReason: executionPlanner.validation?.valid === false ? executionPlanner.validation.errors?.[0] || null : null,
+    packageJsonTestSetupRequired: false,
+    packageJsonTestSetupSkipped: false,
+    executionPlanner,
+    planningContext: planRedirectPlanningContext ? {
+      verifiedFiles: [...(planRedirectPlanningContext.verifiedFiles || [])],
+      blockedRecommendations: [...(planRedirectPlanningContext.blockedRecommendations || [])],
+      plannerPolicies: { ...(planRedirectPlanningContext.plannerPolicies || {}) }
+    } : null
+  };
+
   if (!objective) return { tasks: [] };
   const bootstrapProfile = criteria?.bootstrapProfile || null;
-  const requestedFiles = Array.isArray(criteria?.requestedFiles) ? criteria.requestedFiles.filter(Boolean) : [];
-  const validationPlan = inferValidationPlan(objective, criteria, bootstrapProfile);
+  const effectivePlanningContext = planningContext || (Array.isArray(validatedAssumptions) ? buildPlanningContext({
+    workspaceState: criteria?.workspaceState || {},
+    projectScan: criteria?.projectScan || {},
+    projectIntent: criteria?.projectIntent || {},
+    validatedAssumptions,
+    bootstrapProfile
+  }).context : null);
+  let requestedFiles = Array.isArray(criteria?.requestedFiles) ? criteria.requestedFiles.filter(Boolean) : [];
+
+  // Phase 4.24-HF0/HF1: Build assumption map for source tracking
+  // File-level filtering happens after classifyReadWriteFiles to only affect READ intents.
+  const assumptionMap = new Map();
+  if (validatedAssumptions && Array.isArray(validatedAssumptions)) {
+    for (const assumption of validatedAssumptions) {
+      assumptionMap.set(assumption.path.replace(/\\/g, '/').toLowerCase(), assumption);
+    }
+  }
+  const validationPlan = inferValidationPlan(objective, criteria, bootstrapProfile, effectivePlanningContext);
   const explicitCommands = extractCommands(objective);
   const fallbackCommands = getDeterministicValidationCommands(criteria);
-  if (bootstrapProfile?.id && bootstrapProfile.resolvedBy !== 'fallback' && criteria?.bootstrapEnabled !== false && requestedFiles.length === 0) {
+
+  // Phase 4.24-HF4: Bootstrap task graph is guarded by VerifiedPlanningContext policies.
+  // Bootstrap recommendations become executable tasks ONLY when planner policies authorize them.
+  const allowBootstrap = !effectivePlanningContext || effectivePlanningContext.plannerPolicies['ALLOW_PROJECT_BOOTSTRAP'] === true;
+  if (allowBootstrap && bootstrapProfile?.id && bootstrapProfile.resolvedBy !== 'fallback' && criteria?.bootstrapEnabled !== false && requestedFiles.length === 0) {
     if (bootstrapProfile.canBootstrap === false) {
       console.log('[BOOTSTRAP_PROFILE_UNSUPPORTED]', {
         profile: bootstrapProfile.id,
@@ -378,24 +544,84 @@ export function buildPlan(objective, criteria) {
       workspaceState: criteria?.workspaceState || {},
       criteria
     });
-    if (bootstrapGraph?.tasks?.length > 0) {
+
+    if (bootstrapGraph?.proposals?.length > 0) {
+      const plannerPolicies = effectivePlanningContext?.plannerPolicies || resolvePlannerPolicies({
+        workspaceState: criteria?.workspaceState || {},
+        projectScan: criteria?.workspaceState?.scan || {},
+        projectIntent: criteria?.projectIntent || {},
+        validatedAssumptions: validatedAssumptions || []
+      });
+      const promoted = promoteProposalGraphToTasks(bootstrapGraph, {
+        workspaceState: criteria?.workspaceState || {},
+        facts: effectivePlanningContext?.facts || criteria?.projectScan || {},
+        derived: {
+          verifiedCommands: effectivePlanningContext?.verifiedCommands || [],
+          verifiedPackageManager: effectivePlanningContext?.verifiedPackageManager || null,
+          verifiedValidation: effectivePlanningContext?.verifiedValidation || null,
+          verifiedFiles: effectivePlanningContext?.verifiedFiles || []
+        },
+        policies: plannerPolicies,
+        blocked: {
+          blockedRecommendations: effectivePlanningContext?.blockedRecommendations || []
+        },
+        blockedRecommendations: effectivePlanningContext?.blockedRecommendations || [],
+        rejectedAssumptions: effectivePlanningContext?.blockedRecommendations || [],
+        unverifiedPrerequisites: effectivePlanningContext?.blockedRecommendations || [],
+        verifiedFiles: effectivePlanningContext?.verifiedFiles || []
+      });
+      const analysisTaskId = `analyze:${bootstrapGraph.profileId || "workspace"}`;
+      const analysisTask = new Task({
+        id: analysisTaskId,
+        kind: criteria?.taskType || 'CODING',
+        goal: 'ANALYZE_WORKSPACE',
+        tool: 'LIST_FILES',
+        toolArgs: { path: '.' },
+        dependencies: []
+      });
+      const tasks = [analysisTask, ...promoted.tasks];
+      const writeTaskIds = tasks.filter(task => task.tool === 'WRITE_FILE' || task.tool === 'APPLY_PATCH').map(task => task.id);
+      for (const task of tasks) {
+        if (task.id === analysisTaskId) continue;
+        const deps = Array.isArray(task.dependencies) ? [...task.dependencies] : [];
+        if (!deps.includes(analysisTaskId)) deps.unshift(analysisTaskId);
+        if (task.tool === 'RUN_TERMINAL') {
+          const command = String(task.toolArgs?.command || '');
+          if (/install/i.test(command)) {
+            task.dependencies = [analysisTaskId, ...writeTaskIds];
+          } else if (/build|check|test|analy[sz]e|lint|compile|php -l|dotnet build|node --check/i.test(command)) {
+            const installTaskIds = tasks.filter(item => item.tool === 'RUN_TERMINAL' && /install/i.test(String(item.toolArgs?.command || ''))).map(item => item.id);
+            task.dependencies = [analysisTaskId, ...writeTaskIds, ...installTaskIds];
+          } else {
+            task.dependencies = deps;
+          }
+        } else {
+          task.dependencies = deps;
+        }
+      }
       console.log('[BOOTSTRAP_TASK_GRAPH_CREATED]', {
         profile: bootstrapGraph.profileId,
-        taskCount: bootstrapGraph.tasks.length,
-        validationSkipped: bootstrapGraph.validationSkipped || []
+        taskCount: tasks.length,
+        validationSkipped: bootstrapGraph.validationSkipped || [],
+        promotedProposalCount: bootstrapGraph.proposals.length
       });
       return {
-        tasks: bootstrapGraph.tasks,
+        tasks,
         validationCommands: validationPlan.commands,
         validationBlockedReason: validationPlan.validationBlockedReason,
         packageJsonTestSetupRequired: validationPlan.packageJsonTestSetupRequired,
-        packageJsonTestSetupSkipped: validationPlan.packageJsonTestSetupSkipped
+        packageJsonTestSetupSkipped: validationPlan.packageJsonTestSetupSkipped,
+        planningContext: effectivePlanningContext ? {
+          verifiedFiles: [...(effectivePlanningContext.verifiedFiles || [])],
+          blockedRecommendations: [...(effectivePlanningContext.blockedRecommendations || [])],
+          plannerPolicies: { ...(effectivePlanningContext.plannerPolicies || {}) }
+        } : null
       };
     }
   }
   const tasks = [];
   const kind = criteria?.taskType || 'CODING';
-  const reqFiles = criteria?.requestedFiles || [];
+  const reqFiles = requestedFiles;
   const requiredCommands = prioritizeValidationCommands(expandRepeatedCommands(
     objective,
     explicitCommands.length > 0 ? explicitCommands : (validationPlan.commands.length > 0 ? validationPlan.commands : fallbackCommands)
@@ -403,8 +629,31 @@ export function buildPlan(objective, criteria) {
   const isReadKind = kind === 'ANALYSIS' || kind === 'SEARCH';
 
   if (isReadKind && reqFiles.length > 0) {
+    let readTargetFiles = reqFiles;
+    if (validatedAssumptions && Array.isArray(validatedAssumptions)) {
+      const before = readTargetFiles.length;
+      readTargetFiles = readTargetFiles.filter(file => {
+        const normalized = file.replace(/\\/g, '/').toLowerCase();
+        const assumption = assumptionMap.get(normalized);
+        if (assumption && !assumption.verified) {
+          console.log('[PLANNER_ASSUMPTION_REJECTED]', {
+            path: file,
+            reason: 'Unverified assumption filtered from READ tasks in buildPlan'
+          });
+          return false;
+        }
+        return true;
+      });
+      if (before !== readTargetFiles.length) {
+        console.log('[PLANNER_ASSUMPTION_FILTERED_IN_PLAN]', {
+          before,
+          after: readTargetFiles.length,
+          removedCount: before - readTargetFiles.length
+        });
+      }
+    }
     const readTaskIds = [];
-    for (const file of expandRepeatedReadFiles(objective, reqFiles)) {
+    for (const file of expandRepeatedReadFiles(objective, readTargetFiles)) {
       const readTaskId = crypto.randomUUID();
       readTaskIds.push(readTaskId);
       tasks.push(new Task({
@@ -414,7 +663,8 @@ export function buildPlan(objective, criteria) {
         tool: 'READ_FILE',
         toolArgs: { path: file },
         dependencies: [],
-        failureNext: 'recovery:' + readTaskId
+        failureNext: 'recovery:' + readTaskId,
+        source: _getAssumptionSource(file, validatedAssumptions, assumptionMap)
       }));
     }
     for (const cmd of requiredCommands) {
@@ -431,7 +681,32 @@ export function buildPlan(objective, criteria) {
     }
   } else if (!isReadKind) {
     // Phase 4.10+: Detect write targets and decompose into concrete tasks
-    const { readFiles, writeFiles } = classifyReadWriteFiles(objective, reqFiles);
+    let { readFiles, writeFiles } = classifyReadWriteFiles(objective, reqFiles);
+
+    // Phase 4.24-HF0/HF1: Filter READ-only files with unverified assumptions.
+    // WRITE files are kept intact — creating new files is the intended use case.
+    if (validatedAssumptions && Array.isArray(validatedAssumptions) && readFiles.length > 0) {
+      const before = readFiles.length;
+      readFiles = readFiles.filter(file => {
+        const normalized = file.replace(/\\/g, '/').toLowerCase();
+        const assumption = assumptionMap.get(normalized);
+        if (assumption && !assumption.verified) {
+          console.log('[PLANNER_ASSUMPTION_REJECTED]', {
+            path: file,
+            reason: 'Unverified assumption filtered from READ tasks in buildPlan'
+          });
+          return false;
+        }
+        return true;
+      });
+      if (before !== readFiles.length) {
+        console.log('[PLANNER_ASSUMPTION_FILTERED_IN_PLAN]', {
+          before,
+          after: readFiles.length,
+          removedCount: before - readFiles.length
+        });
+      }
+    }
 
     if (writeFiles.length > 0 && hasWriteIntent(objective)) {
       const readTaskIds = [];
@@ -447,7 +722,8 @@ export function buildPlan(objective, criteria) {
           tool: 'READ_FILE',
           toolArgs: { path: file },
           dependencies: [],
-          failureNext: 'recovery:' + taskId
+          failureNext: 'recovery:' + taskId,
+          source: _getAssumptionSource(file, validatedAssumptions, assumptionMap)
         }));
       }
 
@@ -469,7 +745,8 @@ export function buildPlan(objective, criteria) {
             tool: 'READ_FILE',
             toolArgs: { path: file },
             dependencies: [],
-            failureNext: 'recovery:' + taskId
+            failureNext: 'recovery:' + taskId,
+            source: _getAssumptionSource(file, validatedAssumptions, assumptionMap)
           }));
         }
       }
@@ -491,7 +768,8 @@ export function buildPlan(objective, criteria) {
             tool: 'READ_FILE',
             toolArgs: { path: file },
             dependencies: [],
-            failureNext: 'recovery:' + taskId
+            failureNext: 'recovery:' + taskId,
+            source: _getAssumptionSource(file, validatedAssumptions, assumptionMap)
           }));
           continue;
         }

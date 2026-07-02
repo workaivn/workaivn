@@ -1,10 +1,13 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Task } from './task.js';
 import { normalizeWorkspaceRelativePath } from '../workspace.js';
 
 const RECOVERY_KIND = 'RECOVERY';
+const RECOVERY_AUTHORITY = Object.freeze({
+  authoritySource: 'validated_recovery',
+  authorityState: 'candidate'
+});
 const STACKTRACE_SOURCE_MARKERS = new Set([
   'src',
   'app',
@@ -23,6 +26,73 @@ const STACKTRACE_SOURCE_MARKERS = new Set([
   'routes',
   'modules'
 ]);
+
+function createRecoveryCandidate({
+  id,
+  goal,
+  tool,
+  toolArgs = {},
+  priority = 100,
+  dependencies = [],
+  canonicalTargets = [],
+  targetFiles = [],
+  requiredReads = [],
+  requiredWrites = [],
+  inputs = {},
+  outputs = {},
+  acceptanceCriteria = [],
+  completionPredicate = null,
+  retryPolicy = {},
+  verificationPolicy = {},
+  recoveryStage = 'repair',
+  sourceLabel = 'planner',
+  failedCommand = '',
+  validationContext = {},
+  failureClassification = null,
+  failureText = '',
+  selectedTarget = null,
+  repairTargetFile = null
+} = {}) {
+  const candidate = {
+    id,
+    kind: RECOVERY_KIND,
+    goal,
+    tool,
+    toolArgs: {
+      ...toolArgs,
+      recoveryStage,
+      sourceLabel,
+      failedCommand,
+      validationContext,
+      failureClassification,
+      failureText,
+      selectedTarget,
+      repairTargetFile
+    },
+    priority,
+    dependencies: Array.isArray(dependencies) ? [...dependencies] : [],
+    targetFiles: Array.isArray(targetFiles) ? [...targetFiles] : [],
+    requiredReads: Array.isArray(requiredReads) ? [...requiredReads] : [],
+    requiredWrites: Array.isArray(requiredWrites) ? [...requiredWrites] : [],
+    inputs: inputs && typeof inputs === 'object' ? { ...inputs } : {},
+    outputs: outputs && typeof outputs === 'object' ? { ...outputs } : {},
+    acceptanceCriteria: Array.isArray(acceptanceCriteria) ? [...acceptanceCriteria] : [],
+    completionPredicate,
+    retryPolicy: retryPolicy && typeof retryPolicy === 'object' ? { ...retryPolicy } : {},
+    verificationPolicy: verificationPolicy && typeof verificationPolicy === 'object' ? { ...verificationPolicy } : {},
+    canonicalTargets: Array.isArray(canonicalTargets) ? [...canonicalTargets] : [],
+    approvedByFirewall: false,
+    approvalId: null,
+    ...RECOVERY_AUTHORITY
+  };
+  console.log('[RECOVERY_CANDIDATE_CREATED]', {
+    candidateId: candidate.id || null,
+    tool: candidate.tool || null,
+    canonicalTargets: candidate.canonicalTargets,
+    targetFiles: candidate.targetFiles
+  });
+  return candidate;
+}
 
 function toWorkspaceRelative(p, workspaceRoot) {
   return normalizeWorkspaceRelativePath(p, workspaceRoot);
@@ -197,9 +267,8 @@ function isTargetOwned(targetPath, requiredFiles = [], plannerChangedFiles = [],
  */
 function buildWriteAndRerunChain(targetPath, command, validationContext, failureClassification, failureText, recoveryStage = 'repair', sourceLabel = 'planner') {
   const tasks = [];
-  const writeTask = new Task({
+  const writeTask = createRecoveryCandidate({
     id: generateId(),
-    kind: RECOVERY_KIND,
     goal: `Recovery: create missing file ${targetPath}`,
     tool: 'WRITE_FILE',
     priority: 101,
@@ -208,27 +277,49 @@ function buildWriteAndRerunChain(targetPath, command, validationContext, failure
       file: targetPath,
       content: '',
       repairTargetFile: targetPath,
-      selectedTarget: targetPath,
+      selectedTarget: targetPath
+    },
+    dependencies: [],
+    canonicalTargets: [targetPath],
+    targetFiles: [targetPath],
+    requiredWrites: [targetPath],
+    recoveryStage,
+    sourceLabel,
+    failedCommand: command,
+    validationContext,
+    failureClassification: failureClassification || null,
+    failureText: failureText || '',
+    selectedTarget: targetPath,
+    repairTargetFile: targetPath,
+    acceptanceCriteria: [`${targetPath} is created or restored`],
+    verificationPolicy: { requiresWrites: true },
+    retryPolicy: { maxAttempts: 2, mode: 'recovery' }
+  });
+  tasks.push(writeTask);
+
+  if (command) {
+    const rerunTask = createRecoveryCandidate({
+      id: generateId(),
+      goal: `Recovery: rerun command ${command}`,
+      tool: 'RUN_TERMINAL',
+      toolArgs: { command },
+      priority: 102,
+      dependencies: [],
+      canonicalTargets: [targetPath],
+      targetFiles: [targetPath],
+      requiredReads: [],
+      requiredWrites: [targetPath],
       recoveryStage,
       sourceLabel,
       failedCommand: command,
       validationContext,
       failureClassification: failureClassification || null,
-      failureText: failureText || ''
-    },
-    dependencies: []
-  });
-  tasks.push(writeTask);
-
-  if (command) {
-    const rerunTask = new Task({
-      id: generateId(),
-      kind: RECOVERY_KIND,
-      goal: `Recovery: rerun command ${command}`,
-      tool: 'RUN_TERMINAL',
-      toolArgs: { command },
-      priority: 102,
-      dependencies: []
+      failureText: failureText || '',
+      selectedTarget: targetPath,
+      repairTargetFile: targetPath,
+      acceptanceCriteria: [`Rerun command succeeds: ${command}`],
+      verificationPolicy: { requiresTerminal: true, command },
+      retryPolicy: { maxAttempts: 2, mode: 'recovery' }
     });
     tasks.push(rerunTask);
   }
@@ -288,22 +379,29 @@ function buildReadFileRecovery(failedTask, workspaceRoot, context = {}) {
 
   // action === 'READ_EXISTING' — original LIST_FILES + READ_FILE behavior
   const filePath = resolution.normalizedPath;
-  tasks.push(new Task({
+  tasks.push(createRecoveryCandidate({
     id: generateId(),
-    kind: RECOVERY_KIND,
     goal: `Recovery: list files to find${filePath ? ` ${filePath}` : ''}`,
     tool: 'LIST_FILES',
     toolArgs: { limit: 500 },
-    dependencies: []
+    dependencies: [],
+    canonicalTargets: filePath ? [filePath] : [],
+    targetFiles: filePath ? [filePath] : [],
+    acceptanceCriteria: ['Workspace inventory is available'],
+    verificationPolicy: { requiresReads: true }
   }));
 
-  tasks.push(new Task({
+  tasks.push(createRecoveryCandidate({
     id: generateId(),
-    kind: RECOVERY_KIND,
     goal: `Recovery: read file${filePath ? ` ${filePath}` : ''}`,
     tool: 'READ_FILE',
     toolArgs: { path: filePath },
-    dependencies: []
+    dependencies: [],
+    canonicalTargets: filePath ? [filePath] : [],
+    targetFiles: filePath ? [filePath] : [],
+    requiredReads: filePath ? [filePath] : [],
+    acceptanceCriteria: [`${filePath || 'file'} is read`],
+    verificationPolicy: { requiresReads: true }
   }));
 
   return tasks;
@@ -314,19 +412,22 @@ function buildPatchRecovery(failedTask, workspaceRoot) {
   const tasks = [];
 
   // Step 1: Read the latest file content
-  tasks.push(new Task({
+  tasks.push(createRecoveryCandidate({
     id: generateId(),
-    kind: RECOVERY_KIND,
     goal: `Recovery: read latest content of ${filePath || 'file'}`,
     tool: 'READ_FILE',
     toolArgs: { path: filePath },
-    dependencies: []
+    dependencies: [],
+    canonicalTargets: [filePath],
+    targetFiles: [filePath],
+    requiredReads: [filePath],
+    acceptanceCriteria: [`${filePath || 'file'} is read before patching`],
+    verificationPolicy: { requiresReads: true }
   }));
 
   // Step 2: Re-apply the patch with corrected content
-  tasks.push(new Task({
+  tasks.push(createRecoveryCandidate({
     id: generateId(),
-    kind: RECOVERY_KIND,
     goal: `Recovery: re-apply patch to ${filePath || 'file'}`,
     tool: 'APPLY_PATCH',
     toolArgs: {
@@ -334,7 +435,13 @@ function buildPatchRecovery(failedTask, workspaceRoot) {
       find: failedTask.toolArgs?.find || '',
       replace: failedTask.toolArgs?.replace || ''
     },
-    dependencies: []
+    dependencies: [],
+    canonicalTargets: [filePath],
+    targetFiles: [filePath],
+    requiredReads: [filePath],
+    requiredWrites: [filePath],
+    acceptanceCriteria: [`Patch is re-applied to ${filePath || 'file'}`],
+    verificationPolicy: { requiresWrites: true }
   }));
 
   return tasks;
@@ -841,28 +948,33 @@ function buildRuntimeRecoveryChain({
 }) {
   if (!targetPath) return [];
 
-  const readTask = new Task({
+  const readTask = createRecoveryCandidate({
     id: generateId(),
-    kind: RECOVERY_KIND,
     goal: `Recovery: read implementation module ${targetPath}`,
     tool: 'READ_FILE',
     priority: 101,
     toolArgs: {
       path: targetPath,
       repairTargetFile: targetPath,
-      selectedTarget: targetPath,
-      recoveryStage,
-      failedCommand: command,
-      validationContext,
-      failureClassification,
-      failureText
+      selectedTarget: targetPath
     },
-    dependencies: []
+    dependencies: [],
+    canonicalTargets: [targetPath],
+    targetFiles: [targetPath],
+    requiredReads: [targetPath],
+    recoveryStage,
+    failedCommand: command,
+    validationContext,
+    failureClassification,
+    failureText,
+    selectedTarget: targetPath,
+    repairTargetFile: targetPath,
+    acceptanceCriteria: [`${targetPath} is inspected before repair`],
+    verificationPolicy: { requiresReads: true }
   });
 
-  const writeTask = new Task({
+  const writeTask = createRecoveryCandidate({
     id: generateId(),
-    kind: RECOVERY_KIND,
     goal: `Recovery: repair implementation module ${targetPath}`,
     tool: 'WRITE_FILE',
     priority: 102,
@@ -871,25 +983,44 @@ function buildRuntimeRecoveryChain({
       file: targetPath,
       content: '',
       repairTargetFile: targetPath,
-      selectedTarget: targetPath,
-      recoveryStage: 'repair',
-      sourceLabel,
-      failedCommand: command,
-      validationContext,
-      failureClassification,
-      failureText
+      selectedTarget: targetPath
     },
-    dependencies: []
+    dependencies: [],
+    canonicalTargets: [targetPath],
+    targetFiles: [targetPath],
+    requiredReads: [targetPath],
+    requiredWrites: [targetPath],
+    recoveryStage: 'repair',
+    sourceLabel,
+    failedCommand: command,
+    validationContext,
+    failureClassification,
+    failureText,
+    selectedTarget: targetPath,
+    repairTargetFile: targetPath,
+    acceptanceCriteria: [`${targetPath} is repaired`],
+    verificationPolicy: { requiresWrites: true }
   });
 
-  const rerunTask = new Task({
+  const rerunTask = createRecoveryCandidate({
     id: generateId(),
-    kind: RECOVERY_KIND,
     goal: `Recovery: run command${command ? ` ${command}` : ''}`,
     tool: 'RUN_TERMINAL',
     toolArgs: { command },
     priority: 103,
-    dependencies: []
+    dependencies: [],
+    canonicalTargets: [targetPath],
+    targetFiles: [targetPath],
+    recoveryStage,
+    sourceLabel,
+    failedCommand: command,
+    validationContext,
+    failureClassification,
+    failureText,
+    selectedTarget: targetPath,
+    repairTargetFile: targetPath,
+    acceptanceCriteria: [`Recovery command succeeds: ${command}`],
+    verificationPolicy: { requiresTerminal: true, command }
   });
 
   return [readTask, writeTask, rerunTask];
@@ -1509,22 +1640,29 @@ function buildTerminalRecovery(failedTask, context) {
     if (failureAnalysis.failureType === 'AssertionError' && validSelectedTarget && normalizedPathMismatch(validSelectedTarget, resolvedRootCauseTarget, workspaceRoot)) {
       throw new Error('RECOVERY_TASK_TARGET_MISMATCH');
     }
-    const implReadTask = new Task({
+    const implReadTask = createRecoveryCandidate({
       id: generateId(),
-      kind: RECOVERY_KIND,
       goal: `Recovery: read implementation module ${resolvedRootCauseTarget}`,
       tool: 'READ_FILE',
       toolArgs: {
-      path: resolvedRootCauseTarget,
+        path: resolvedRootCauseTarget,
         repairTargetFile: resolvedRootCauseTarget,
-        selectedTarget: resolvedRootCauseTarget,
-        recoveryStage: moduleLoadFailure ? 'module_error' : 'root_cause',
-        failedCommand: command,
-        validationContext,
-        failureClassification: failureClassification.classification,
-        failureText
+        selectedTarget: resolvedRootCauseTarget
       },
-      dependencies: []
+      priority: 101,
+      dependencies: [],
+      canonicalTargets: [resolvedRootCauseTarget],
+      targetFiles: [resolvedRootCauseTarget],
+      requiredReads: [resolvedRootCauseTarget],
+      recoveryStage: moduleLoadFailure ? 'module_error' : 'root_cause',
+      failedCommand: command,
+      validationContext,
+      failureClassification: failureClassification.classification,
+      failureText,
+      selectedTarget: resolvedRootCauseTarget,
+      repairTargetFile: resolvedRootCauseTarget,
+      acceptanceCriteria: [`${resolvedRootCauseTarget} is inspected before repair`],
+      verificationPolicy: { requiresReads: true }
     });
     tasks.push(implReadTask);
     return tasks;
@@ -1548,22 +1686,29 @@ function buildTerminalRecovery(failedTask, context) {
       ));
       return tasks;
     }
-    const implReadTask = new Task({
+    const implReadTask = createRecoveryCandidate({
       id: generateId(),
-      kind: RECOVERY_KIND,
       goal: `Recovery: read implementation module ${repairTargetFile}`,
       tool: 'READ_FILE',
       toolArgs: {
-      path: repairTargetFile,
+        path: repairTargetFile,
         repairTargetFile,
-        selectedTarget: repairTargetFile,
-        recoveryStage: moduleLoadFailure ? 'module_error' : 'root_cause',
-        failedCommand: command,
-        validationContext,
-        failureClassification: failureClassification.classification,
-        failureText
+        selectedTarget: repairTargetFile
       },
-      dependencies: []
+      priority: 101,
+      dependencies: [],
+      canonicalTargets: [repairTargetFile],
+      targetFiles: [repairTargetFile],
+      requiredReads: [repairTargetFile],
+      recoveryStage: moduleLoadFailure ? 'module_error' : 'root_cause',
+      failedCommand: command,
+      validationContext,
+      failureClassification: failureClassification.classification,
+      failureText,
+      selectedTarget: repairTargetFile,
+      repairTargetFile,
+      acceptanceCriteria: [`${repairTargetFile} is inspected before repair`],
+      verificationPolicy: { requiresReads: true }
     });
     tasks.push(implReadTask);
     return tasks;
@@ -1583,20 +1728,27 @@ function buildTerminalRecovery(failedTask, context) {
       ));
       return tasks;
     }
-    const testReadTask = new Task({
+    const testReadTask = createRecoveryCandidate({
       id: generateId(),
-      kind: RECOVERY_KIND,
       goal: `Recovery: read failing test file ${failingTestPath}`,
       tool: 'READ_FILE',
       toolArgs: {
         path: failingTestPath,
         repairTargetFile: repairTargetFile || null,
-        selectedTarget: selectedTarget || null,
-        recoveryStage: 'failing_test',
-        validationContext,
-        failedCommand: command
+        selectedTarget: selectedTarget || null
       },
-      dependencies: []
+      priority: 101,
+      dependencies: [],
+      canonicalTargets: [failingTestPath],
+      targetFiles: [failingTestPath],
+      requiredReads: [failingTestPath],
+      recoveryStage: 'failing_test',
+      validationContext,
+      failedCommand: command,
+      selectedTarget: selectedTarget || null,
+      repairTargetFile: repairTargetFile || null,
+      acceptanceCriteria: [`${failingTestPath} is inspected before repair`],
+      verificationPolicy: { requiresReads: true }
     });
     tasks.push(testReadTask);
   } else if (repairTargetFile) {
@@ -1612,18 +1764,25 @@ function buildTerminalRecovery(failedTask, context) {
         'fallback_target', 'planner'
       ));
     } else {
-      const inspectTask = new Task({
+      const inspectTask = createRecoveryCandidate({
         id: generateId(),
-        kind: RECOVERY_KIND,
         goal: `Recovery: inspect ${repairTargetFile} before repair`,
         tool: 'READ_FILE',
         toolArgs: {
           path: repairTargetFile,
           repairTargetFile,
-          selectedTarget: selectedTarget || repairTargetFile,
-          recoveryStage: 'fallback_target'
+          selectedTarget: selectedTarget || repairTargetFile
         },
-        dependencies: []
+        priority: 101,
+        dependencies: [],
+        canonicalTargets: [repairTargetFile],
+        targetFiles: [repairTargetFile],
+        requiredReads: [repairTargetFile],
+        recoveryStage: 'fallback_target',
+        selectedTarget: selectedTarget || repairTargetFile,
+        repairTargetFile,
+        acceptanceCriteria: [`${repairTargetFile} is inspected before repair`],
+        verificationPolicy: { requiresReads: true }
       });
       tasks.push(inspectTask);
     }

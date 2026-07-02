@@ -11,6 +11,7 @@ import { resolveRecoveryStrategy } from './RecoveryStrategy.js';
 import { logStrategy } from './StrategyLogger.js';
 
 export function evaluateExecutionStrategy(input = {}) {
+  const projectScanFacts = input.projectScan?.facts || input.projectScan || {};
   const classification = input.failureClassification || classifyExecutionFailure(input);
   const constraints = input.constraints || resolveExecutionConstraints(input);
   const capability = input.capability || reasonAboutModelCapability({
@@ -18,32 +19,32 @@ export function evaluateExecutionStrategy(input = {}) {
     constraints,
     plannerMetadata: input.plannerMetadata || {},
     workspaceMetadata: input.workspaceMetadata || {},
-    projectScan: input.projectScan || {}
+    projectScan: projectScanFacts
   });
   const validationStrategy = input.validationStrategy || resolveValidationStrategy({
     failureClassification: classification,
     plannerMetadata: input.plannerMetadata || {},
     workspaceMetadata: input.workspaceMetadata || {},
-    projectScan: input.projectScan || {},
+    projectScan: projectScanFacts,
     requiredCommands: input.requiredCommands || input.plannerMetadata?.requiredCommands || []
   });
   const frameworkStrategy = input.frameworkStrategy || resolveFrameworkStrategy({
     failureClassification: classification,
     constraints,
-    projectScan: input.projectScan || {},
+    projectScan: projectScanFacts,
     workspaceMetadata: input.workspaceMetadata || {}
   });
   const packageStrategy = input.packageStrategy || resolvePackageStrategy({
     failureClassification: classification,
     constraints,
     workspaceMetadata: input.workspaceMetadata || {},
-    projectScan: input.projectScan || {}
+    projectScan: projectScanFacts
   });
   const commandStrategy = input.commandStrategy || resolveCommandStrategy({
     failureClassification: classification,
     validationStrategy,
     workspaceMetadata: input.workspaceMetadata || {},
-    projectScan: input.projectScan || {}
+    projectScan: projectScanFacts
   });
   const retryStrategy = input.retryStrategy || resolveRetryStrategy({
     failureClassification: classification,
@@ -70,11 +71,33 @@ export function evaluateExecutionStrategy(input = {}) {
   let packageRequired = false;
   let commandRequired = false;
   let recoveryRequired = false;
+  let replanRequired = false;
+  let suggestion = null;
   let reason = 'No execution strategy available';
 
   if (constraints.workspaceReadonly) {
     decision = EXECUTION_DECISIONS.BLOCK;
     reason = 'Workspace is read-only';
+  } else if (recoveryStrategy.decision === EXECUTION_DECISIONS.REPLAN) {
+    decision = EXECUTION_DECISIONS.REPLAN;
+    owner = 'PLANNER';
+    replanRequired = true;
+    recoveryRequired = true;
+    reason = recoveryStrategy.reason;
+    if (classification?.origin) {
+      suggestion = classification.origin.classification === 'PATH_RESOLUTION_ERROR'
+        ? 'REPLACE_INVALID_PREREQUISITE'
+        : classification.origin.classification === 'INVALID_BOOTSTRAP_ASSUMPTION'
+          ? 'REMOVE_INVALID_PREREQUISITE'
+          : 'REMOVE_INVALID_PREREQUISITE';
+    }
+    logStrategy('EXECUTION_DECISION_REPLAN', {
+      classification: classification?.classification || null,
+      reason,
+      suggestedAction: suggestion,
+      failedPath: classification?.failedPath || null,
+      assumptionSource: classification?.assumptionSource || null
+    });
   } else if (recoveryStrategy.decision === EXECUTION_DECISIONS.PLANNER_RECOVERY) {
     decision = EXECUTION_DECISIONS.PLANNER_RECOVERY;
     owner = 'PLANNER';
@@ -117,6 +140,7 @@ export function evaluateExecutionStrategy(input = {}) {
     packageRequired: packageRequired || Boolean(packageStrategy.packageRequired),
     commandRequired,
     recoveryRequired,
+    replanRequired,
     confidence: classification?.confidence || capability?.confidence || 'low',
     reason,
     classification,
@@ -126,7 +150,12 @@ export function evaluateExecutionStrategy(input = {}) {
     frameworkStrategy,
     packageStrategy,
     commandStrategy,
-    recoveryStrategy
+    recoveryStrategy,
+    suggestedAction: suggestion,
+    failedPath: classification?.failedPath || null,
+    failedTask: classification?.failedTask || null,
+    assumptionSource: classification?.assumptionSource || null,
+    evidence: classification?.origin?.evidence || classification?.evidence || null
   });
 
   logStrategy('EXECUTION_STRATEGY', {
@@ -138,6 +167,7 @@ export function evaluateExecutionStrategy(input = {}) {
     packageRequired: executionDecision.packageRequired,
     commandRequired: executionDecision.commandRequired,
     recoveryRequired: executionDecision.recoveryRequired,
+    replanRequired: executionDecision.replanRequired,
     reason: executionDecision.reason
   });
   logStrategy('EXECUTION_DECISION', executionDecision);

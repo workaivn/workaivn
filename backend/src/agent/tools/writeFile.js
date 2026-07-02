@@ -65,6 +65,7 @@ export async function writeFileTool({ path, content, activeFiles = [], workspace
       const finalContent = String(normalizedWrite.content ?? nextContent);
 
       if (previousContent === finalContent) {
+        if (DEBUG()) console.log("[WRITE_COMMIT_SUCCESS]", { path: resolved.relativePath, beforeLength: (previousContent || "").length, afterLength: finalContent.length, changed: false, alreadyUpToDate: true });
         return {
           success: true,
           file: resolved.relativePath,
@@ -73,13 +74,16 @@ export async function writeFileTool({ path, content, activeFiles = [], workspace
           created: false,
           bytesWritten: 0,
           moduleSystem: normalizedWrite.moduleSystem || "unknown",
-          transformed: normalizedWrite.transformed === true
+          transformed: normalizedWrite.transformed === true,
+          phase: "COMMITTED",
+          committed: true
         };
       }
 
       await fs.mkdir(pathModule.dirname(resolved.absolutePath), { recursive: true });
+      if (DEBUG()) console.log("[WRITE_COMMIT_BEGIN]", { path: resolved.relativePath, beforeLength: (previousContent || "").length, afterLength: finalContent.length });
       await fs.writeFile(resolved.absolutePath, finalContent, "utf8");
-      if (DEBUG()) console.log("[WRITE_FILE]", { path: resolved.relativePath, beforeLength: (previousContent || "").length, afterLength: finalContent.length, moduleSystem: normalizedWrite.moduleSystem || "unknown", transformed: normalizedWrite.transformed === true });
+      if (DEBUG()) console.log("[WRITE_COMMIT_SUCCESS]", { path: resolved.relativePath, beforeLength: (previousContent || "").length, afterLength: finalContent.length, moduleSystem: normalizedWrite.moduleSystem || "unknown", transformed: normalizedWrite.transformed === true });
 
       return {
         success: true,
@@ -88,11 +92,14 @@ export async function writeFileTool({ path, content, activeFiles = [], workspace
         created: previousContent === null,
         bytesWritten: Buffer.byteLength(finalContent),
         moduleSystem: normalizedWrite.moduleSystem || "unknown",
-        transformed: normalizedWrite.transformed === true
+        transformed: normalizedWrite.transformed === true,
+        phase: "COMMITTED",
+        committed: true
       };
     } catch (error) {
       if (DEBUG()) console.log("[WRITE_FILE][ERROR]", { path, error: error.message });
-      return { success: false, error: error.message };
+      console.log("[WRITE_COMMIT_FAILED]", { path: String(path || ""), error: error.message });
+      return { success: false, error: error.message, phase: "COMMIT_FAILED", committed: false };
     }
   }
 

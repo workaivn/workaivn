@@ -8,7 +8,8 @@ import { bootstrapProfiles, getBootstrapProfileById } from "./bootstrapProfiles/
 import { buildBootstrapTaskGraphFromArchitecture, inferArchitecture } from "./architectureInference.js";
 import { buildKnowledgeGraph } from "./knowledgeGraph.js";
 import { inferPrimaryConcepts, normalize } from "./inference.js";
-import { buildRuntimeTaskGraph, createRuntimePlan } from "./runtimePlanningIntelligence.js";
+import { buildRuntimeProposalGraph, createRuntimePlan } from "./runtimePlanningIntelligence.js";
+import { createProjectScanSnapshot } from "../context/ProjectScanSnapshot.js";
 
 function normalizeLower(value = "") {
   return normalize(value).toLowerCase();
@@ -16,6 +17,18 @@ function normalizeLower(value = "") {
 
 function unique(values = []) {
   return [...new Set((Array.isArray(values) ? values : []).filter(Boolean))];
+}
+
+function isRuntimeCommand(command = "") {
+  const normalized = String(command || "").trim().toLowerCase();
+  if (!normalized) return false;
+  if (/^(?:npm|yarn|pnpm)\s+run\s+(?:dev|preview|start|serve|watch)\b/.test(normalized)) return true;
+  if (/^node\s+(?!--check\b|--test\b)[^\s]+\.m?js\b/.test(normalized)) return true;
+  if (/^php\s+-s\b/.test(normalized)) return true;
+  if (/^dotnet\s+run\b/.test(normalized)) return true;
+  if (/^flutter\s+run\b/.test(normalized)) return true;
+  if (/^python3?\s+[^-\s][^\n]*\.py\b/.test(normalized)) return true;
+  return false;
 }
 
 function readPromptText(intent = {}) {
@@ -101,11 +114,49 @@ export function detectProjectIntent(prompt, criteria = {}) {
     matchAny(lower, ["fullstack", "full-stack", "full stack"]) ? "FULLSTACK_APP" :
     matchAny(lower, ["rest api", "api server", "backend api", "express server", "node api"]) ? "API_SERVER" :
     matchAny(lower, ["php landing page", "php website", "php admin", "php site"]) ? "LANDING_PAGE" :
+    matchAny(lower, ["landing page", "homepage", "hero"]) ? "LANDING_PAGE" :
+    matchAny(lower, ["saas landing page", "saas", "marketing site"]) ? "SAAS_APP" :
     matchAny(lower, ["asp.net", "aspnet", ".net"]) ? "ADMIN_PANEL" :
     matchAny(lower, ["dashboard", "admin panel", "admin dashboard"]) ? "DASHBOARD" :
-    matchAny(lower, ["saas landing page", "saas", "marketing site"]) ? "SAAS_APP" :
-    matchAny(lower, ["landing page", "homepage", "hero"]) ? "LANDING_PAGE" :
     "UNKNOWN";
+
+  const missionSignals = [];
+  const goalSignals = [];
+  const deliverableSignals = [];
+  const exampleSignals = [];
+  if (/\b(?:build|create|make|implement|ship|launch)\b/.test(lower)) missionSignals.push("mission");
+  if (/\b(?:goal|objective|deliverable|final|result)\b/.test(lower)) goalSignals.push("goal");
+  if (/\b(?:landing page|homepage|dashboard|admin panel|api server|landing site)\b/.test(lower)) deliverableSignals.push("deliverable");
+  if (/\b(?:mockup|example|illustration|sample|screenshot|reference)\b/.test(lower) || /dashboard/.test(lower)) exampleSignals.push("example");
+
+  const matchedSignals =
+    goalType === "READ_ONLY" ? ["read_only"] :
+    goalType === "BUG_FIX" ? ["bug_fix"] :
+    goalType === "REFACTOR" ? ["refactor"] :
+    goalType === "FULLSTACK_APP" ? ["fullstack"] :
+    goalType === "API_SERVER" ? ["api_server"] :
+    goalType === "LANDING_PAGE" ? ["landing_page"] :
+    goalType === "DASHBOARD" ? ["dashboard"] :
+    goalType === "ADMIN_PANEL" ? ["admin_panel"] :
+    goalType === "SAAS_APP" ? ["saas"] :
+    [];
+  const blockedSignals = goalType === "LANDING_PAGE" && /dashboard|admin panel|admin dashboard|metrics portal|analytics portal/i.test(text)
+    ? ["dashboard"]
+    : [];
+  const confidence = goalType === "UNKNOWN" ? 0.35 : 0.95;
+  console.log("[GOAL_PRIORITY_ANALYSIS]", {
+    missionSignals,
+    goalSignals,
+    deliverableSignals,
+    exampleSignals,
+    finalGoal: goalType
+  });
+  console.log("[GOAL_CLASSIFICATION_RESULT]", {
+    goalType,
+    confidence,
+    matchedSignals,
+    blockedSignals
+  });
 
   return {
     prompt: text,
@@ -120,6 +171,7 @@ export function detectProjectIntent(prompt, criteria = {}) {
       /\bdart\b|\bflutter\b/i.test(text) ? "Dart" :
       null,
     requestedFiles: Array.isArray(criteria.requestedFiles) ? [...criteria.requestedFiles] : [],
+    requestedFileDetails: Array.isArray(criteria.requestedFileDetails) ? [...criteria.requestedFileDetails] : [],
     objective: criteria.objective || text
   };
 }
@@ -131,12 +183,13 @@ export async function detectWorkspaceState(workspaceRoot = "") {
       workspaceRoot: "",
       existingFiles: [],
       packageJson: null,
-      scan: { projectType: "generic", packageManager: "npm", entryFiles: [], testCommands: [], buildCommands: [], runCommands: [] }
+      scan: { projectType: "generic", packageManager: null, packageManagerVerified: false, entryFiles: [], testCommands: [], buildCommands: [], runCommands: [] }
     };
   }
 
   const existingFiles = await listWorkspaceFiles(root, { limit: 5000 }).catch(() => []);
-  const scan = await scanProject(root).catch(() => ({ projectType: "generic", packageManager: "npm", entryFiles: [], testCommands: [], buildCommands: [], runCommands: [] }));
+  const rawScan = await scanProject(root).catch(() => ({ projectType: "generic", packageManager: null, packageManagerVerified: false, entryFiles: [], testCommands: [], buildCommands: [], runCommands: [] }));
+  const scan = rawScan && rawScan.scanId ? rawScan : createProjectScanSnapshot(rawScan, { workspaceRoot: root });
   let packageJson = null;
   try {
     const text = await fs.readFile(path.join(root, "package.json"), "utf8");
@@ -151,6 +204,7 @@ export async function detectWorkspaceState(workspaceRoot = "") {
     existingFiles,
     packageJson,
     scan,
+    scanSnapshot: scan,
     hasPackageJson: lower.has("package.json"),
     hasIndexPhp: existingFiles.some(file => /(^|\/)index\.php$/i.test(String(file || ""))),
     hasCsproj: existingFiles.some(file => /\.csproj$/i.test(file)),
@@ -192,9 +246,11 @@ export function buildPlannerExecutionMetadata(planner) {
 
     if (tool === "RUN_TERMINAL" && command) {
       plannerRunCommands.push(command);
-      const validationMatch = matchValidationCommand({ terminalCommands: [{ command, success: true, result: { exitCode: 0 } }] });
-      if (validationMatch.validationPassed) {
-        plannerValidationCommands.push(command);
+      if (!isRuntimeCommand(command)) {
+        const validationMatch = matchValidationCommand({ terminalCommands: [{ command, success: true, result: { exitCode: 0 } }] });
+        if (validationMatch.validationPassed) {
+          plannerValidationCommands.push(command);
+        }
       }
     }
   }
@@ -282,31 +338,31 @@ export function createBootstrapTaskGraph(profileInput, {
     failure: criteria?.failure || null
   });
 
-  if (!runtimePlan) return { profile: null, tasks: [] };
+  if (!runtimePlan) return { profile: null, proposals: [] };
 
   if (runtimePlan.canBootstrap === false) {
-    return { profile: resolvedProfile, tasks: [], validationSkipped: [] };
+    return { profile: resolvedProfile, proposals: [], validationSkipped: [] };
   }
 
-  const taskGraph = buildRuntimeTaskGraph(runtimePlan, {
+  const proposalGraph = buildRuntimeProposalGraph(runtimePlan, {
     objective,
     projectIntent: intent,
     workspaceState,
     criteria
   });
 
-  console.log("[BOOTSTRAP_TASK_GRAPH_CREATED]", {
-    profile: taskGraph.profileId,
-    taskCount: taskGraph.tasks.length,
-    validationSkipped: taskGraph.validationSkipped || [],
+  console.log("[BOOTSTRAP_PROPOSAL_GRAPH_CREATED]", {
+    profile: proposalGraph.profileId,
+    proposalCount: proposalGraph.proposals.length,
+    validationSkipped: proposalGraph.validationSkipped || [],
     runtimeGoalType: runtimePlan.goalType,
     runtimeProfile: runtimePlan.targetProfile?.id || null
   });
 
-  return taskGraph;
+  return proposalGraph;
 }
 
 export { buildKnowledgeGraph } from "./knowledgeGraph.js";
 export { inferArchitecture } from "./architectureInference.js";
 export { inferPrimaryConcepts } from "./inference.js";
-export { createRuntimePlan, buildRuntimeTaskGraph } from "./runtimePlanningIntelligence.js";
+export { createRuntimePlan, buildRuntimeProposalGraph, buildRuntimeTaskGraph } from "./runtimePlanningIntelligence.js";

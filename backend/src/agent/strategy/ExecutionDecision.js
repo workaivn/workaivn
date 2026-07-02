@@ -8,7 +8,8 @@ export const EXECUTION_DECISIONS = Object.freeze({
   DERIVE_COMMAND: 'DeriveCommand',
   SKIP_VALIDATION: 'SkipValidation',
   ABORT: 'Abort',
-  CONTINUE: 'Continue'
+  CONTINUE: 'Continue',
+  REPLAN: 'Replan'
 });
 
 export function createExecutionDecision(input = {}) {
@@ -20,6 +21,7 @@ export function createExecutionDecision(input = {}) {
     packageRequired: input.packageRequired === true,
     commandRequired: input.commandRequired === true,
     recoveryRequired: input.recoveryRequired === true,
+    replanRequired: input.replanRequired === true,
     confidence: input.confidence || 'low',
     reason: input.reason || 'No strategy decision available',
     classification: input.classification || null,
@@ -29,6 +31,11 @@ export function createExecutionDecision(input = {}) {
     frameworkStrategy: input.frameworkStrategy || null,
     packageStrategy: input.packageStrategy || null,
     commandStrategy: input.commandStrategy || null,
-    recoveryStrategy: input.recoveryStrategy || null
+    recoveryStrategy: input.recoveryStrategy || null,
+    suggestedAction: input.suggestedAction || null,
+    failedPath: input.failedPath || null,
+    failedTask: input.failedTask || null,
+    assumptionSource: input.assumptionSource || null,
+    evidence: input.evidence || null
   };
 }

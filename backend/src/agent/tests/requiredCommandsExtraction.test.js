@@ -242,7 +242,7 @@ test('Phase 4.9 failed validation still synthesizes final text and reports faile
     assert.equal(result.success, false);
     assert.equal(result.status, 'needs_revision');
     assert.ok(String(result.final || '').trim(), 'finalText must be synthesized before QualityGate');
-    assert.ok(result.qualityGate?.failures?.some(message => /Required commands failed: npm test/i.test(message)));
+    assert.ok(result.qualityGate?.failures?.some(message => /npm test/i.test(message)), 'QualityGate should attribute the failing npm test command');
     assert.ok(!result.qualityGate?.failures?.some(message => /Required commands not executed: npm test/i.test(message)));
     assert.ok(!result.qualityGate?.failures?.some(message => /No final text/i.test(message)));
   } finally {

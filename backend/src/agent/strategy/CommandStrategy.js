@@ -6,7 +6,8 @@ export function resolveCommandStrategy({
   workspaceMetadata = {},
   projectScan = {}
 } = {}) {
-  const command = validationStrategy?.command || projectScan?.validationCommand || null;
+  const scanFacts = projectScan?.facts || projectScan || {};
+  const command = validationStrategy?.command || scanFacts?.validationCommand || null;
   const commandRequired = !command && String(failureClassification?.classification || failureClassification || '').toUpperCase() === 'VALIDATION_COMMAND_MISSING';
   const decision = command ? 'UseCommand' : (commandRequired ? 'Block' : 'Continue');
   const reason = command
@@ -18,7 +19,8 @@ export function resolveCommandStrategy({
   logStrategy('COMMAND_DERIVED', {
     command,
     decision,
-    reason
+    reason,
+    scanId: scanFacts.scanId || null
   });
 
   return {
