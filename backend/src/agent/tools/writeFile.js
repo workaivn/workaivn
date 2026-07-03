@@ -1,11 +1,21 @@
 import fs from "fs/promises";
 import pathModule from "path";
 import { normalizeGeneratedModuleContent, resolveWorkspacePathSafe } from "../workspace.js";
+import { assertExecutableUnit } from "../execution/ExecutionInputGuard.js";
 const DEBUG = () => process.env.DEBUG_AGENT === "true" || process.env.WORKAI_AGENT_DEBUG === "true";
 
-export async function writeFileTool({ path, content, activeFiles = [], workspaceRoot, layout = null, allowEmptyContent = false, overwriteEmpty = false, writeContext = null }) {
+export async function writeFileTool({ path, content, activeFiles = [], workspaceRoot, layout = null, allowEmptyContent = false, overwriteEmpty = false, writeContext = null, executionUnit = null }) {
   const nextContent = String(content ?? "");
   const allowEmptyOverwrite = allowEmptyContent === true || overwriteEmpty === true;
+
+  if (!executionUnit) {
+    return {
+      success: false,
+      error: "WRITE_WITHOUT_EXECUTION_UNIT",
+      changed: false,
+      overwritten: false
+    };
+  }
 
   if (!allowEmptyOverwrite && !String(nextContent).trim()) {
     return {
@@ -18,6 +28,7 @@ export async function writeFileTool({ path, content, activeFiles = [], workspace
 
   if (workspaceRoot) {
     try {
+      assertExecutableUnit(executionUnit, { path, toolName: "WRITE_FILE" });
       // Guard: prevent duplicate workai:test script keys in package.json candidate
       if (String(path || "").replace(/\\/g, "/").toLowerCase().endsWith("package.json")) {
         // Naive detect duplicates of the specific key inside scripts block
@@ -34,7 +45,7 @@ export async function writeFileTool({ path, content, activeFiles = [], workspace
           return { success: false, error: "package.json scripts contains duplicate key workai:test", changed: false };
         }
       }
-      const resolved = await resolveWorkspacePathSafe(workspaceRoot, path, { allowMissing: true, layout });
+      const resolved = await resolveWorkspacePathSafe(workspaceRoot, path, { allowMissing: true, layout, executionUnit, toolName: "WRITE_FILE" });
       let previousContent = null;
 
       try {
@@ -99,7 +110,16 @@ export async function writeFileTool({ path, content, activeFiles = [], workspace
     } catch (error) {
       if (DEBUG()) console.log("[WRITE_FILE][ERROR]", { path, error: error.message });
       console.log("[WRITE_COMMIT_FAILED]", { path: String(path || ""), error: error.message });
-      return { success: false, error: error.message, phase: "COMMIT_FAILED", committed: false };
+      return {
+        success: false,
+        error: error.code === "NON_EXECUTABLE_PATH_REJECTED"
+          ? "WRITE_WITHOUT_EXECUTION_UNIT"
+          : error.code === "NON_CANONICAL_FILE_BLOCKED"
+            ? "WRITE_TASK_BLOCKED_NON_CANONICAL"
+            : error.message,
+        phase: "COMMIT_FAILED",
+        committed: false
+      };
     }
   }
 

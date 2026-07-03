@@ -10,6 +10,27 @@ import { executeTool } from "./toolExecutor.js";
 
 const execFileAsync = promisify(execFile);
 
+function captureLogs() {
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => {
+    logs.push(args.map(item => {
+      if (typeof item === "string") return item;
+      try {
+        return JSON.stringify(item);
+      } catch {
+        return String(item);
+      }
+    }).join(" "));
+  };
+  return {
+    logs,
+    restore() {
+      console.log = originalLog;
+    }
+  };
+}
+
 async function createWorkspace() {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workai-agent-"));
   await fs.writeFile(
@@ -64,6 +85,51 @@ test("runAgentLoop persists a patch and reports tools, events, files, and diff",
     assert.match(await fs.readFile(path.join(workspaceRoot, "example.js"), "utf8"), /return 2;/);
   } finally {
     await fs.rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("runAgentLoop bypasses planner for answer-only prompts", async () => {
+  const { logs, restore } = captureLogs();
+  let modelCallCount = 0;
+  const prompts = [
+    "1+1=2",
+    "1 + 1 = 2",
+    "Chỉ trả lời: 1+1=2",
+    "Không sửa file, chỉ trả lời 1+1=2",
+    "hello",
+    "what is 1+1",
+    "Đọc package.json, không sửa gì"
+  ];
+
+  try {
+    for (const prompt of prompts) {
+      logs.length = 0;
+      modelCallCount = 0;
+      const result = await runAgentLoop({
+        messages: [{ role: "user", content: prompt }],
+        maxSteps: 1,
+        generateResponse: async () => {
+          modelCallCount += 1;
+          return "2";
+        }
+      });
+
+      assert.equal(result.success, true, prompt);
+      assert.equal(result.final, "2", prompt);
+      assert.equal(modelCallCount, 1, prompt);
+      assert.equal(result.toolCalls.length, 0, prompt);
+      assert.equal(result.changedFiles.length, 0, prompt);
+      assert.ok(logs.some(line => line.includes('[TASK_MODE_CLASSIFIED]')), prompt);
+      assert.ok(logs.some(line => line.includes('[PLANNER_ENTRY_BLOCKED_ANSWER_ONLY]')), prompt);
+      assert.ok(logs.some(line => line.includes('[ANSWER_ONLY_BYPASS_HARD_STOP]')), prompt);
+      assert.ok(logs.some(line => line.includes('[ANSWER_ONLY_FIREWALL_PASS]')), prompt);
+      assert.equal(logs.some(line => line.includes('[PROJECT_SCAN_SNAPSHOT_CREATED]')), false, prompt);
+      assert.equal(logs.some(line => line.includes('[PLANNED_FILE_EXTRACTED]')), false, prompt);
+      assert.equal(logs.some(line => line.includes('[WORKSPACE_MAPPING_START]')), false, prompt);
+      assert.equal(logs.some(line => line.includes('src/main.js')), false, prompt);
+    }
+  } finally {
+    restore();
   }
 });
 

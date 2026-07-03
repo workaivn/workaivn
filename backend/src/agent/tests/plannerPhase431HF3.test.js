@@ -13,7 +13,7 @@ function createWorkspace(existingFiles = []) {
   };
 }
 
-test('Phase 4.31-HF3: mission and deliverables outrank dashboard mockup examples', () => {
+test('Phase 5.04: runtime plan infers goalType from prompt text', () => {
   const plan = createRuntimePlan({
     prompt: 'Build a SaaS Landing Page with a dashboard mockup example',
     projectIntent: {
@@ -24,11 +24,10 @@ test('Phase 4.31-HF3: mission and deliverables outrank dashboard mockup examples
   assert.equal(plan.goalType, 'LANDING_PAGE');
   assert.ok(Array.isArray(plan.recommendationPipeline?.projectStructure?.files));
   assert.ok(Array.isArray(plan.executionPipeline?.filePlan));
-  assert.ok(plan.logs.some(entry => entry.event === 'RECOMMENDATION_PIPELINE_CREATED'));
-  assert.ok(plan.logs.some(entry => entry.event === 'EXECUTION_PIPELINE_CREATED'));
+  assert.deepEqual(plan.logs, []);
 });
 
-test('Phase 4.31-HF3: empty workspace with bootstrap disabled stays recommendation-only', () => {
+test('Phase 5.04: empty workspace with bootstrap disabled returns no domain candidates', () => {
   const inference = inferFileIntentCandidates({
     objective: 'Build a landing page',
     projectIntent: {
@@ -49,13 +48,11 @@ test('Phase 4.31-HF3: empty workspace with bootstrap disabled stays recommendati
     requestedFileDetails: []
   });
 
-  assert.ok(inference.recommendationCandidates.length > 0, 'expected planner recommendations');
+  assert.equal(inference.recommendationCandidates.length, 0, 'no domain-derived recommendations from static mappings');
   assert.equal(inference.executionCandidates.length, 0, 'bootstrap-disabled empty workspace should not create executable writes');
-  assert.equal(inference.recommendationCandidates[0]?.recommendationOnly, true);
-  assert.equal(inference.recommendationCandidates[0]?.executable, false);
 });
 
-test('Phase 4.31-HF3: workspace evidence still yields footer, testimonials, and faq execution candidates', () => {
+test('Phase 5.04: workspace files are not auto-promoted from hardcoded section patterns', () => {
   const inference = inferFileIntentCandidates({
     objective: 'Build a landing page with FAQ, testimonials, and footer',
     workspaceState: createWorkspace(['src/hero.jsx', 'src/features.jsx', 'src/pricing.jsx']),
@@ -79,9 +76,11 @@ test('Phase 4.31-HF3: workspace evidence still yields footer, testimonials, and 
   });
 
   const paths = inference.executionCandidates.map(entry => entry.path);
-  assert.ok(paths.includes('src/footer.jsx'));
-  assert.ok(paths.includes('src/testimonials.jsx'));
-  assert.ok(paths.includes('src/faq.jsx'));
+  assert.equal(paths.includes('src/hero.jsx'), false, 'existing files must not be promoted by static section patterns');
+  assert.equal(paths.includes('src/pricing.jsx'), false, 'existing files must not be promoted by static section patterns');
+  assert.equal(paths.includes('src/footer.jsx'), false);
+  assert.equal(paths.includes('src/testimonials.jsx'), false);
+  assert.equal(paths.includes('src/faq.jsx'), false);
   assert.ok(inference.recommendationCandidates.every(entry => entry.recommendationOnly === true));
 });
 

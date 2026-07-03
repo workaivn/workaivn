@@ -1,13 +1,15 @@
 import fs from "fs/promises";
 import pathModule from "path";
 import { resolveWorkspacePathSafe } from "../workspace.js";
+import { assertExecutableUnit } from "../execution/ExecutionInputGuard.js";
 
-export async function createFileTool({ path, content = "", activeFiles = [], workspaceRoot, layout = null }) {
+export async function createFileTool({ path, content = "", activeFiles = [], workspaceRoot, layout = null, executionUnit = null }) {
   if (!String(path || "").trim()) {
     return { success: false, error: "CREATE_FILE requires path" };
   }
   if (workspaceRoot) {
     try {
+      assertExecutableUnit(executionUnit, { path, toolName: "CREATE_FILE" });
       const resolved = await resolveWorkspacePathSafe(workspaceRoot, path, { allowMissing: true, layout });
       try {
         const stat = await fs.stat(resolved.absolutePath);
@@ -19,7 +21,12 @@ export async function createFileTool({ path, content = "", activeFiles = [], wor
       await fs.writeFile(resolved.absolutePath, String(content), "utf8");
       return { success: true, file: resolved.relativePath, changed: true, created: true };
     } catch (error) {
-      return { success: false, error: error.message };
+      return {
+        success: false,
+        error: error.code === "NON_CANONICAL_FILE_BLOCKED"
+          ? "CREATE_FILE_BLOCKED_NON_CANONICAL"
+          : error.message
+      };
     }
   }
   // In-memory mode

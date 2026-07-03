@@ -67,7 +67,9 @@ function normalizeToolArgs(toolName, args = {}, context = {}) {
     if (normalizedArgs[key] == null) continue;
     const candidate = normalizeWorkspaceRelativePath(normalizedArgs[key], workspaceRoot);
     if (!candidate) {
-      throw new Error("File path escapes selected workspace and must be relative to the selected workspace");
+      const error = new Error("File path escapes selected workspace and must be relative to the selected workspace");
+      error.code = "WORKSPACE_ESCAPE_ATTEMPT";
+      throw error;
     }
     normalizedArgs[key] = candidate;
   }
@@ -107,6 +109,7 @@ export async function executeTool(
     const normalizedContext = Array.isArray(context)
       ? { activeFiles: context }
       : context;
+    const executionUnit = normalizedContext.executionUnit || normalizedContext.approvedExecutionUnit || normalizedContext.task || null;
     const normalizedArgs = normalizeToolArgs(toolName, args, normalizedContext);
 
     const result = await tool({
@@ -115,7 +118,8 @@ export async function executeTool(
       workspaceId: normalizedContext.workspaceId,
       workspaceRoot: normalizedContext.workspaceRoot,
       layout: normalizedContext.layout || null,
-      writeContext: normalizedContext.writeContext || null
+      writeContext: normalizedContext.writeContext || null,
+      executionUnit
     });
 
     return result;
@@ -124,7 +128,7 @@ export async function executeTool(
 
     return {
       success: false,
-      error: error.message,
+      error: error.code || error.message,
     };
 
   }

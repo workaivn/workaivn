@@ -29,6 +29,8 @@ export class ExecutionUnit {
     retryPolicy = {},
     verificationPolicy = {},
     metadata = {},
+    canonicalTargets = [],
+    authority = null,
     authoritySource = null,
     authorityState = 'candidate',
     approvalId = null,
@@ -49,6 +51,8 @@ export class ExecutionUnit {
     this.retryPolicy = retryPolicy && typeof retryPolicy === 'object' ? { ...retryPolicy } : {};
     this.verificationPolicy = verificationPolicy && typeof verificationPolicy === 'object' ? { ...verificationPolicy } : {};
     this.metadata = metadata && typeof metadata === 'object' ? { ...metadata } : {};
+    this.canonicalTargets = Array.isArray(canonicalTargets) ? [...canonicalTargets] : [];
+    this.authority = authority && typeof authority === 'object' ? { ...authority } : null;
     this.authoritySource = authoritySource || this.metadata.authoritySource || null;
     this.authorityState = authorityState || this.metadata.authorityState || 'candidate';
     this.approvalId = approvalId || this.metadata.approvalId || null;

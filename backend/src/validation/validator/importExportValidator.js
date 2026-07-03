@@ -101,7 +101,9 @@ export function validateImportsExports({
 
 function normalize(filePath) {
   if (!filePath) return '';
-  return filePath.replace(/\\/g, '/').toLowerCase();
+  const str = typeof filePath === 'string' ? filePath : (filePath.path || filePath.file || filePath.filePath || '');
+  if (!str) return '';
+  return str.replace(/\\/g, '/').toLowerCase();
 }
 
 function extractLocalImports(content, sourceFile) {

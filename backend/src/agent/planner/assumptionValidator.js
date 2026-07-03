@@ -75,6 +75,8 @@ export function validateAssumptions(workspaceState = {}, projectScan = {}, assum
   return assumptions.map(assumption => {
     const normalizedPath = assumption.path.replace(/\\/g, '/').toLowerCase();
     const exists = allExisting.has(normalizedPath);
+    const requestedKind = String(assumption.requestedKind || '').trim().toUpperCase();
+    const authoritySource = String(assumption.authoritySource || assumption.source || '').trim().toLowerCase();
 
     if (exists) {
       assumption.verified = true;
@@ -96,6 +98,37 @@ export function validateAssumptions(workspaceState = {}, projectScan = {}, assum
         discoveryEvidence: assumption.discoveryEvidence
       });
     } else {
+      if (requestedKind === 'DISCOVER_IF_EXISTS') {
+        assumption.verified = false;
+        assumption.discoveryEvidence = {
+          foundInExistingFiles: false,
+          foundInEntryFiles: false,
+          matchedPath: null
+        };
+        console.log('[DISCOVER_IF_EXISTS_ABSENT]', {
+          path: assumption.path,
+          requestedKind,
+          reason: 'Optional discovery target not present'
+        });
+        return assumption;
+      }
+
+      if (requestedKind === 'EXPLICIT_CREATE' && authoritySource === 'explicit_user_request') {
+        assumption.verified = false;
+        assumption.discoveryEvidence = {
+          foundInExistingFiles: false,
+          foundInEntryFiles: false,
+          matchedPath: null
+        };
+        console.log('[PLANNER_ASSUMPTION_ACCEPTED_CREATE_MISSING]', {
+          path: assumption.path,
+          requestedKind,
+          authoritySource: 'explicit_user_request',
+          reason: 'Explicit create target may be missing from workspace'
+        });
+        return assumption;
+      }
+
       assumption.verified = false;
       assumption.discoveryEvidence = {
         foundInExistingFiles: false,

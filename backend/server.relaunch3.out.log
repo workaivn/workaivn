@@ -1,0 +1,12 @@
+
+> ai-saas-backend@1.0.0 start
+> node server.js
+
+[OllamaAdapter] initialized baseURL=http://localhost:11434/v1
+[SERVER_SOURCE_VERIFICATION] {
+  pid: 36960,
+  runAgentLoopPath: 'G:\\langtuvn\\ai_local\\backend\\src\\agent\\runAgentLoop.js',
+  gitHash: '00fa7060'
+}
+✅ Mongo connected
+🚀 Server running on port 3000

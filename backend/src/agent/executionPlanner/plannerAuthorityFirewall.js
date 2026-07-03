@@ -1,16 +1,12 @@
 import crypto from 'node:crypto';
 import { EXECUTION_UNIT_TYPES } from './executionUnit.js';
+import { AuthoritySource, isExecutableAuthoritySource, normalizeAuthoritySource } from '../../planner/authority/AuthoritySource.js';
 
 const ALLOWED_AUTHORITY_SOURCES = new Set([
-  'workspace_evidence',
-  'workspace_derived',
-  'explicit_user_request',
-  'verified_planning_context',
-  'planner_derived',
-  'planner_dependency',
-  'planner_promoter',
-  'approved_proposal',
-  'validated_recovery'
+  AuthoritySource.OBJECTIVE_AUTHORITY,
+  AuthoritySource.WORKSPACE_AUTHORITY,
+  AuthoritySource.VERIFIED_PLANNING_CONTEXT,
+  AuthoritySource.VERIFIED_ARTIFACT_MAPPING
 ]);
 
 const FORBIDDEN_AUTHORITY_SOURCES = new Set([
@@ -50,7 +46,7 @@ function unique(values = []) {
 }
 
 function normalizeSource(value = '') {
-  return normalize(value).toLowerCase();
+  return normalizeAuthoritySource(normalize(value));
 }
 
 function collectTargets(candidate = {}) {
@@ -94,6 +90,25 @@ function getRequestedKind(candidate = {}) {
   ).toUpperCase();
 }
 
+function getInitializationMode(context = {}) {
+  return String(
+    context?.initializationMode ||
+    context?.verifiedPlanningContext?.initializationMode ||
+    context?.plannerPolicies?.initializationMode ||
+    ''
+  ).trim().toUpperCase();
+}
+
+function isInitializationAuthority(candidate = {}, context = {}) {
+  const source = getAuthoritySource(candidate);
+  const mode = getInitializationMode(context);
+  const policies = context?.plannerPolicies || {};
+  const allowed = policies.ALLOW_PROJECT_INITIALIZATION === true ||
+    policies.ALLOW_NEW_PROJECT_INITIALIZATION === true ||
+    policies.ALLOW_PROJECT_BOOTSTRAP === true;
+  return source === AuthoritySource.OBJECTIVE_AUTHORITY && mode === 'PROJECT_INITIALIZATION' && allowed;
+}
+
 function isExplicitRequest(candidate = {}) {
   return candidate?.authority?.source === 'explicit_user_request' ||
     candidate?.metadata?.explicitUserRequest === true ||
@@ -101,6 +116,7 @@ function isExplicitRequest(candidate = {}) {
 }
 
 function hasVerifiedEvidence(candidate = {}, context = {}) {
+  const type = String(candidate?.type || candidate?.tool || '').toUpperCase();
   const verifiedFiles = unique([
     ...(Array.isArray(context?.verifiedPlanningContext?.verifiedFiles) ? context.verifiedPlanningContext.verifiedFiles : []),
     ...(Array.isArray(context?.verifiedFiles) ? context.verifiedFiles : []),
@@ -118,17 +134,23 @@ function hasVerifiedEvidence(candidate = {}, context = {}) {
   const source = getAuthoritySource(candidate);
 
   if (source === 'validated_recovery') return true;
-  if (source === 'planner_derived' || source === 'workspace_derived') return true;
-  if (source === 'verified_planning_context') return targets.every(target => verifiedFiles.includes(target) || verifiedCommands.includes(target));
-  if (source === 'workspace_evidence' || source === 'approved_proposal') {
+  if (isExplicitRequest(candidate)) return true;
+  if (source === AuthoritySource.OBJECTIVE_AUTHORITY && isInitializationAuthority(candidate, context)) return true;
+  if (source === AuthoritySource.VERIFIED_PLANNING_CONTEXT && (type === EXECUTION_UNIT_TYPES.READ || type === EXECUTION_UNIT_TYPES.VERIFY || type === EXECUTION_UNIT_TYPES.RUN_TERMINAL || type === EXECUTION_UNIT_TYPES.VALIDATE)) {
+    return true;
+  }
+  if (source === AuthoritySource.VERIFIED_ARTIFACT_MAPPING) {
+    return targets.length > 0;
+  }
+  if (source === AuthoritySource.WORKSPACE_AUTHORITY || source === AuthoritySource.VERIFIED_PLANNING_CONTEXT) {
     return targets.every(target => verifiedFiles.includes(target) || verifiedCommands.includes(target));
   }
-  if (source === 'explicit_user_request') return true;
-  if (source === 'planner_promoter') return Boolean(candidate.approvalId);
+  if (source === AuthoritySource.OBJECTIVE_AUTHORITY) return true;
   return false;
 }
 
 function hasCanonicalPathMatch(candidate = {}, context = {}) {
+  const source = getAuthoritySource(candidate);
   const canonical = new Set(unique(context?.canonicalFileUniverse || []).map(normalize));
   const targets = collectTargets(candidate).map(normalize);
   if (targets.length === 0) return true;
@@ -140,10 +162,10 @@ function hasCanonicalPathMatch(candidate = {}, context = {}) {
       canonical.size === 0 ||
       canonical.has(target) ||
       isExplicitRequest(candidate) ||
-      source === 'planner_derived' ||
-      source === 'workspace_derived' ||
-      source === 'verified_planning_context' ||
-      source === 'workspace_evidence'
+      source === AuthoritySource.OBJECTIVE_AUTHORITY ||
+      source === AuthoritySource.WORKSPACE_AUTHORITY ||
+      source === AuthoritySource.VERIFIED_PLANNING_CONTEXT ||
+      source === AuthoritySource.VERIFIED_ARTIFACT_MAPPING
     );
   }
   return true;
@@ -151,12 +173,15 @@ function hasCanonicalPathMatch(candidate = {}, context = {}) {
 
 function hasPlannerPolicy(candidate = {}, context = {}) {
   const policies = context?.plannerPolicies || {};
+  const source = getAuthoritySource(candidate);
   if (candidate?.tool === 'WRITE_FILE' || candidate?.tool === 'APPLY_PATCH' || candidate?.type === EXECUTION_UNIT_TYPES.WRITE || candidate?.type === EXECUTION_UNIT_TYPES.PATCH) {
     if (candidate?.metadata?.explicitUserRequest === true || candidate?.metadata?.requestedFile === true) return true;
+    if (source === AuthoritySource.OBJECTIVE_AUTHORITY && isInitializationAuthority(candidate, context)) return true;
     return policies.ALLOW_EXISTING_PROJECT_MODIFICATION === true ||
       policies.ALLOW_NEW_FILE_CREATION === true ||
       policies.ALLOW_PROJECT_BOOTSTRAP === true ||
-      policies.ALLOW_NEW_PROJECT_INITIALIZATION === true;
+      policies.ALLOW_NEW_PROJECT_INITIALIZATION === true ||
+      policies.ALLOW_PROJECT_INITIALIZATION === true;
   }
   if (candidate?.tool === 'RUN_TERMINAL' || candidate?.tool === 'VALIDATE' || candidate?.type === EXECUTION_UNIT_TYPES.RUN_TERMINAL || candidate?.type === EXECUTION_UNIT_TYPES.VALIDATE) {
     return policies.ALLOW_TERMINAL_COMMANDS !== false;
@@ -180,7 +205,9 @@ export function validatePlannerAuthority(candidate = {}, context = {}) {
 
   const targets = collectTargets(candidate);
   const hasPackageJson = targets.some(t => /(?:^|\/)package\.json$/i.test(t));
-  const isExplicitNew = source === 'explicit_user_request';
+  const isExplicitNew = candidate?.authority?.source === 'explicit_user_request' ||
+    candidate?.metadata?.explicitUserRequest === true ||
+    candidate?.metadata?.requestedFile === true;
 
   if (isExplicitNew && hasPackageJson && !isExplicitRequest(candidate)) {
     console.log('[PACKAGE_JSON_INFERENCE_BLOCKED]', {
@@ -196,6 +223,14 @@ export function validatePlannerAuthority(candidate = {}, context = {}) {
       type: type || null,
       source,
       targets
+    });
+  }
+
+  if (source === AuthoritySource.OBJECTIVE_AUTHORITY) {
+    console.log('[OBJECTIVE_AUTHORITY_CREATED]', {
+      candidateId: candidate.id || null,
+      targets,
+      initializationMode: getInitializationMode(context) || null
     });
   }
 
@@ -229,6 +264,15 @@ export function validatePlannerAuthority(candidate = {}, context = {}) {
       reason: 'authority missing'
     });
     return { valid: false, reason: 'authority missing', source: null, approvalId: null };
+  }
+
+  if (executable && !isExecutableAuthoritySource(source)) {
+    console.log('[AUTHORITY_SOURCE_REJECTED]', {
+      candidateId: candidate.id || null,
+      source,
+      reason: 'authority source is not executable'
+    });
+    return { valid: false, reason: 'authority source is not executable', source, approvalId: null };
   }
 
   if (FORBIDDEN_AUTHORITY_SOURCES.has(source)) {
@@ -311,7 +355,7 @@ export function validatePlannerAuthority(candidate = {}, context = {}) {
     return { valid: true, reason: null, source, approvalId: approvalId || `approval:${crypto.randomUUID()}` };
   }
 
-  if (candidate.proposal == null && candidate.approvedByFirewall !== true && source !== 'validated_recovery' && source !== 'planner_promoter' && source !== 'workspace_evidence' && source !== 'workspace_derived' && source !== 'explicit_user_request' && source !== 'verified_planning_context' && source !== 'planner_derived') {
+  if (candidate.proposal == null && candidate.approvedByFirewall !== true && source !== 'validated_recovery' && source !== AuthoritySource.OBJECTIVE_AUTHORITY && source !== AuthoritySource.WORKSPACE_AUTHORITY && source !== AuthoritySource.VERIFIED_PLANNING_CONTEXT && source !== AuthoritySource.VERIFIED_ARTIFACT_MAPPING) {
     console.log('[AUTHORITY_REJECTED]', {
       candidateId: candidate.id || null,
       reason: 'proposal missing',
@@ -369,7 +413,7 @@ export function validatePlannerAuthority(candidate = {}, context = {}) {
       isExplicitRequest: isExplicit,
       source
     });
-    if (protectedCheck && !(isExplicit || source === 'planner_derived' || source === 'workspace_derived' || source === 'verified_planning_context' || source === 'workspace_evidence')) {
+    if (protectedCheck && !(isExplicit || source === AuthoritySource.WORKSPACE_AUTHORITY || source === AuthoritySource.VERIFIED_PLANNING_CONTEXT || (source === AuthoritySource.OBJECTIVE_AUTHORITY && isInitializationAuthority(candidate, context)))) {
       console.log('[PROTECTED_SCOPE_REJECTED]', {
         candidateId: candidate.id || null,
         targets: collectTargets(candidate),
@@ -414,6 +458,14 @@ export function validatePlannerAuthority(candidate = {}, context = {}) {
     source,
     approvalId: approvalId || null
   });
+  if (source === AuthoritySource.OBJECTIVE_AUTHORITY) {
+    console.log('[OBJECTIVE_AUTHORITY_APPROVED]', {
+      candidateId: candidate.id || null,
+      targets,
+      approvalId: approvalId || null,
+      initializationMode: getInitializationMode(context) || null
+    });
+  }
 
   return { valid: true, reason: null, source, approvalId: approvalId || `approval:${crypto.randomUUID()}` };
 }

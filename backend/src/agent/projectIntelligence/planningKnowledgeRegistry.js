@@ -16,72 +16,42 @@ export const GOAL_TYPES = Object.freeze({
 const GOAL_KNOWLEDGE = {
   [GOAL_TYPES.LANDING_PAGE]: {
     label: "Landing Page",
-    features: ["navigation", "hero", "benefits", "social_proof", "cta", "footer"],
-    components: ["Layout", "Navbar", "HeroSection", "FeatureGrid", "CTASection", "Footer"],
-    directories: ["components/layout", "components/navigation", "components/sections", "components/shared"],
     validationHints: ["build", "file-existence"]
   },
   [GOAL_TYPES.SAAS_APP]: {
     label: "SaaS App",
-    features: ["navigation", "hero", "pricing", "social_proof", "cta", "footer"],
-    components: ["Layout", "Navbar", "HeroSection", "PricingGrid", "FeatureGrid", "CTASection", "Footer"],
-    directories: ["components/layout", "components/navigation", "components/sections", "components/shared"],
     validationHints: ["build", "file-existence"]
   },
   [GOAL_TYPES.DASHBOARD]: {
     label: "Dashboard",
-    features: ["sidebar", "topbar", "metrics", "table", "activity_feed", "settings"],
-    components: ["Layout", "Sidebar", "Topbar", "StatsCards", "DataTable", "ActivityFeed", "SettingsPanel"],
-    directories: ["components/layout", "components/navigation", "components/widgets", "components/shared"],
     validationHints: ["build", "file-existence"]
   },
   [GOAL_TYPES.ADMIN_PANEL]: {
     label: "Admin Panel",
-    features: ["sidebar", "topbar", "users", "roles", "audit_log", "settings"],
-    components: ["Layout", "Sidebar", "Topbar", "UserTable", "RoleMatrix", "AuditLog", "SettingsPanel"],
-    directories: ["components/layout", "components/navigation", "components/widgets", "components/shared"],
     validationHints: ["build", "file-existence"]
   },
   [GOAL_TYPES.API_SERVER]: {
     label: "API Server",
-    features: ["health_endpoint", "routes", "middleware", "error_handling", "tests"],
-    components: ["Server", "HealthRoute", "Routes", "Middleware", "ErrorHandler"],
-    directories: ["routes", "controllers", "middleware", "services"],
     validationHints: ["syntax", "test"]
   },
   [GOAL_TYPES.FULLSTACK_APP]: {
     label: "Fullstack App",
-    features: ["ui_shell", "api_layer", "data_flow", "validation"],
-    components: ["Layout", "Navbar", "HeroSection", "ApiClient", "Server", "ErrorHandler"],
-    directories: ["components", "routes", "controllers", "middleware"],
     validationHints: ["build", "syntax", "file-existence"]
   },
   [GOAL_TYPES.BUG_FIX]: {
     label: "Bug Fix",
-    features: ["reproduce", "inspect", "patch", "validate", "recheck"],
-    components: ["ProblemArea", "PatchPlan", "ValidationCheck"],
-    directories: ["fixes", "recovery"],
     validationHints: ["targeted-validation"]
   },
   [GOAL_TYPES.REFACTOR]: {
     label: "Refactor",
-    features: ["map_structure", "extract", "preserve_behavior", "validate"],
-    components: ["RefactorMap", "SharedModule", "Adapter", "ValidationCheck"],
-    directories: ["refactor", "shared"],
     validationHints: ["build", "file-existence"]
   },
   [GOAL_TYPES.READ_ONLY]: {
     label: "Read Only",
-    features: ["inspect", "summarize"],
-    components: [],
-    directories: [],
     validationHints: ["file-existence"]
   },
   [GOAL_TYPES.UNKNOWN]: {
     label: "Unknown",
-    features: ["inspect", "plan", "validate"],
-    components: ["App", "Layout"],
-    directories: ["components"],
     validationHints: ["file-existence"]
   }
 };
@@ -231,7 +201,6 @@ export function getProfileKnowledge(profileId = "") {
 }
 
 export function getComponentKnowledge({ goalType = GOAL_TYPES.UNKNOWN, profileId = "" } = {}) {
-  const goalKnowledge = getGoalKnowledge(goalType);
   const profileKnowledge = getProfileKnowledge(profileId);
   const family = profileKnowledge.family || "static";
   const sharedComponents = family === "react"
@@ -247,12 +216,12 @@ export function getComponentKnowledge({ goalType = GOAL_TYPES.UNKNOWN, profileId
   return {
     goalType,
     family,
-    components: unique([...goalKnowledge.components, ...sharedComponents]),
+    components: sharedComponents,
     sharedComponents: unique(sharedComponents),
-    layoutComponents: unique(goalKnowledge.components.filter(name => /layout|sidebar|topbar|wrapper|shell/i.test(name))),
-    routeComponents: unique(goalKnowledge.components.filter(name => /route|page|server|health|controller/i.test(name))),
-    validationHints: unique(goalKnowledge.validationHints || []),
-    directories: unique([...profileKnowledge.baseDirectories, ...(goalKnowledge.directories || [])])
+    layoutComponents: unique(sharedComponents.filter(name => /layout|sidebar|topbar|wrapper|shell/i.test(name))),
+    routeComponents: unique(sharedComponents.filter(name => /route|page|server|health|controller/i.test(name))),
+    validationHints: [],
+    directories: unique(profileKnowledge.baseDirectories || [])
   };
 }
 

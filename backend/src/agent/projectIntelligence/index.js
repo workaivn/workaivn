@@ -10,6 +10,7 @@ import { buildKnowledgeGraph } from "./knowledgeGraph.js";
 import { inferPrimaryConcepts, normalize } from "./inference.js";
 import { buildRuntimeProposalGraph, createRuntimePlan } from "./runtimePlanningIntelligence.js";
 import { createProjectScanSnapshot } from "../context/ProjectScanSnapshot.js";
+import { consumeTaskIntent } from "../planner/taskIntent.js";
 
 function normalizeLower(value = "") {
   return normalize(value).toLowerCase();
@@ -93,8 +94,11 @@ function selectBootstrapProfile(intent = {}, workspaceState = {}, registry = boo
 export function detectProjectIntent(prompt, criteria = {}) {
   const text = readPromptText({ prompt, objective: prompt, text: prompt });
   const lower = text.toLowerCase();
+  const taskIntent = criteria?.taskIntent || null;
 
   const requestedFramework =
+    /\breact\s*\+\s*custom\b/i.test(text) ? "react-custom" :
+    /\bframeworkkey\s*[:=]\s*['"]?react-custom\b/i.test(text) ? "react-custom" :
     /\breact\s+vite\b/i.test(text) ? "react-vite-ts" :
     /\bnext\.?js\b/i.test(text) ? "nextjs-ts" :
     /\bnode\s*[- ]?express\b/i.test(text) ? "node-express" :
@@ -107,18 +111,18 @@ export function detectProjectIntent(prompt, criteria = {}) {
     /\bstatic\s+html\b|\bplain\s+html\b|\bwithout\s+framework\b/i.test(text) ? "generic-static-html" :
     null;
 
-  const goalType =
-    matchAny(lower, ["read only", "read-only", "show package", "inspect", "summarize"]) ? "READ_ONLY" :
-    matchAny(lower, ["bug fix", "bugfix", "fix bug", "repair", "crash", "broken", "error"]) ? "BUG_FIX" :
-    matchAny(lower, ["refactor", "restructure", "clean up", "reorganize", "rewrite"]) ? "REFACTOR" :
-    matchAny(lower, ["fullstack", "full-stack", "full stack"]) ? "FULLSTACK_APP" :
-    matchAny(lower, ["rest api", "api server", "backend api", "express server", "node api"]) ? "API_SERVER" :
-    matchAny(lower, ["php landing page", "php website", "php admin", "php site"]) ? "LANDING_PAGE" :
-    matchAny(lower, ["landing page", "homepage", "hero"]) ? "LANDING_PAGE" :
-    matchAny(lower, ["saas landing page", "saas", "marketing site"]) ? "SAAS_APP" :
-    matchAny(lower, ["asp.net", "aspnet", ".net"]) ? "ADMIN_PANEL" :
-    matchAny(lower, ["dashboard", "admin panel", "admin dashboard"]) ? "DASHBOARD" :
-    "UNKNOWN";
+  const goalType = String(taskIntent?.goalType || "").trim().toUpperCase() ||
+    (matchAny(lower, ["read only", "read-only", "show package", "inspect", "summarize"]) ? "READ_ONLY" :
+      matchAny(lower, ["bug fix", "bugfix", "fix bug", "repair", "crash", "broken", "error"]) ? "BUG_FIX" :
+      matchAny(lower, ["refactor", "restructure", "clean up", "reorganize", "rewrite"]) ? "REFACTOR" :
+      matchAny(lower, ["fullstack", "full-stack", "full stack"]) ? "FULLSTACK_APP" :
+      matchAny(lower, ["rest api", "api server", "backend api", "express server", "node api"]) ? "API_SERVER" :
+      matchAny(lower, ["php landing page", "php website", "php admin", "php site"]) ? "LANDING_PAGE" :
+      matchAny(lower, ["landing page", "homepage", "hero"]) ? "LANDING_PAGE" :
+      matchAny(lower, ["saas landing page", "saas", "marketing site"]) ? "SAAS_APP" :
+      matchAny(lower, ["asp.net", "aspnet", ".net"]) ? "ADMIN_PANEL" :
+      matchAny(lower, ["dashboard", "admin panel", "admin dashboard"]) ? "DASHBOARD" :
+      "UNKNOWN");
 
   const missionSignals = [];
   const goalSignals = [];
@@ -157,6 +161,9 @@ export function detectProjectIntent(prompt, criteria = {}) {
     matchedSignals,
     blockedSignals
   });
+  if (taskIntent) {
+    consumeTaskIntent("GoalClassifier", taskIntent);
+  }
 
   return {
     prompt: text,
@@ -172,7 +179,8 @@ export function detectProjectIntent(prompt, criteria = {}) {
       null,
     requestedFiles: Array.isArray(criteria.requestedFiles) ? [...criteria.requestedFiles] : [],
     requestedFileDetails: Array.isArray(criteria.requestedFileDetails) ? [...criteria.requestedFileDetails] : [],
-    objective: criteria.objective || text
+    objective: criteria.objective || text,
+    taskIntent: taskIntent ? { ...taskIntent } : null
   };
 }
 

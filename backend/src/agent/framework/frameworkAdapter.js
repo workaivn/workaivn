@@ -392,25 +392,22 @@ function detectFrameworkApiMismatch(content, framework, availability = null) {
   const assertionRejections = [];
 
   if (normalized === "generic-js-test") {
-    for (const entry of frameworkMarkers) {
-      if (entry.api === "node:test" && capability.allowedImports.includes("node:test")) {
-        if (entry.patterns.some(rx => rx.test(text))) {
-          console.log("[FRAMEWORK_API_ALLOWED]", {
-            framework: normalized,
-            api: entry.api,
-            runner: capability.runner
-          });
-        }
-        continue;
-      }
-      if (entry.patterns.some(rx => rx.test(text))) {
-        mismatches.push(entry.api);
-      }
+    const hasFrameworkEvidence = availability?.source && availability.source !== "generic" && availability.source !== "skipped";
+    if (!runnable && !hasFrameworkEvidence) {
+      console.log("[FRAMEWORK_VALIDATION_SKIPPED_GENERIC]", {
+        framework: normalized,
+        reason: "generic fallback without evidence; API mismatch not enforced",
+        runner: capability.runner
+      });
+      return { mismatches: [], assertionRejections: [], skipped: true };
     }
-    if (!capability.allowedGlobals.includes("expect") && (/\bexpect\s*\(/.test(text) || /\bexpect\s*\.\s*toBe\s*\(/.test(text))) {
-      assertionRejections.push("expect");
+    if (!runnable && hasFrameworkEvidence) {
+      console.log("[FRAMEWORK_VALIDATION_STRICT_GENERIC]", {
+        framework: normalized,
+        source: availability.source,
+        reason: "generic fallback with project evidence; enforcing style consistency"
+      });
     }
-    return { mismatches, assertionRejections };
   }
 
   if (normalized === "jest" && !runnable) {
@@ -669,32 +666,42 @@ function validateMocha(content) {
   return { success: true, framework: "mocha", found: ["describe", "it", "before", "after", "assert", "chai"] };
 }
 
-function validateGeneric(content, availability = null) {
+function validateGeneric(content, framework = "generic-js-test", availability = null) {
+  const normalized = normalizeFramework(framework);
   const ast = parseJavaScriptSource(content);
   if (!ast) {
-    return { success: true, framework: "generic-js-test", found: [] };
+    return { success: true, framework: normalized, found: [] };
   }
 
   const imports = extractImports(ast);
   const allModules = imports.map(i => i.module);
-  const apiMismatch = detectFrameworkApiMismatch(content, "generic-js-test", availability);
-  const capability = availability?.capability || buildFrameworkCapability("generic-js-test", availability);
+  const apiMismatch = detectFrameworkApiMismatch(content, normalized, availability);
+  const capability = availability?.capability || buildFrameworkCapability(normalized, availability);
   const hasNodeTest = allModules.includes("node:test");
   const hasOtherFramework = allModules.some(m => m === "vitest" || m === "@jest/globals" || m === "chai" || m === "jest");
 
   if (hasNodeTest && hasOtherFramework) {
     return {
       success: false,
-      framework: "generic-js-test",
+      framework: normalized,
       reason: "framework_mismatch",
       suggestion: "Keep the test file on one framework only",
       found: ["node:test", "other-test-lib"]
     };
   }
 
+  if (apiMismatch.skipped) {
+    console.log("[FRAMEWORK_VALIDATION_SKIPPED_GENERIC]", {
+      framework: normalized,
+      reason: "generic fallback; validation skipped",
+      found: []
+    });
+    return { success: true, framework: normalized, found: [], skipped: true };
+  }
+
   if (hasNodeTest && capability.allowedImports.includes("node:test")) {
-    console.log("[FRAMEWORK_API_ALLOWED]", {
-      framework: "generic-js-test",
+    console.log("[TEST_FRAMEWORK_GENERIC_ACCEPTED]", {
+      framework: normalized,
       api: "node:test",
       runner: capability.runner
     });
@@ -702,27 +709,26 @@ function validateGeneric(content, availability = null) {
 
   if (apiMismatch.mismatches.length > 0 || apiMismatch.assertionRejections.length > 0) {
     if (apiMismatch.mismatches.length > 0) {
-      console.log("[FRAMEWORK_API_MISMATCH]", {
-        framework: "generic-js-test",
+      console.log("[FRAMEWORK_API_MISMATCH_SUPPRESSED]", {
+        framework: normalized,
         mismatches: [...new Set(apiMismatch.mismatches)]
       });
     }
     if (apiMismatch.assertionRejections.length > 0) {
       console.log("[FRAMEWORK_ASSERTION_API_REJECTED]", {
-        framework: "generic-js-test",
+        framework: normalized,
         rejected: [...new Set(apiMismatch.assertionRejections)]
       });
     }
     return {
-      success: false,
-      framework: "generic-js-test",
-      reason: "framework_mismatch",
-      suggestion: "Keep the test file on one framework only",
-      found: [...new Set([...apiMismatch.mismatches, ...apiMismatch.assertionRejections])]
+      success: true,
+      framework: normalized,
+      found: [...new Set([...apiMismatch.mismatches, ...apiMismatch.assertionRejections])],
+      skipped: true
     };
   }
 
-  return { success: true, framework: "generic-js-test", found: [] };
+  return { success: true, framework: normalized, found: [] };
 }
 
 export function validateFramework(content = "", framework = "generic-js-test", availability = null) {

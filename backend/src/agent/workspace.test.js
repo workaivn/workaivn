@@ -74,6 +74,19 @@ async function createBackendOnlyProject() {
   return { allowedRoot, projectRoot };
 }
 
+function createApprovedExecutionUnit(tool, targetPath) {
+  return {
+    id: `${tool}:${targetPath}`,
+    type: tool === "APPLY_PATCH" ? "PATCH" : (tool === "READ_FILE" ? "READ" : "WRITE"),
+    tool,
+    targetFiles: [targetPath],
+    authorityState: "approved",
+    approvedByFirewall: true,
+    approvalId: `approval:${tool}:${targetPath}`,
+    metadata: { source: "workspace.test" }
+  };
+}
+
 test("workspace security only accepts projects inside WORKSPACE_ROOTS", async () => {
   const previousRoots = process.env.WORKSPACE_ROOTS;
   const { allowedRoot, projectRoot } = await createAllowedProject();
@@ -123,7 +136,10 @@ test("workspace tools read, modify, and run terminal from the selected project r
   const context = { workspaceId: "test-workspace", workspaceRoot: projectRoot };
 
   try {
-    const read = await executeTool("READ_FILE", { path: "package.json" }, context);
+    const read = await executeTool("READ_FILE", { path: "package.json" }, {
+      ...context,
+      executionUnit: createApprovedExecutionUnit("READ_FILE", "package.json")
+    });
     assert.equal(read.success, true);
     assert.match(read.content, /sample-project/);
 
@@ -131,7 +147,10 @@ test("workspace tools read, modify, and run terminal from the selected project r
       file: "src/value.test.js",
       find: "value = 1",
       replace: "value = 2"
-    }, context);
+    }, {
+      ...context,
+      executionUnit: createApprovedExecutionUnit("APPLY_PATCH", "src/value.test.js")
+    });
     assert.equal(patch.success, true);
     assert.match(await fs.readFile(path.join(projectRoot, "src", "value.test.js"), "utf8"), /value = 2/);
 
@@ -179,7 +198,11 @@ test("workspace path resolver maps backend/src to existing src layout when backe
         path: "backend/src/agent/planner/clarificationEngine.js",
         content: clarificationEngineContent
       },
-      { workspaceId: "test-workspace", workspaceRoot: projectRoot }
+      {
+        workspaceId: "test-workspace",
+        workspaceRoot: projectRoot,
+        executionUnit: createApprovedExecutionUnit("WRITE_FILE", "backend/src/agent/planner/clarificationEngine.js")
+      }
     );
 
     assert.equal(write.success, true);
@@ -191,6 +214,81 @@ test("workspace path resolver maps backend/src to existing src layout when backe
       clarificationEngineContent
     );
     assert.equal(await fs.access(path.join(projectRoot, "backend")).then(() => true).catch(() => false), false);
+  } finally {
+    await fs.rm(allowedRoot, { recursive: true, force: true });
+  }
+});
+
+test("workspace path resolver allows missing write targets without realpathing the new file", async () => {
+  const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workai-missing-write-"));
+  const projectRoot = path.join(allowedRoot, "sample-project");
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  try {
+    const resolved = await resolveWorkspacePathSafe(
+      projectRoot,
+      "src/cta.jsx",
+      { allowMissing: true }
+    );
+
+    assert.equal(resolved.relativePath.replace(/\\/g, "/"), "src/cta.jsx");
+
+    const write = await executeTool(
+      "WRITE_FILE",
+      {
+        path: "src/cta.jsx",
+        content: "export default function Cta() { return null; }\n"
+      },
+      {
+        workspaceId: "test-workspace",
+        workspaceRoot: projectRoot,
+        executionUnit: createApprovedExecutionUnit("WRITE_FILE", "src/cta.jsx")
+      }
+    );
+
+    assert.equal(write.success, true);
+    assert.equal(
+      await fs.readFile(path.join(projectRoot, "src", "cta.jsx"), "utf8"),
+      "export default function Cta() { return null; }\n"
+    );
+  } finally {
+    await fs.rm(allowedRoot, { recursive: true, force: true });
+  }
+});
+
+test("workspace read and patch report controlled missing-file errors", async () => {
+  const allowedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "workai-missing-read-"));
+  const projectRoot = path.join(allowedRoot, "sample-project");
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  try {
+    const read = await executeTool(
+      "READ_FILE",
+      { path: "src/missing.jsx" },
+      {
+        workspaceId: "test-workspace",
+        workspaceRoot: projectRoot,
+        executionUnit: createApprovedExecutionUnit("READ_FILE", "src/missing.jsx")
+      }
+    );
+    assert.equal(read.success, false);
+    assert.equal(read.error, "FILE_NOT_FOUND");
+
+    const patch = await executeTool(
+      "APPLY_PATCH",
+      {
+        file: "src/missing.jsx",
+        find: "before",
+        replace: "after"
+      },
+      {
+        workspaceId: "test-workspace",
+        workspaceRoot: projectRoot,
+        executionUnit: createApprovedExecutionUnit("APPLY_PATCH", "src/missing.jsx")
+      }
+    );
+    assert.equal(patch.success, false);
+    assert.equal(patch.error, "PATCH_TARGET_MISSING");
   } finally {
     await fs.rm(allowedRoot, { recursive: true, force: true });
   }
@@ -224,7 +322,11 @@ test("workspace tools normalize CommonJS output to ESM in module projects", asyn
           '} }'
         ].join('\n')
       },
-      { workspaceId: "test-workspace", workspaceRoot: projectRoot }
+      {
+        workspaceId: "test-workspace",
+        workspaceRoot: projectRoot,
+        executionUnit: createApprovedExecutionUnit("WRITE_FILE", "src/agent/planner/clarificationEngine.js")
+      }
     );
 
     assert.equal(result.success, true);
@@ -257,7 +359,11 @@ test("workspace tools preserve CommonJS output when the project is CommonJS", as
         path: "target.js",
         content: 'module.exports = { hello() { return "hi"; } }'
       },
-      { workspaceId: "test-workspace", workspaceRoot: projectRoot }
+      {
+        workspaceId: "test-workspace",
+        workspaceRoot: projectRoot,
+        executionUnit: createApprovedExecutionUnit("WRITE_FILE", "target.js")
+      }
     );
 
     assert.equal(result.success, true);
@@ -824,10 +930,14 @@ test("workspace tools cannot read absolute system paths", async () => {
     const result = await executeTool(
       "READ_FILE",
       { path: "C:\\Windows\\System32\\drivers\\etc\\hosts" },
-      { workspaceId: "test-workspace", workspaceRoot: projectRoot }
+      {
+        workspaceId: "test-workspace",
+        workspaceRoot: projectRoot,
+        executionUnit: createApprovedExecutionUnit("READ_FILE", "C:/Windows/System32/drivers/etc/hosts")
+      }
     );
     assert.equal(result.success, false);
-    assert.match(result.error, /relative to the selected workspace/);
+    assert.equal(result.error, "WORKSPACE_ESCAPE_ATTEMPT");
 
     const terminal = await executeTool(
       "RUN_TERMINAL",

@@ -1,28 +1,30 @@
+﻿import { classifyAnswerOnlyObjective } from "./planning/taskModeFirewall.js";
+
 const FEATURE_PATTERNS = {
-  website: /\bwebsite\b|trang\s*web|tạo\s*web/i,
-  app: /\bapp\b|ứng\s*dụng|application/i,
-  cart: /giỏ\s*hàng|\bcart\b|shopping\s*cart/i,
-  payment: /thanh\s*toán|\bpayment\b|checkout/i,
-  qr: /\bqr\b|qr\s*code|mã\s*qr/i,
+  website: /\bwebsite\b|trang\s*web|táº¡o\s*web/i,
+  app: /\bapp\b|á»©ng\s*dá»¥ng|application/i,
+  cart: /giá»\s*hÃ ng|\bcart\b|shopping\s*cart/i,
+  payment: /thanh\s*toÃ¡n|\bpayment\b|checkout/i,
+  qr: /\bqr\b|qr\s*code|mÃ£\s*qr/i,
   sepay: /\bsepay\b/i
 };
 
 const TASK_TYPE_PATTERNS = {
   chat: [
-    /^(?:hello|hi|hey|chào|hello_workai|xin chào|test)$/i,
+    /^(?:hello|hi|hey|chÃ o|hello_workai|xin chÃ o|test)$/i,
     /\b(?:just|only)\s+(?:reply|answer|respond|say)\b/i,
     /^(?:what|who|why|how|when|where)\s+(?:is|are|was|were|do|does|did)\s+(?:you|your)\b/i,
-    /\b(?:không\s+cần|ko\s+cần|chỉ\s+cần|trả\s+lời)\b/i,
-    /^(?:repeat|say|echo|summarize|tổng\s+kết|lặp\s+lại)\b/i
+    /\b(?:khÃ´ng\s+cáº§n|ko\s+cáº§n|chá»‰\s+cáº§n|tráº£\s+lá»i)\b/i,
+    /^(?:repeat|say|echo|summarize|tá»•ng\s+káº¿t|láº·p\s+láº¡i)\b/i
   ],
   search: [
-    /\b(?:tìm|search|find|where\s+is|show\s+me|locate)\b/i,
-    /\b(?:cho\s+biết|liệt\s+kê|list|what\s+(?:is|are)\s+(?:the|a|an))\b.*\b(?:file|folder|directory|thư\s+mục)\b/i,
-    /\b(?:version|phiên\s+bản)\b/i
+    /\b(?:tÃ¬m|search|find|where\s+is|show\s+me|locate)\b/i,
+    /\b(?:cho\s+biáº¿t|liá»‡t\s+kÃª|list|what\s+(?:is|are)\s+(?:the|a|an))\b.*\b(?:file|folder|directory|thÆ°\s+má»¥c)\b/i,
+    /\b(?:version|phiÃªn\s+báº£n)\b/i
   ],
   analysis: [
-    /\b(?:phân\s+tích|analyze|analyse|inspect|review|check|kiểm\s+tra|xem\s+xét)\b/i,
-    /\b(?:đọc|read|show|display|print|dump).*\b(?:file|nội\s+dung|content)\b/i,
+    /\b(?:phÃ¢n\s+tÃ­ch|analyze|analyse|inspect|review|check|kiá»ƒm\s+tra|xem\s+xÃ©t)\b/i,
+    /\b(?:Ä‘á»c|read|show|display|print|dump).*\b(?:file|ná»™i\s+dung|content)\b/i,
     /\b(?:what\s+(?:is|are|does)|how\s+(?:is|are|does|many))\b(?!.*(?:add|create|write|modify))/i,
     /\b(?:explain\s+(?:what|this|the|why|how))/i
   ]
@@ -35,7 +37,17 @@ const WRITE_INTENT_PATTERNS = [
 ];
 
 const CLEAR_READ_ONLY_PATTERN =
-  /\bdo\s+not\s+(?:modify|change|edit|write)(?:\s+(?:any\s+)?(?:files?|code))?\b|\bdo\s+not\s+modify\s+files?\b|\bkhÃ´ng\s+(?:sá»­a|thay\s*Ä‘á»•i|viáº¿t)\b/i;
+  /\bdo\s+not\s+(?:modify|change|edit|write)(?:\s+(?:any\s+)?(?:files?|code))?\b|\bdo\s+not\s+modify\s+files?\b|\bkhÃƒÂ´ng\s+(?:sÃ¡Â»Â­a|thay\s*Ã„â€˜Ã¡Â»â€¢i|viÃ¡ÂºÂ¿t)\b/i;
+
+function normalizeIntentText(value = "") {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
 
 export const REQUESTED_FILE_KIND = Object.freeze({
   EXPLICIT_CREATE: 'EXPLICIT_CREATE',
@@ -67,6 +79,7 @@ function classifyRequestedFileKind(objective, file) {
 
   const isPackageJson = /(^|\/)package\.json$/i.test(normalizedFile);
   const isConditional = isPackageJson && /\b(?:unless\s+(?:absolutely\s+)?necessary|only\s+if\s+necessary|if\s+necessary|if\s+needed)\b/i.test(local);
+  const isNegatedPackageWrite = isPackageJson && /\bdo\s+not\s+(?:modify|change|edit|write|patch|update|replace|remove|delete|refactor)\b/i.test(local);
   const isReferenceOnly = /\b(?:use|read|inspect|check|review|open|view|show|display|look\s+at)\b[\s\S]{0,40}\b(?:if\s+it\s+exists|if\s+exists)\b/i.test(local)
     || /\b(?:if\s+it\s+exists|if\s+exists)\b[\s\S]{0,40}\b(?:use|read|inspect|check|review|open|view|show|display|look\s+at)\b/i.test(local);
   const isDerived = /\binfer\b[\s\S]{0,40}\bpackage\.json\b/i.test(local)
@@ -81,6 +94,7 @@ function classifyRequestedFileKind(objective, file) {
 
   if (isDerived) return REQUESTED_FILE_KIND.DERIVED;
   if (isDiscoverIfExists) return REQUESTED_FILE_KIND.DISCOVER_IF_EXISTS;
+  if (isNegatedPackageWrite) return REQUESTED_FILE_KIND.REFERENCE_ONLY;
   if (isConditional || (isPackageJson && /\bdo\s+not\s+modify\b/i.test(local))) return REQUESTED_FILE_KIND.CONDITIONAL;
   if (isReferenceOnly) return REQUESTED_FILE_KIND.REFERENCE_ONLY;
   if (writeCreate) return REQUESTED_FILE_KIND.EXPLICIT_CREATE;
@@ -132,46 +146,44 @@ export function classifyTaskType(prompt) {
   const text = String(prompt || "").trim();
   if (!text) return "CHAT";
 
-  // CODING override: if prompt contains any coding/change intent, it must be CODING.
-  // "Do not create a new project" is a scope constraint, not a read-only request.
-  const explicitlyReadOnly = CLEAR_READ_ONLY_PATTERN.test(text);
-  const writeIntentText = text.replace(CLEAR_READ_ONLY_PATTERN, " ");
+  if (classifyAnswerOnlyObjective(text)) return "CHAT";
 
-  if (WRITE_INTENT_PATTERNS.some(pattern => pattern.test(writeIntentText))) return "CODING";
+  const normalized = normalizeIntentText(text);
+  const readOnlyConstraint = /\b(?:do not modify|do not change|do not edit|do not write|khong sua|khong thay doi|khong viet)\b/.test(normalized);
+
+  if (WRITE_INTENT_PATTERNS.some(pattern => pattern.test(normalized))) return "CODING";
 
   const codingActions = [
-    /\b(?:add|create|write|implement|thêm|tạo)\b/i,
-    /\b(?:fix|fixbug|sửa)\b/i,
-    /\b(?:update|cập\s*nhật)\b/i,
-    /\b(?:change|modify|replace|refactor|thay)\b/i,
-    /\b(?:remove|delete|xóa)\b/i,
-    /\b(?:patch|apply\s*patch)\b/i,
-    /\b(?:run[\s\S]*?\b(?:command|script|test|npm|node|python|bash|docker))\b/i,
-    /\b(?:chạy\s+(?:npm|test|lệnh|script))\b/i,
-    /\b(?:sau\s+khi\s+(?:sửa|thay\s+đổi|edit))\b/i,
-    /\b(?:after\s+(?:modifying|editing|changing))\b/i
+    /\b(?:add|create|write|implement|them|tao)\b/,
+    /\b(?:fix|fixbug|sua)\b/,
+    /\b(?:update|cap\s*nhat)\b/,
+    /\b(?:change|modify|replace|refactor|thay)\b/,
+    /\b(?:remove|delete|xoa)\b/,
+    /\b(?:patch|apply\s*patch)\b/,
+    /\b(?:run[\s\S]*?\b(?:command|script|test|npm|node|python|bash|docker))\b/,
+    /\b(?:chay\s+(?:npm|test|lenh|script))\b/,
+    /\b(?:sau\s+khi\s+(?:sua|thay\s+doi|edit))\b/,
+    /\b(?:after\s+(?:modifying|editing|changing))\b/
   ];
   for (const pattern of codingActions) {
-    if (pattern.test(writeIntentText) && !explicitlyReadOnly) return "CODING";
+    if (pattern.test(normalized) && !readOnlyConstraint) return "CODING";
   }
 
-  if (explicitlyReadOnly) {
-    // If only asks for direct answer with no reads, it's CHAT
-    if (/^(?:reply|answer|respond|say|trả\s+lời|chỉ\s+cần)\b/i.test(text) || text.split(/\s+/).length <= 5) return "CHAT";
-    // If asks to list/search/find and says do not modify → SEARCH
-    if (/\b(?:tìm|search|find|list|liệt\s+kê|where\s+is|show\s+me|locate)\b/i.test(text)) return "SEARCH";
-    // If asks to read/explain/summarize and says do not modify → ANALYSIS
+  if (readOnlyConstraint) {
+    if (/^(?:reply|answer|respond|say|tra\s*loi|chi\s*can)\b/.test(normalized) || normalized.split(/\s+/).length <= 5) return "CHAT";
+    if (/\b(?:tim|search|find|list|liet\s+ke|where\s+is|show\s+me|locate)\b/.test(normalized)) return "SEARCH";
     return "ANALYSIS";
   }
 
-  // Check in priority order: CHAT → SEARCH → ANALYSIS
-  // Strong CHAT patterns: direct reply/answer intent
+  if (/\b(?:tim|search|find|list|liet\s+ke|where\s+is|show\s+me|locate|version)\b/.test(normalized)) return "SEARCH";
+  if (/\b(?:doc|read|show|display|print|dump|phan\s+tich|kiem\s+tra|analyze|analyse|inspect|review|check|xem\s+xet|explain)\b/.test(normalized)) return "ANALYSIS";
+
   const strongChatPatterns = [
-    /^(?:reply|answer|respond|say)\b/i,
-    /\b(?:exactly|chính\s*xác)\s+one\s+line\b/i,
-    /\b(?:one|single)\s+line\b/i
+    /^(?:reply|answer|respond|say)\b/,
+    /\b(?:exactly|chinh\s*xac)\s+one\s+line\b/,
+    /\b(?:one|single)\s+line\b/
   ];
-  if (strongChatPatterns.some(p => p.test(text))) return "CHAT";
+  if (strongChatPatterns.some(p => p.test(normalized))) return "CHAT";
 
   for (const lc of ["chat", "search", "analysis"]) {
     for (const pattern of TASK_TYPE_PATTERNS[lc]) {
@@ -179,12 +191,10 @@ export function classifyTaskType(prompt) {
     }
   }
 
-  // Short prompts with no action words default to chat
-  if (text.split(/\s+/).length <= 3) return "CHAT";
+  if (normalized.split(/\s+/).length <= 3) return "CHAT";
 
   return "CODING";
 }
-
 function findMatchedKeywords(objective, taskClass) {
   const text = String(objective || '');
   const keywordMap = {
@@ -206,19 +216,19 @@ function classifyTaskClass(objective, taskType) {
   if (taskType !== 'CODING') return taskType;
   const text = String(objective || '');
 
-  // BUGFIX — fix/patch/bug keywords (highest priority)
+  // BUGFIX â€” fix/patch/bug keywords (highest priority)
   if (/\b(?:fix|bug|patch|error|crash|broken|not\s+working|failed)\b/i.test(text)) return 'BUGFIX';
 
-  // REFACTOR — restructure/rewrite keywords
+  // REFACTOR â€” restructure/rewrite keywords
   if (/\b(?:refactor|restructure|clean\s+up|reorganize|rewrite)\b/i.test(text)) return 'REFACTOR';
 
-  // CONFIG_CHANGE — setup/install/configure keywords
+  // CONFIG_CHANGE â€” setup/install/configure keywords
   if (/\b(?:config(?:ure)?|setup|install|environment|env\s+variable)\b/i.test(text)) return 'CONFIG_CHANGE';
 
-  // LIBRARY_CHANGE — add/remove/install library/package
+  // LIBRARY_CHANGE â€” add/remove/install library/package
   if (/\b(?:add\s+(?:a\s+)?(?:library|package|dependency)|install\s+(?:a\s+)?(?:library|package|dependency)|remove\s+(?:a\s+)?(?:library|package|dependency))\b/i.test(text)) return 'LIBRARY_CHANGE';
 
-  // PRODUCT_BUILD — very restrictive: only for "complete product" type requests
+  // PRODUCT_BUILD â€” very restrictive: only for "complete product" type requests
   const productPatterns = [
     /\bcomplete\s+(?:product|application|system|platform|solution)\b/i,
     /\bfull\s+(?:application|stack|system|platform)\b/i,
@@ -227,27 +237,27 @@ function classifyTaskClass(objective, taskType) {
     /\bmulti[-\s]module\s+(?:project|application|system)\b/i,
     /\bcomplete\s+(?:frontend|front-end)\s*\+\s*(?:backend|back-end)\b/i,
     /\becommerce|e-commerce\b/i,
-    /\bwebsite\s+bán\s+hàng\b/i,
+    /\bwebsite\s+bÃ¡n\s+hÃ ng\b/i,
   ];
   if (productPatterns.some(p => p.test(text))) return 'PRODUCT_BUILD';
   // Also treat requests with multiple commerce features (cart + payment/qr/sepay) as PRODUCT_BUILD
   const commerceFeatureCount = [
-    /\b(?:giỏ\s*hàng|cart)\b/i,
-    /\b(?:thanh\s*toán|payment|checkout)\b/i,
+    /\b(?:giá»\s*hÃ ng|cart)\b/i,
+    /\b(?:thanh\s*toÃ¡n|payment|checkout)\b/i,
     /\bqr\s*(?:code)?\b/i,
     /\bsepay\b/i
   ].filter(p => p.test(text)).length;
-  if (commerceFeatureCount >= 2 && /\b(?:website|web|shop|store|bán\s+hàng|ecommerce|e-commerce)\b/i.test(text)) return 'PRODUCT_BUILD';
+  if (commerceFeatureCount >= 2 && /\b(?:website|web|shop|store|bÃ¡n\s+hÃ ng|ecommerce|e-commerce)\b/i.test(text)) return 'PRODUCT_BUILD';
 
-  // FULLSTACK_FEATURE — both backend and frontend keywords present
+  // FULLSTACK_FEATURE â€” both backend and frontend keywords present
   const hasBackend = /\b(?:api|endpoint|server\s+side|backend|database|schema|route|controller|service|middleware|repository)\b/i.test(text);
   const hasFrontend = /\b(?:ui|frontend|component|page|layout|landing\s+page|homepage|hero|theme|css|tailwind|responsive|navigation)\b/i.test(text);
   if (hasBackend && hasFrontend) return 'FULLSTACK_FEATURE';
 
-  // BACKEND_FEATURE — API/server keywords without frontend keywords
+  // BACKEND_FEATURE â€” API/server keywords without frontend keywords
   if (hasBackend) return 'BACKEND_FEATURE';
 
-  // UI_BUILD — explicit UI/page/component keywords
+  // UI_BUILD â€” explicit UI/page/component keywords
   const uiPatterns = [
     /\b(?:create|build|design|implement|develop|redesign)\b[\s\S]{0,80}\b(?:ui|frontend|page|component|screen|dashboard|admin\s+page|layout|form|card|button|navbar|navigation|css|tailwind|responsive|theme)\b/i,
     /\blanding\s+page\b/, /\bhomepage\b/, /\bhero\b/,
@@ -319,9 +329,9 @@ export function buildAcceptanceCriteria(prompt = "") {
     /\bonly\s+the\s+number\b/i,
     /\bjust\s+(?:say|answer|reply)\b/i
   ];
-  const saysDoNotModify = CLEAR_READ_ONLY_PATTERN.test(objective);
-  let taskMode;
-  if (taskType === "CODING") {
+  const normalizedObjective = normalizeIntentText(objective);
+  const saysDoNotModify = /\b(?:do not modify|do not change|do not edit|do not write|khong sua|khong thay doi|khong viet)\b/.test(normalizedObjective);
+  let taskMode;  if (taskType === "CODING") {
     taskMode = "coding";
   } else if (qaSignals.some(rx => rx.test(objective)) || taskType === "CHAT") {
     taskMode = "qa";
@@ -382,4 +392,5 @@ export function acceptanceCriteriaToPrompt(criteria) {
   lines.push(`- Forbidden incomplete placeholders: ${criteria.forbiddenPlaceholders.join(", ")}.`);
   return lines.join("\n");
 }
+
 

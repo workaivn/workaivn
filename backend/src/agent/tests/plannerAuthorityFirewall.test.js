@@ -52,7 +52,7 @@ test('Phase 4.28: model output authority is rejected by the firewall', () => {
   });
 
   assert.equal(result.valid, false);
-  assert.match(result.validation.reason, /forbidden authority source|unknown authority source|authority missing/i);
+  assert.match(result.validation.reason, /authority source is not executable|forbidden authority source|unknown authority source|authority missing/i);
 });
 
 test('Phase 4.28: execution units include firewall metadata', () => {
@@ -61,10 +61,10 @@ test('Phase 4.28: execution units include firewall metadata', () => {
     type: 'WRITE',
     description: 'Write file',
     targetFiles: ['src/app.js'],
-    authoritySource: 'workspace_evidence'
+    authoritySource: 'workspace_authority'
   });
 
-  assert.equal(unit.authoritySource, 'workspace_evidence');
+  assert.equal(unit.authoritySource, 'workspace_authority');
   assert.equal(unit.authorityState, 'candidate');
   assert.equal(unit.approvedByFirewall, false);
   assert.equal(unit.approvalId, null);
@@ -78,7 +78,7 @@ test('Phase 4.28: recovery tasks are approved before insertion', () => {
       goal: 'Read source',
       tool: 'READ_FILE',
       toolArgs: { path: 'src/app.js' },
-      authoritySource: 'workspace_evidence',
+      authoritySource: 'workspace_authority',
       authorityState: 'approved',
       approvalId: 'approval:base',
       approvedByFirewall: true

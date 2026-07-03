@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { ExecutionUnit } from './executionUnit.js';
 import { verifyExecutionUnit, verifyExecutionCompletion } from './executionVerifier.js';
+import { assertExecutionGraphClean } from '../execution/ExecutionInputGuard.js';
 
 function unique(list = []) {
   return [...new Set((Array.isArray(list) ? list : []).map(value => String(value || '').trim()).filter(Boolean))];
@@ -72,6 +73,10 @@ export class ExecutionGraph {
 
   allUnits() {
     return [...this.nodes.values()];
+  }
+
+  get approvedUnits() {
+    return this.allUnits();
   }
 
   readyUnits() {
@@ -212,6 +217,10 @@ export class ExecutionGraph {
     for (const id of this.nodes.keys()) walk(id);
     this.validationErrors = errors;
     return { valid: errors.length === 0, errors };
+  }
+
+  assertClean() {
+    return assertExecutionGraphClean(this);
   }
 
   finish() {

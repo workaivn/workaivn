@@ -2,6 +2,30 @@ function unique(values = []) {
   return [...new Set((Array.isArray(values) ? values : []).map(value => String(value || '').trim()).filter(Boolean))];
 }
 
+function calculateExecutionLevels(units = []) {
+  const list = Array.isArray(units) ? units : [];
+  const byId = new Map(list.map(unit => [unit.id, unit]));
+  const memo = new Map();
+
+  const levelOf = (id) => {
+    if (memo.has(id)) return memo.get(id);
+    const unit = byId.get(id);
+    const deps = unique(unit?.prerequisites || unit?.dependencies || []).filter(dep => byId.has(dep));
+    const level = deps.length === 0 ? 0 : 1 + Math.max(...deps.map(dep => levelOf(dep)));
+    memo.set(id, level);
+    return level;
+  };
+
+  for (const id of byId.keys()) levelOf(id);
+  const groups = [];
+  for (const unit of list) {
+    const level = memo.get(unit.id) || 0;
+    if (!groups[level]) groups[level] = [];
+    groups[level].push(unit);
+  }
+  return groups.filter(Boolean);
+}
+
 export function getReadyExecutionUnits(executionGraph = null) {
   if (!executionGraph || typeof executionGraph.readyUnits !== 'function') return [];
   return executionGraph.readyUnits();
@@ -35,6 +59,7 @@ export function scheduleExecutionUnits(executionGraph = null) {
       executionGraph.startUnit(unit.id);
     }
   }
-  const parallelGroups = groupParallelExecutionUnits(readyUnits);
-  return { readyUnits, parallelGroups };
+  const levels = calculateExecutionLevels(typeof executionGraph.allUnits === 'function' ? executionGraph.allUnits() : readyUnits);
+  const parallelGroups = levels.length > 0 ? levels : groupParallelExecutionUnits(readyUnits);
+  return { readyUnits, levels, parallelGroups };
 }

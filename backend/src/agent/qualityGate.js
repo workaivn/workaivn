@@ -3,6 +3,7 @@ import path from "path";
 import { resolveWorkspacePathSafe } from "./workspace.js";
 import { isSameCommand, matchValidationCommand } from "./validationCommandMatcher.js";
 import { extractExternalFailureFilesFromText } from "./execution/executionStateRegistry.js";
+import { consumeTaskIntent } from "./planner/taskIntent.js";
 const DEBUG = () => process.env.DEBUG_AGENT === "true" || process.env.WORKAI_AGENT_DEBUG === "true";
 
 const MEANINGFUL_EXTENSIONS = new Set([
@@ -104,11 +105,16 @@ export async function evaluateQualityGate(input = {}) {
   const requiredCommands = Array.isArray(input.requiredValidationCommands)
     ? input.requiredValidationCommands
     : (input.requiredCommands || criteria.requiredCommands || []);
-  const taskType = criteria.taskType || "CODING";
+  const taskIntent = input.taskIntent || criteria.taskIntent || null;
+  const taskType = String(taskIntent?.goalType || criteria.taskType || "CODING").toUpperCase();
+  if (taskIntent) {
+    consumeTaskIntent("qualityGate", taskIntent);
+  }
   // Intent-aware mode override
-  let mode = criteria.taskMode || (taskType === "CHAT" ? "qa" : (taskType === "CODING" ? "coding" : "read_only"));
-  const intentMode = String(criteria.intentMode || "");
-  if (intentMode === "READ_ONLY") mode = "read_only";
+  let mode = String(taskIntent?.taskMode || criteria.taskMode || "").toLowerCase();
+  if (!mode) mode = taskType === "CHAT" ? "qa" : (taskType === "CODING" ? "coding" : "read_only");
+  const intentMode = String(taskIntent?.executionMode || criteria.intentMode || "");
+  if (intentMode === "READ_ONLY" || taskType === "READ_ONLY") mode = "read_only";
   if ((intentMode === "WRITE" || intentMode === "WRITE_AND_RUN") && !criteria.doNotModify) mode = "coding";
   if (DEBUG()) {
     const terminals = toolCalls.filter(call => call.tool === "RUN_TERMINAL");

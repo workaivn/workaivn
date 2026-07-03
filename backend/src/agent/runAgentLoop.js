@@ -44,6 +44,11 @@ import {
   buildAcceptanceCriteria
 } from "./acceptanceCriteria.js";
 import { evaluateQualityGate } from "./qualityGate.js";
+import {
+  assertPlannerEntryAllowed,
+  classifyTaskMode,
+  classifyAnswerOnlyObjective,
+} from "./planning/taskModeFirewall.js";
 import { Planner } from "./planner/planner.js";
 import { TaskStatus } from "./planner/plannerTypes.js";
 import { Task } from "./planner/task.js";
@@ -61,8 +66,10 @@ import { buildPlannerContext } from "./planner/contextBuilder.js";
 import { buildPlanningContext } from "./planner/context/PlanningContextBuilder.js";
 import { resolvePlannerPolicies } from "./planner/context/PlannerPolicy.js";
 import { checkValidationCommandCandidate } from "./planner/context/PlannerAuthorityFirewall.js";
+import { createPlannerRuntimeState, resetPlannerRuntimeState } from "./planner/runtimeState.js";
 import { expandPlannerTasks } from "./planner/taskExpander.js";
 import { buildPlannerExecutionMetadata, buildKnowledgeGraph, detectProjectIntent, detectWorkspaceState, resolveBootstrapProfile } from "./projectIntelligence/index.js";
+import { assertTaskIntentConsistency, createTaskIntent, freezeTaskIntent, consumeTaskIntent } from "./planner/taskIntent.js";
 import { validatePlannerAssumptions, filterUnverifiedFiles, ASSUMPTION_ACTION, decideAssumptionAction } from "./planner/assumptionValidator.js";
 import { createProposal, promoteProposalGraphToTasks } from "./planner/proposals/index.js";
 import { createExecutionPlanner } from "./executionPlanner/executionPlanner.js";
@@ -1343,29 +1350,339 @@ function markBatchFailed(batchState, details = {}) {
   return batchState;
 }
 
-function parseWriteCoordinatorResponse(rawResponse, expectedPaths = [], workspaceRoot = '') {
-  const parsed = parseAgentResponse(rawResponse);
-  const normalized = normalizeCoordinatorResponse(parsed);
-  if (normalized.protocolError) {
+function normalizeCoordinatorFileList(files = []) {
+  return [...new Set((Array.isArray(files) ? files : [])
+    .map(value => String(value || "").replace(/\\/g, "/").trim())
+    .filter(Boolean))];
+}
+
+function toCoordinatorResponseText(rawResponse = "") {
+  if (typeof rawResponse === "string") return rawResponse;
+  if (rawResponse == null) return "";
+  try {
+    return JSON.stringify(rawResponse);
+  } catch {
+    return String(rawResponse);
+  }
+}
+
+function extractFencePathInfo(info = "") {
+  const text = String(info || "");
+  const patterns = [
+    /(?:^|\s)(?:path|filename|file)\s*=\s*["']?([^"'`\s]+)["']?/i,
+    /(?:^|\s)(?:path|filename|file)\s*:\s*([^,\s]+(?:\.[A-Za-z0-9]+)?)/i
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) {
+      return String(match[1]).trim();
+    }
+  }
+  return "";
+}
+
+function tryParseInlineJsonCandidate(text = "") {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+function extractCoordinatorEntriesFromText(rawResponse = "", expectedPaths = [], committedFiles = [], workspaceRoot = "") {
+  const text = toCoordinatorResponseText(rawResponse).replace(/\r/g, "");
+  const lines = text.split("\n");
+  const entries = [];
+  const unpathed = [];
+  let currentHeaderPath = "";
+  let currentBuffer = [];
+  let inFence = false;
+  let fenceInfo = "";
+  let fenceBuffer = [];
+
+  const flushPlain = () => {
+    const content = currentBuffer.join("\n").trim();
+    if (!content) {
+      currentBuffer = [];
+      currentHeaderPath = "";
+      return;
+    }
+    const parsedJson = tryParseInlineJsonCandidate(content.startsWith("JSON:") ? content.slice(5).trim() : content);
+    if (parsedJson && typeof parsedJson === "object" && !Array.isArray(parsedJson)) {
+      const pathValue = String(parsedJson.path || parsedJson.file || parsedJson.target || currentHeaderPath || "").trim();
+      const contentValue = typeof parsedJson.content === "string"
+        ? parsedJson.content
+        : typeof parsedJson.text === "string"
+          ? parsedJson.text
+          : typeof parsedJson.code === "string"
+            ? parsedJson.code
+            : typeof parsedJson.source === "string"
+              ? parsedJson.source
+              : "";
+      if (pathValue && contentValue.trim()) {
+        entries.push({ path: sanitizeCoordinatorTargetPath(pathValue, workspaceRoot), content: contentValue });
+      } else if (contentValue.trim()) {
+        unpathed.push(contentValue);
+      }
+      currentBuffer = [];
+      currentHeaderPath = "";
+      return;
+    }
+    if (currentHeaderPath) {
+      entries.push({ path: sanitizeCoordinatorTargetPath(currentHeaderPath, workspaceRoot), content });
+    } else {
+      unpathed.push(content);
+    }
+    currentBuffer = [];
+    currentHeaderPath = "";
+  };
+
+  const flushFence = () => {
+    const content = fenceBuffer.join("\n").trim();
+    if (!content) {
+      fenceBuffer = [];
+      fenceInfo = "";
+      return;
+    }
+    const pathValue = sanitizeCoordinatorTargetPath(extractFencePathInfo(fenceInfo) || currentHeaderPath, workspaceRoot);
+    if (pathValue) {
+      entries.push({ path: pathValue, content });
+    } else {
+      unpathed.push(content);
+    }
+    fenceBuffer = [];
+    fenceInfo = "";
+  };
+
+  for (const line of lines) {
+    const trimmed = String(line || "").trim();
+    if (trimmed.startsWith("```")) {
+      if (inFence) {
+        flushFence();
+        inFence = false;
+        continue;
+      }
+      if (currentBuffer.length > 0) {
+        flushPlain();
+      }
+      inFence = true;
+      fenceInfo = trimmed.slice(3).trim();
+      fenceBuffer = [];
+      continue;
+    }
+
+    if (inFence) {
+      fenceBuffer.push(line);
+      continue;
+    }
+
+    if (/^JSON:\s*\{/i.test(trimmed)) {
+      if (currentBuffer.length > 0) {
+        flushPlain();
+      }
+      const jsonText = trimmed.replace(/^JSON:\s*/i, "");
+      const parsedJson = tryParseInlineJsonCandidate(jsonText);
+      if (parsedJson && typeof parsedJson === "object" && !Array.isArray(parsedJson)) {
+        const pathValue = sanitizeCoordinatorTargetPath(String(parsedJson.path || parsedJson.file || parsedJson.target || "").trim(), workspaceRoot);
+        const contentValue = typeof parsedJson.content === "string"
+          ? parsedJson.content
+          : typeof parsedJson.text === "string"
+            ? parsedJson.text
+            : typeof parsedJson.code === "string"
+              ? parsedJson.code
+              : typeof parsedJson.source === "string"
+                ? parsedJson.source
+                : "";
+        if (pathValue && contentValue.trim()) {
+          entries.push({ path: pathValue, content: contentValue });
+          continue;
+        }
+        if (contentValue.trim()) {
+          unpathed.push(contentValue);
+          continue;
+        }
+      }
+    }
+
+    const headerMatch = trimmed.match(/^(?:File|Path)\s*:\s*(.+)$/i);
+    if (headerMatch?.[1]) {
+      if (currentBuffer.length > 0) {
+        flushPlain();
+      }
+      currentHeaderPath = String(headerMatch[1] || "").trim();
+      continue;
+    }
+
+    currentBuffer.push(line);
+  }
+
+  if (inFence) {
+    flushFence();
+  } else if (currentBuffer.length > 0) {
+    flushPlain();
+  }
+
+  const explicitPaths = normalizeCoordinatorFileList(entries.map(entry => entry.path));
+  const expectedSet = new Set(normalizeCoordinatorFileList(expectedPaths));
+  const committedSet = new Set(normalizeCoordinatorFileList(committedFiles));
+  const missingCandidates = [...expectedSet].filter(pathValue => !explicitPaths.includes(pathValue) && !committedSet.has(pathValue));
+
+  if (unpathed.length > 0) {
+    if (missingCandidates.length === 1) {
+      entries.push({ path: missingCandidates[0], content: unpathed.join("\n").trim() });
+    } else {
+      return {
+        success: false,
+        protocolError: true,
+        reason: missingCandidates.length > 1
+          ? "AMBIGUOUS_UNPATHED_RESPONSE"
+          : "UNPATHED_RESPONSE_WITHOUT_MISSING_TARGET",
+        originalSchema: "content",
+        files: []
+      };
+    }
+  }
+
+  return {
+    success: true,
+    protocolError: false,
+    reason: null,
+    originalSchema: "content",
+    files: entries
+  };
+}
+
+function getWriteBatchCompleteness({
+  batchId = null,
+  expectedFiles = [],
+  parsedFiles = [],
+  committedFiles = []
+} = {}) {
+  const expected = normalizeCoordinatorFileList(expectedFiles);
+  const parsed = normalizeCoordinatorFileList(parsedFiles);
+  const committed = normalizeCoordinatorFileList(committedFiles);
+  const expectedSet = new Set(expected);
+  const parsedSet = new Set(parsed);
+  const committedSet = new Set(committed);
+  const combinedSet = new Set([...committedSet, ...parsedSet]);
+  const missingFiles = expected.filter(file => !combinedSet.has(file));
+  const extraFiles = parsed.filter(file => !expectedSet.has(file));
+  const complete = missingFiles.length === 0 && extraFiles.length === 0;
+  console.log('[WRITE_BATCH_COMPLETENESS_CHECK]', {
+    batchId,
+    expectedFiles: expected,
+    parsedFiles: parsed,
+    committedFiles: committed,
+    missingFiles,
+    extraFiles,
+    complete
+  });
+  if (missingFiles.length > 0) {
+    console.log('[WRITE_BATCH_MISSING_FILES]', {
+      batchId,
+      missingFiles
+    });
+  }
+  return {
+    expectedFiles: expected,
+    parsedFiles: parsed,
+    committedFiles: committed,
+    missingFiles,
+    extraFiles,
+    complete
+  };
+}
+
+function getIncompleteWriteBatches(writeCoordinatorState = {}) {
+  const batches = [];
+  if (writeCoordinatorState?.batchState) batches.push(writeCoordinatorState.batchState);
+  for (const group of Array.isArray(writeCoordinatorState?.coordinatorGroups) ? writeCoordinatorState.coordinatorGroups : []) {
+    if (group?.batchState) batches.push(group.batchState);
+  }
+
+  return batches.filter(batch => {
+    const expected = normalizeCoordinatorFileList(batch?.expectedFiles || []);
+    const committed = normalizeCoordinatorFileList(batch?.committedFiles || []);
+    const status = String(batch?.status || "").toUpperCase();
+    return status !== "COMMITTED" || expected.some(file => !committed.includes(file));
+  });
+}
+
+function parseWriteCoordinatorResponse(rawResponse, expectedPaths = [], workspaceRoot = '', committedFiles = []) {
+  const expected = normalizeCoordinatorFileList(expectedPaths);
+  let parsed = null;
+  let normalized = null;
+  let files = [];
+  let protocolError = false;
+  let protocolSchema = null;
+  let reason = null;
+
+  try {
+    parsed = parseAgentResponse(rawResponse);
+    normalized = normalizeCoordinatorResponse(parsed);
+    if (normalized.protocolError) {
+      protocolError = true;
+      protocolSchema = normalized.originalSchema || null;
+      reason = normalized.reason || 'WRITE_COORDINATOR_PROTOCOL_ERROR';
+      files = [];
+    } else {
+      files = Array.isArray(normalized.files) ? normalized.files : [];
+    }
+  } catch (error) {
+    const textResult = extractCoordinatorEntriesFromText(rawResponse, expected, committedFiles, workspaceRoot);
+    if (textResult?.success) {
+      files = Array.isArray(textResult.files) ? textResult.files : [];
+      normalized = textResult;
+      parsed = toCoordinatorResponseText(rawResponse);
+    } else {
+      protocolError = true;
+      protocolSchema = textResult?.originalSchema || null;
+      reason = textResult?.reason || error?.message || 'WRITE_COORDINATOR_PROTOCOL_ERROR';
+      return {
+        success: false,
+        protocolError: true,
+        protocolSchema,
+        reason,
+        parsed: null,
+        entries: [],
+        expectedPaths: expected,
+        returnedPaths: [],
+        parsedFiles: [],
+        committedFiles: [],
+        missingFiles: expected,
+        extraFiles: [],
+        errors: [reason],
+        normalized: textResult || null
+      };
+    }
+  }
+
+  if (protocolError) {
     return {
       success: false,
       protocolError: true,
-      protocolSchema: normalized.originalSchema || null,
-      reason: normalized.reason || 'WRITE_COORDINATOR_PROTOCOL_ERROR',
+      protocolSchema,
+      reason,
       parsed,
       entries: [],
-      expectedPaths: [...new Set((Array.isArray(expectedPaths) ? expectedPaths : []).map(value => String(value || '').replace(/\\/g, '/')))],
+      expectedPaths: expected,
       returnedPaths: [],
-      errors: [normalized.reason || 'WRITE_COORDINATOR_PROTOCOL_ERROR'],
+      parsedFiles: [],
+      committedFiles: [],
+      missingFiles: expected,
+      extraFiles: [],
+      errors: [reason],
       normalized
     };
   }
-  const expected = new Set((Array.isArray(expectedPaths) ? expectedPaths : []).map(value => String(value || '').replace(/\\/g, '/')));
-  const files = Array.isArray(normalized.files) ? normalized.files : [];
+
   const returnedPaths = [];
   const seen = new Set();
   const entries = [];
   const errors = [];
+  const parsedFiles = [];
 
   for (const entry of files) {
     const normalizedPath = sanitizeCoordinatorTargetPath(entry?.path || entry?.file || entry?.target || '', workspaceRoot);
@@ -1375,21 +1692,13 @@ function parseWriteCoordinatorResponse(rawResponse, expectedPaths = [], workspac
       continue;
     }
     returnedPaths.push(normalizedPath);
-    if (!expected.has(normalizedPath)) {
-      errors.push(`Unexpected file path returned: ${normalizedPath}`);
-      continue;
-    }
-    if (seen.has(normalizedPath)) {
+    parsedFiles.push(normalizedPath);
+    if (!seen.has(normalizedPath)) {
+      seen.add(normalizedPath);
+      entries.push({ path: normalizedPath, content });
+    } else {
       errors.push(`Duplicate file path returned: ${normalizedPath}`);
-      continue;
     }
-    seen.add(normalizedPath);
-    entries.push({ path: normalizedPath, content });
-  }
-
-  const missingPaths = [...expected].filter(pathValue => !seen.has(pathValue));
-  if (missingPaths.length > 0) {
-    errors.push(`Missing expected file(s): ${missingPaths.join(', ')}`);
   }
 
   return {
@@ -1397,8 +1706,12 @@ function parseWriteCoordinatorResponse(rawResponse, expectedPaths = [], workspac
     protocolError: false,
     parsed,
     entries,
-    expectedPaths: [...expected],
+    expectedPaths: expected,
     returnedPaths: [...new Set(returnedPaths)],
+    parsedFiles: [...new Set(parsedFiles)],
+    committedFiles: [],
+    missingFiles: expected.filter(pathValue => !seen.has(pathValue)),
+    extraFiles: [...new Set(parsedFiles)].filter(pathValue => !expected.includes(pathValue)),
     errors,
     normalized
   };
@@ -1681,7 +1994,8 @@ async function resolveParallelWriteCoordinator({
   plan,
   step = 0,
   maxTokens = 0,
-  localModelMode = false
+  localModelMode = false,
+  allowSingleTask = false
 } = {}) {
   const eligibleTasks = Array.isArray(tasks) ? tasks.filter(task => {
     if (!task || task.tool !== 'WRITE_FILE') return false;
@@ -1693,7 +2007,7 @@ async function resolveParallelWriteCoordinator({
     return true;
   }) : [];
 
-  if (eligibleTasks.length < 2) {
+  if (eligibleTasks.length < 2 && !(allowSingleTask && eligibleTasks.length === 1)) {
     const reason = eligibleTasks.length === 1 ? 'only_one_write_task' : 'insufficient_write_tasks';
     return { eligible: false, used: false, reason };
   }
@@ -1820,16 +2134,20 @@ async function resolveParallelWriteCoordinator({
   let lastRetryFiles = [];
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    const attemptExpectedPaths = attempt === 0
+      ? targetPaths
+      : (lastRetryFiles.length > 0 ? lastRetryFiles : targetPaths);
     if (attempt > 0) {
       console.log('[COORDINATOR_BATCH_REUSED]', {
         batchId: coordinatorBatchId,
-        expectedFiles: [...targetPaths],
+        expectedFiles: [...attemptExpectedPaths],
         currentFiles: [...coordinatorBatchFilesByPath.keys()],
         retryAttempt: attempt
       });
       updateBatchState(batchState, {
         currentFiles: [...coordinatorBatchFilesByPath.keys()],
-        retryFiles: [],
+        expectedFiles: [...attemptExpectedPaths],
+        retryFiles: [...lastRetryFiles],
         status: 'RETRYING',
         source: 'retry_attempt'
       });
@@ -1846,10 +2164,27 @@ async function resolveParallelWriteCoordinator({
             ...buildRetryDiagnosticBlocks(lastErrors),
             '',
             'Target files:',
-            ...targetPaths.map(p => `- ${p}`),
+            ...attemptExpectedPaths.map(p => `- ${p}`),
             '',
             'Do NOT return patches. Return complete files.'
           ].filter(Boolean).join('\n')
+      : lastRetryFiles.length > 0
+        ? [
+            'You generated an incomplete batch.',
+            'Generate ONLY these missing file(s):',
+            ...lastRetryFiles.map(file => `- ${file}`),
+            '',
+            'Do NOT regenerate already accepted files:',
+            ...[...coordinatorBatchFilesByPath.keys()].filter(file => !lastRetryFiles.includes(file)).map(file => `- ${file}`),
+            '',
+            'Return each file with explicit header:',
+            'File: <path>',
+            '```<language>',
+            '<content>',
+            '```',
+            '',
+            'No explanations.'
+          ].join('\n')
       : lastValidationDeltas.length > 0
         ? [
             'DELTA COORDINATOR MODE.',
@@ -1868,7 +2203,7 @@ async function resolveParallelWriteCoordinator({
             ...buildRetryDiagnosticBlocks(lastErrors),
             '',
             'Target files:',
-            ...targetPaths.map(p => `- ${p}`)
+            ...attemptExpectedPaths.map(p => `- ${p}`)
           ].filter(Boolean).join('\n');
 
     let rawResponse;
@@ -2100,11 +2435,15 @@ async function resolveParallelWriteCoordinator({
               source: 'delta_retry_validation_pass'
             });
             markBatchCommitted(batchState, {
-              committedFiles: targetPaths,
+              committedFiles: [...coordinatorBatchFilesByPath.keys()],
               currentFiles: [...coordinatorBatchFilesByPath.keys()],
               retryFiles: lastRetryFiles,
               status: 'COMMITTED',
               source: 'delta_retry_commit'
+            });
+            console.log('[WRITE_BATCH_COMPLETE]', {
+              batchId: coordinatorBatchId,
+              committedFiles: [...coordinatorBatchFilesByPath.keys()]
             });
             return {
               eligible: true, used: true, success: true,
@@ -2148,8 +2487,8 @@ async function resolveParallelWriteCoordinator({
       }
     }
 
-    const parsedFiles = Array.isArray(parsed?.files) ? parsed.files : [];
-    const splitResult = parseWriteCoordinatorResponse(rawResponse, targetPaths, workspaceRoot);
+    const splitResult = parseWriteCoordinatorResponse(rawResponse, attemptExpectedPaths, workspaceRoot, [...coordinatorBatchFilesByPath.keys()]);
+    const parsedFiles = Array.isArray(splitResult.parsedFiles) ? splitResult.parsedFiles : [];
     console.log('[WRITE_COORDINATOR_MODEL_RESULT]', {
       groupIndex,
       success: splitResult.success,
@@ -2169,7 +2508,7 @@ async function resolveParallelWriteCoordinator({
       markBatchFailed(batchState, {
         currentFiles: [...coordinatorBatchFilesByPath.keys()],
         retryFiles: lastRetryFiles,
-        failedFiles: targetPaths,
+        failedFiles: attemptExpectedPaths,
         status: 'FAILED',
         reason: protocolReason,
         source: 'protocol_error'
@@ -2180,7 +2519,7 @@ async function resolveParallelWriteCoordinator({
         success: false,
         groupIndex,
         fileCount: eligibleTasks.length,
-        targetPaths,
+        targetPaths: attemptExpectedPaths,
         preparedByTaskId: new Map(),
         generatedFiles: [],
         frameworkAdapterResults: [],
@@ -2197,6 +2536,136 @@ async function resolveParallelWriteCoordinator({
         attempts: attempt + 1,
         batchState
       };
+    }
+
+    const batchCompleteness = getWriteBatchCompleteness({
+      batchId: coordinatorBatchId,
+      expectedFiles: attemptExpectedPaths,
+      parsedFiles,
+      committedFiles: [...coordinatorBatchFilesByPath.keys()]
+    });
+
+    if (!batchCompleteness.complete) {
+      const retryFiles = batchCompleteness.missingFiles.length > 0
+        ? [...batchCompleteness.missingFiles]
+        : [...attemptExpectedPaths];
+      lastRetryFiles = retryFiles;
+      for (const entry of splitResult.entries) {
+        coordinatorBatchFilesByPath.set(entry.path, entry.content);
+      }
+      const blockedReason = retryFiles.length > 0
+        ? `Expected file was not generated: ${retryFiles[0]}`
+        : (batchCompleteness.extraFiles.length > 0
+          ? `Unexpected file was generated: ${batchCompleteness.extraFiles[0]}`
+          : 'WRITE batch response was incomplete');
+      console.log('[WRITE_BATCH_INCOMPLETE_BLOCKED]', {
+        batchId: coordinatorBatchId,
+        reason: blockedReason,
+        missingFiles: batchCompleteness.missingFiles.length > 0 ? retryFiles : [...batchCompleteness.extraFiles]
+      });
+      console.log('[WRITE_BATCH_RETRY_MISSING]', {
+        batchId: coordinatorBatchId,
+        retryFiles
+      });
+      updateBatchState(batchState, {
+        currentFiles: [...coordinatorBatchFilesByPath.keys()],
+        expectedFiles: [...attemptExpectedPaths],
+        retryFiles,
+        status: attempt < 2 ? 'RETRYING' : 'FAILED',
+        source: 'write_batch_incomplete'
+      });
+      if (attempt < 2) {
+        lastErrors = [blockedReason];
+        continue;
+      }
+      fallbackReason = blockedReason;
+      lastErrors = [blockedReason];
+      markBatchFailed(batchState, {
+        currentFiles: [...coordinatorBatchFilesByPath.keys()],
+        retryFiles,
+        failedFiles: [...attemptExpectedPaths],
+        status: 'FAILED',
+        reason: blockedReason,
+        source: 'write_batch_incomplete'
+      });
+      return {
+        eligible: true,
+        used: true,
+        success: false,
+        groupIndex,
+        fileCount: eligibleTasks.length,
+        targetPaths: attemptExpectedPaths,
+        preparedByTaskId: new Map(),
+        generatedFiles: [],
+        frameworkAdapterResults: [],
+        frameworkValidation: [],
+        validationPolicies,
+        framework,
+        frameworkSource,
+        retryCount,
+        validationErrors: [blockedReason],
+        validationDeltas: [],
+        preservedRegions: [],
+        patchedRegions: [],
+        fallbackReason: blockedReason,
+        attempts: attempt + 1,
+        batchState
+      };
+    }
+
+    if (!splitResult.success) {
+      fallbackReason = splitResult.errors.join('; ');
+      lastErrors = splitResult.errors.slice();
+      console.log('[WRITE_BATCH_INCOMPLETE_BLOCKED]', {
+        batchId: coordinatorBatchId,
+        reason: fallbackReason || 'WRITE batch response was invalid',
+        missingFiles: []
+      });
+      if (attempt < 2) {
+        updateBatchState(batchState, {
+          currentFiles: [...coordinatorBatchFilesByPath.keys()],
+          expectedFiles: [...attemptExpectedPaths],
+          retryFiles: lastRetryFiles,
+          status: 'RETRYING',
+          source: 'write_batch_invalid'
+        });
+        continue;
+      }
+      markBatchFailed(batchState, {
+        currentFiles: [...coordinatorBatchFilesByPath.keys()],
+        retryFiles: lastRetryFiles,
+        failedFiles: [...attemptExpectedPaths],
+        status: 'FAILED',
+        reason: fallbackReason || 'WRITE batch response was invalid',
+        source: 'write_batch_invalid'
+      });
+      return {
+        eligible: true,
+        used: true,
+        success: false,
+        groupIndex,
+        fileCount: eligibleTasks.length,
+        targetPaths: attemptExpectedPaths,
+        preparedByTaskId: new Map(),
+        generatedFiles: [],
+        frameworkAdapterResults: [],
+        frameworkValidation: [],
+        validationPolicies,
+        framework,
+        frameworkSource,
+        retryCount,
+        validationErrors: splitResult.errors.slice(),
+        validationDeltas: [],
+        preservedRegions: [],
+        patchedRegions: [],
+        fallbackReason: fallbackReason || 'WRITE batch response was invalid',
+        attempts: attempt + 1,
+        batchState
+      };
+    }
+
+    for (const entry of splitResult.entries) {
+      coordinatorBatchFilesByPath.set(entry.path, entry.content);
     }
 
     const frameworkContractByPath = new Map();
@@ -2226,14 +2695,13 @@ async function resolveParallelWriteCoordinator({
     const currentFilesBeforeRetry = [...coordinatorBatchFilesByPath.keys()];
     console.log('[COORDINATOR_CURRENT_FILES_BEFORE_RETRY]', {
       batchId: coordinatorBatchId,
-      expectedFiles: [...targetPaths],
+      expectedFiles: [...attemptExpectedPaths],
       currentFiles: currentFilesBeforeRetry,
       retryFiles: [...splitResult.returnedPaths]
     });
 
     const currentAttemptPaths = new Set();
     for (const entry of splitResult.entries) {
-      coordinatorBatchFilesByPath.set(entry.path, entry.content);
       currentAttemptPaths.add(entry.path);
     }
 
@@ -2242,19 +2710,20 @@ async function resolveParallelWriteCoordinator({
     updateBatchState(batchState, {
       currentFiles: currentFilesAfterRetry,
       retryFiles: lastRetryFiles,
-      status: splitResult.success ? 'VALIDATING' : 'RETRYING',
+      expectedFiles: [...attemptExpectedPaths],
+      status: 'VALIDATING',
       source: 'retry_result'
     });
     console.log('[COORDINATOR_CURRENT_FILES_AFTER_RETRY]', {
       batchId: coordinatorBatchId,
-      expectedFiles: [...targetPaths],
+      expectedFiles: [...attemptExpectedPaths],
       currentFiles: currentFilesAfterRetry,
       updatedFiles: [...currentAttemptPaths],
       retryFiles: [...splitResult.returnedPaths]
     });
     console.log('[COORDINATOR_BATCH_UPDATED]', {
       batchId: coordinatorBatchId,
-      expectedFiles: [...targetPaths],
+      expectedFiles: [...attemptExpectedPaths],
       currentFiles: currentFilesAfterRetry,
       updatedFiles: [...currentAttemptPaths],
       retryFiles: [...currentAttemptPaths]
@@ -2265,86 +2734,12 @@ async function resolveParallelWriteCoordinator({
     console.log('[VALIDATION_SOURCE_SELECTED]', {
       batchId: coordinatorBatchId,
       source: 'BatchState.currentFiles',
-      expectedFiles: [...targetPaths]
+      expectedFiles: [...attemptExpectedPaths]
     });
     console.log('[VALIDATION_BATCH_FILES]', {
       batchId: coordinatorBatchId,
       currentFiles: [...validationFileSet]
     });
-
-    const retryMissingPaths = [...new Set(splitResult.expectedPaths.filter(pathValue => !splitResult.returnedPaths.includes(pathValue)))];
-    const retryMissingCoveredByBatch = retryMissingPaths.filter(pathValue => validationFileSet.has(pathValue));
-    const nonMissingErrors = splitResult.errors.filter(error => !String(error || "").startsWith("Missing expected file(s):"));
-    const batchHasAllExpectedFiles = targetPaths.every(pathValue => validationFileSet.has(pathValue));
-    const splitResultEffectiveSuccess = splitResult.success || (batchHasAllExpectedFiles && nonMissingErrors.length === 0);
-
-    if (retryMissingCoveredByBatch.length > 0) {
-      console.log('[VALIDATION_SOURCE_INCONSISTENT]', {
-        batchId: coordinatorBatchId,
-        expectedFiles: [...targetPaths],
-        currentFiles: [...validationFileSet],
-        missingFiles: retryMissingPaths,
-        coveredFiles: retryMissingCoveredByBatch,
-        source: 'retryPayload',
-        retryAttempt: attempt
-      });
-    }
-
-    console.log('[COORDINATOR_RETRY_SCOPE]', {
-      batchId: coordinatorBatchId,
-      expectedFiles: [...targetPaths],
-      currentFiles: currentFilesAfterRetry,
-      retryFiles: [...splitResult.returnedPaths]
-    });
-
-    if (!splitResultEffectiveSuccess) {
-      fallbackReason = splitResult.errors.join('; ');
-      lastErrors = splitResult.errors.slice();
-      if (attempt === 0) continue;
-      if (attempt === 1) {
-        for (const entry of splitResult.entries) {
-          const orig = lastOriginalContents[entry.path];
-          if (orig && orig !== entry.content) {
-            entry.content = preserveValidatedContent(orig, entry.content);
-          }
-        }
-      }
-      for (const entry of splitResult.entries) {
-        const task = eligibleTasks.find(candidate => sanitizeCoordinatorTargetPath(candidate.toolArgs?.path || candidate.toolArgs?.file || candidate.toolArgs?.target || '', workspaceRoot) === entry.path);
-        if (!task) continue;
-        const prepared = await prepareCoordinatorWriteFileArgs({
-          task,
-          content: entry.content,
-          workspaceRoot,
-          layout,
-          workspaceFiles,
-          originalPrompt,
-          objective,
-          requiredSymbols: getRecoveryRequiredSymbols(task),
-          plan,
-          step,
-          writeContext: writeContextByPath.get(entry.path)
-        });
-        if (prepared.ok) {
-          preparedByTaskId.set(task.id, prepared.args);
-          generatedFiles.push({ taskId: task.id, path: entry.path, contentLength: prepared.contentLength });
-          if (prepared.frameworkValidation) {
-            frameworkAdapterResults.push({
-              taskId: task.id,
-              targetPath: entry.path,
-              ...prepared.frameworkValidation
-            });
-            frameworkValidationResults.push({
-              taskId: task.id,
-              targetPath: entry.path,
-              ...prepared.frameworkValidation
-            });
-          }
-        }
-      }
-      break;
-    }
-
     let validationFailed = false;
     const currentErrors = [];
     const currentDeltas = [];
@@ -2471,11 +2866,15 @@ async function resolveParallelWriteCoordinator({
         retryFiles: [...currentAttemptPaths]
       });
       markBatchCommitted(batchState, {
-        committedFiles: targetPaths,
+        committedFiles: [...coordinatorBatchFilesByPath.keys()],
         currentFiles: [...coordinatorBatchFilesByPath.keys()],
         retryFiles: [...currentAttemptPaths],
         status: 'COMMITTED',
         source: 'final_commit'
+      });
+      console.log('[WRITE_BATCH_COMPLETE]', {
+        batchId: coordinatorBatchId,
+        committedFiles: [...coordinatorBatchFilesByPath.keys()]
       });
       const writeContextByTaskId = new Map(
         fileContexts.map(entry => [entry.task?.id, entry.writeContext]).filter(([id]) => id)
@@ -2649,11 +3048,15 @@ async function resolveParallelWriteCoordinator({
             source: 'framework_auto_repair_pass'
           });
           markBatchCommitted(batchState, {
-            committedFiles: targetPaths,
+            committedFiles: [...coordinatorBatchFilesByPath.keys()],
             currentFiles: [...coordinatorBatchFilesByPath.keys()],
             retryFiles: [...currentAttemptPaths],
             status: 'COMMITTED',
             source: 'framework_auto_repair_commit'
+          });
+          console.log('[WRITE_BATCH_COMPLETE]', {
+            batchId: coordinatorBatchId,
+            committedFiles: [...coordinatorBatchFilesByPath.keys()]
           });
 
           return {
@@ -3088,6 +3491,16 @@ function isCodingComplete(taskType, changedFiles, toolCalls, validationFailed) {
 
 async function defaultGenerateResponse({ messages, plan }) {
   return askAI({ messages, mode: "agent", plan });
+}
+
+function extractChatText(rawResponse) {
+  const normalized = normalizeModelResponse(rawResponse, { mode: "content" });
+  const canonical = extractCanonicalContent(normalized?.parsed ?? rawResponse);
+  if (typeof canonical === 'string' && canonical.trim()) return canonical.trim();
+  if (normalized?.canonical?.content && String(normalized.canonical.content).trim()) {
+    return String(normalized.canonical.content).trim();
+  }
+  return String(rawResponse ?? '').trim();
 }
 
 function getRecoveryExpectedTool(recoveryTask) {
@@ -3915,9 +4328,32 @@ function uniqueMetadataFiles(files = []) {
   )];
 }
 
+const NON_EXECUTABLE_TOOL_ERRORS = new Set([
+  "EXECUTION_INPUT_REJECTED",
+  "EXECUTION_GRAPH_NOT_CLEAN",
+  "NON_EXECUTABLE_PATH_REJECTED",
+  "READ_TASK_BLOCKED_NON_EXECUTABLE",
+  "VALIDATION_TARGET_FILTERED",
+  "WRITE_WITHOUT_EXECUTION_UNIT"
+]);
+
+function getToolCallErrorCode(call = {}) {
+  return String(call?.error?.code || call?.result?.error?.code || call?.result?.error || call?.error || "").trim();
+}
+
+function isBlockedExecutionToolCall(call = {}) {
+  return NON_EXECUTABLE_TOOL_ERRORS.has(getToolCallErrorCode(call));
+}
+
+function isExecutableToolCall(call = {}, toolName = null) {
+  if (!call || isBlockedExecutionToolCall(call)) return false;
+  if (toolName && call.tool !== toolName) return false;
+  return call.success !== false;
+}
+
 function collectRequestedWriteFiles({ requestedFiles = [], plannerWriteTargets = [], toolCalls = [] } = {}) {
   const toolWriteFiles = (Array.isArray(toolCalls) ? toolCalls : [])
-    .filter(call => call && (call.tool === "WRITE_FILE" || call.tool === "APPLY_PATCH"))
+    .filter(call => call && (call.tool === "WRITE_FILE" || call.tool === "APPLY_PATCH") && !isBlockedExecutionToolCall(call))
     .map(call => normalizeMetadataFile(call.result?.file || call.args?.path || call.args?.file || call.args?.target || ""))
     .filter(Boolean);
   return uniqueMetadataFiles(toolWriteFiles);
@@ -3977,10 +4413,10 @@ function buildValidatedFileRecords({
   const verifiedExistingSet = new Set(explicitVerifiedExisting);
 
   const writeCalls = (Array.isArray(toolCalls) ? toolCalls : [])
-    .filter(call => call && call.tool === "WRITE_FILE" && call.success === true);
+    .filter(call => isExecutableToolCall(call, "WRITE_FILE"));
   const patchValidatedFiles = new Set(
     (Array.isArray(toolCalls) ? toolCalls : [])
-      .filter(call => call && call.tool === "VALIDATE_PATCH" && call.success === true)
+      .filter(call => isExecutableToolCall(call, "VALIDATE_PATCH"))
       .map(call => normalizeMetadataFile(call.args?.file || call.result?.file || ""))
       .filter(Boolean)
   );
@@ -4216,11 +4652,11 @@ export function buildRunFileMetadata({
   return {
     plannedFiles: requestedWriteFiles,
     generatedFiles: uniqueMetadataFiles((Array.isArray(toolCalls) ? toolCalls : [])
-      .filter(call => call && call.tool === "WRITE_FILE" && call.success !== false)
+      .filter(call => isExecutableToolCall(call, "WRITE_FILE"))
       .map(call => call.result?.file || call.args?.path || call.args?.file || call.args?.target || "")
       .filter(Boolean)),
     validationRejectedFiles: uniqueMetadataFiles((Array.isArray(toolCalls) ? toolCalls : [])
-      .filter(call => call && call.tool === "WRITE_FILE" && call.success === false)
+      .filter(call => call && call.tool === "WRITE_FILE" && call.success === false && !isBlockedExecutionToolCall(call))
       .map(call => call.args?.path || call.args?.file || call.args?.target || "")
       .filter(Boolean)),
     committedFiles,
@@ -4669,7 +5105,108 @@ export async function runAgentLoop({
   enableToolOptimizer = true,
   executionCache = null
 }) {
-  const criteria = acceptanceCriteria || buildAcceptanceCriteria(messages.at(-1)?.content || "");
+  const objective = messages.at(-1)?.content || "";
+  const taskMode = classifyTaskMode(objective);
+  const isAnswerOnlyObjective = classifyAnswerOnlyObjective(objective) || taskMode === "ANSWER_ONLY";
+  const plannerEntryDecision = assertPlannerEntryAllowed(objective, taskMode);
+
+  if (plannerEntryDecision.allowed === false && (plannerEntryDecision.directAnswer === true || isAnswerOnlyObjective)) {
+    console.log('[ANSWER_ONLY_BYPASS_HARD_STOP]', {
+      taskMode,
+      objective: objective.slice(0, 120),
+      reason: plannerEntryDecision.reason
+    });
+    console.log('[ANSWER_ONLY_FIREWALL_PASS]', {
+      taskMode,
+      objective: objective.slice(0, 120),
+      reason: plannerEntryDecision.reason
+    });
+    try {
+      const raw = await generateResponse({
+        messages: [{ role: 'user', content: objective }],
+        plan,
+        step: 0,
+        objective
+      });
+      const text = extractChatText(raw);
+      const final = text || String(raw || '').trim();
+      return {
+        success: true,
+        status: 'completed',
+        final,
+        error: null,
+        history: [],
+        events: [],
+        toolCalls: [],
+        changedFiles: [],
+        diffSummary: { stat: '', numstat: '' },
+        qualityGate: {
+          passed: true,
+          score: 100,
+          failures: [],
+          feedback: 'Answer-only task bypassed planner.'
+        },
+        acceptanceCriteria: {
+          objective,
+          taskType: 'CHAT',
+          taskClass: 'ANSWER_ONLY',
+          taskMode: 'ANSWER_ONLY',
+          requestedFiles: [],
+          requestedFileDetails: [],
+          requiresWorkspaceChange: false,
+          requiresValidationCommand: false,
+          requiresFileRead: false,
+          requiresSearchResult: false,
+          requiresExistingStackInspection: false,
+          requiresPackageJsonInspection: false,
+          minimumMeaningfulFiles: 0,
+          allowsExistingStackIntegrationAlternative: false,
+          forbiddenPlaceholders: []
+        },
+        workspaceRoot: workspaceRoot || null,
+        workspaceId: workspaceId || null
+      };
+    } catch (error) {
+      return {
+        success: false,
+        status: 'error',
+        final: '',
+        error: error.message,
+        history: [],
+        events: [],
+        toolCalls: [],
+        changedFiles: [],
+        diffSummary: { stat: '', numstat: '' },
+        qualityGate: {
+          passed: false,
+          score: 0,
+          failures: [error.message],
+          feedback: error.message
+        },
+        acceptanceCriteria: {
+          objective,
+          taskType: 'CHAT',
+          taskClass: 'ANSWER_ONLY',
+          taskMode: 'ANSWER_ONLY',
+          requestedFiles: [],
+          requestedFileDetails: [],
+          requiresWorkspaceChange: false,
+          requiresValidationCommand: false,
+          requiresFileRead: false,
+          requiresSearchResult: false,
+          requiresExistingStackInspection: false,
+          requiresPackageJsonInspection: false,
+          minimumMeaningfulFiles: 0,
+          allowsExistingStackIntegrationAlternative: false,
+          forbiddenPlaceholders: []
+        },
+        workspaceRoot: workspaceRoot || null,
+        workspaceId: workspaceId || null
+      };
+    }
+  }
+
+  const criteria = acceptanceCriteria || buildAcceptanceCriteria(objective);
   // Per-intent policy
   function inferPolicy() {
     const mode = criteria.taskMode || (criteria.taskType === "CHAT" ? "qa" : (criteria.taskType === "CODING" ? "coding" : "read_only"));
@@ -4734,7 +5271,6 @@ export async function runAgentLoop({
     workspaceRoot: resolvedWorkspaceRoot || undefined,
     layout: scan
   };
-  const objective = messages.at(-1)?.content || "";
   const conversation = [...messages];
   const history = [];
   const events = [...initialEvents];
@@ -5257,6 +5793,98 @@ export async function runAgentLoop({
       }
     }
 
+    const explicitRequestedNewFiles = uniqueMetadataFiles([
+      ...(Array.isArray(getExecutionStateRegistry()?.getRequestedWriteFiles?.()) ? getExecutionStateRegistry().getRequestedWriteFiles() : []),
+      ...(Array.isArray(plannerExecutionMetadata?.plannerWriteFiles) ? plannerExecutionMetadata.plannerWriteFiles : []),
+      ...(Array.isArray(criteriaEffective?.requestedFiles) ? criteriaEffective.requestedFiles : [])
+    ]);
+    const missingExplicitRequestedFiles = resolvedWorkspaceRoot
+      ? (await Promise.all(explicitRequestedNewFiles.map(async file => {
+          const normalized = String(file || "").replace(/\\/g, "/").trim();
+          if (!normalized) return null;
+          try {
+            await fs.access(path.join(resolvedWorkspaceRoot, normalized));
+            return null;
+          } catch {
+            return normalized;
+          }
+        }))).filter(Boolean)
+      : [];
+    const incompleteWriteBatches = getIncompleteWriteBatches(writeCoordinatorState);
+    if (missingExplicitRequestedFiles.length > 0) {
+      const blockedReason = `Finalization blocked: explicit requested file missing: ${missingExplicitRequestedFiles[0]}`;
+      console.log(blockedReason);
+      if (incompleteWriteBatches.length > 0) {
+        console.log('[WRITE_BATCH_INCOMPLETE_BLOCKED]', {
+          batchId: incompleteWriteBatches[0]?.batchId || null,
+          reason: blockedReason,
+          missingFiles: normalizeCoordinatorFileList(incompleteWriteBatches[0]?.expectedFiles || []).filter(file =>
+            !normalizeCoordinatorFileList(incompleteWriteBatches[0]?.committedFiles || []).includes(file)
+          )
+        });
+      }
+      plannerMetrics.finalizerStatus = 'BLOCKED';
+      const blockedCompletionResult = {
+        plannerCompleted: false,
+        validationPassed: false,
+        qualityGatePassed: false,
+        requestedWriteFiles: explicitRequestedNewFiles,
+        plannerReadFiles: getExecutionStateRegistry()?.getPlannerReadFiles?.() || uniqueMetadataFiles(plannerExecutionMetadata?.plannerReadFiles || []),
+        changedFiles: [...changedFiles],
+        validationMatched: false,
+        requiredCommands: [...originalRequiredCommands],
+        matchedCommands: [],
+        finalStatus: 'needs_revision',
+        success: false,
+        plannerFinalizationBlocked: true,
+        plannerFinalizationReason: blockedReason
+      };
+      const blockedRunFileMetadata = getRunFileMetadata({
+        completionResult: blockedCompletionResult,
+        validationSummary: null,
+        qualityGatePassed: false
+      });
+      const blockedPlannerDebugSnapshot = capturePlannerDebugSnapshot(planner, {
+        qualityGate,
+        runFileMetadata: blockedRunFileMetadata,
+        completionResult: blockedCompletionResult,
+        writeCoordinatorState
+      });
+      emitRunFileMetadata();
+      planner.executionMemory?.printSummary?.();
+      opt.printSummary();
+      return {
+        success: false,
+        status: 'needs_revision',
+        final: blockedReason,
+        error: blockedReason,
+        history,
+        events,
+        toolCalls,
+        changedFiles: [...changedFiles],
+        diffSummary: { stat: "", numstat: "" },
+        qualityGate,
+        plannerMetrics: getPlannerMetricsSummary('BLOCKED'),
+        acceptanceCriteria: criteriaEffective,
+        workspaceRoot: resolvedWorkspaceRoot || null,
+        workspaceId: workspaceId || null,
+        validatedFiles: blockedRunFileMetadata.validatedFiles,
+        validatedFileDetails: blockedRunFileMetadata.validatedFileDetails,
+        requestedWriteFiles: blockedRunFileMetadata.requestedWriteFiles,
+        physicalChangeStatus: blockedRunFileMetadata.physicalChangeStatus,
+        validationCoverageStatus: blockedRunFileMetadata.validationCoverageStatus,
+        validationExecuted: blockedRunFileMetadata.validationExecuted,
+        validationCommand: blockedRunFileMetadata.validationCommand,
+        validationSuccess: blockedRunFileMetadata.validationSuccess,
+        requestedFilesValidated: blockedRunFileMetadata.requestedFilesValidated,
+        validationFailureAttribution: blockedRunFileMetadata.validationFailureAttribution,
+        externalFailureFiles: blockedRunFileMetadata.externalFailureFiles,
+        runFileMetadata: blockedRunFileMetadata,
+        completionResult: blockedCompletionResult,
+        plannerDebugSnapshot: blockedPlannerDebugSnapshot
+      };
+    }
+
     qualityGate = await runQualityGate({
       acceptanceCriteria: criteriaEffective,
       changedFiles: [...changedFiles],
@@ -5693,9 +6321,45 @@ export async function runAgentLoop({
     return { mode, allow, forbid, doNotModify, doNotRun, requiredCommands, requiredFiles: toolNameFiles };
   }
   const toolPolicy = preClassifyToolPolicy(objective);
-  // Attach to criteria for quality gate use, and override fields for READ_ONLY intent
+    const normalizedTaskMode = toolPolicy.mode === "READ_ONLY"
+      ? "READ_ONLY"
+      : toolPolicy.mode === "WRITE_AND_RUN"
+        ? "WRITE_AND_RUN"
+        : "CODING";
+  const taskIntent = freezeTaskIntent(createTaskIntent({
+    taskMode: normalizedTaskMode,
+    goalType: normalizedTaskMode,
+    executionMode: toolPolicy.mode,
+    writeAllowed: normalizedTaskMode !== "READ_ONLY" && toolPolicy.mode !== "COMMAND_ONLY",
+    readAllowed: true,
+    runAllowed: toolPolicy.mode === "WRITE_AND_RUN" || toolPolicy.mode === "COMMAND_ONLY",
+    validationAllowed: normalizedTaskMode !== "READ_ONLY",
+    bootstrapAllowed: normalizedTaskMode !== "READ_ONLY",
+    projectInitializationAllowed: normalizedTaskMode !== "READ_ONLY",
+    reasoning: normalizedTaskMode === "READ_ONLY"
+      ? "Intent classifier marked the task as read-only."
+      : "Intent classifier marked the task as coding.",
+    confidence: 1,
+    source: "task-classifier"
+  }));
+  // Attach to criteria for quality gate use, and override fields from the frozen task intent.
   const originalRequiredCommands = [...(toolPolicy.requiredCommands || [])];
-  const criteriaWithIntent = { ...criteria, intentMode: toolPolicy.mode, doNotModify: toolPolicy.doNotModify };
+  const criteriaWithIntent = {
+    ...criteria,
+    taskIntent,
+    taskMode: taskIntent.taskMode,
+    taskType: taskIntent.goalType,
+    goalType: taskIntent.goalType,
+    executionMode: taskIntent.executionMode,
+    intentMode: taskIntent.executionMode,
+    writeAllowed: taskIntent.writeAllowed,
+    readAllowed: taskIntent.readAllowed,
+    runAllowed: taskIntent.runAllowed,
+    validationAllowed: taskIntent.validationAllowed,
+    bootstrapAllowed: taskIntent.bootstrapAllowed,
+    projectInitializationAllowed: taskIntent.projectInitializationAllowed,
+    doNotModify: toolPolicy.doNotModify
+  };
   // Phase 4.20-HF4b: Merge tool-name files (WRITE_FILE/CREATE_FILE/APPLY_PATCH paths)
   // with LLM-classifier requestedFiles so deterministic extraction is preserved.
   const mergedRequestedFiles = [
@@ -5745,15 +6409,41 @@ export async function runAgentLoop({
       requiredCommands: originalRequiredCommands
     };
   })();
+  consumeTaskIntent("runAgentLoop:criteria", taskIntent);
   let workspaceState = { existingFiles: [], scan };
   let projectIntent = detectProjectIntent(objective, criteriaEffective);
+  projectIntent = {
+    ...projectIntent,
+    taskIntent,
+    goalType: taskIntent.goalType,
+    taskMode: taskIntent.taskMode,
+    executionMode: taskIntent.executionMode,
+    writeAllowed: taskIntent.writeAllowed,
+    readAllowed: taskIntent.readAllowed,
+    runAllowed: taskIntent.runAllowed,
+    validationAllowed: taskIntent.validationAllowed,
+    bootstrapAllowed: taskIntent.bootstrapAllowed,
+    projectInitializationAllowed: taskIntent.projectInitializationAllowed
+  };
+  const intentViews = [
+    {
+      stage: "projectIntent",
+      taskMode: projectIntent.taskMode,
+      goalType: projectIntent.goalType,
+      executionMode: projectIntent.executionMode
+    }
+  ];
+  if (toolPolicy.mode !== "COMMAND_ONLY") {
+    intentViews.push({
+      stage: "criteriaEffective",
+      taskMode: criteriaEffective.taskMode,
+      goalType: criteriaEffective.goalType,
+      executionMode: criteriaEffective.executionMode
+    });
+  }
+  assertTaskIntentConsistency(taskIntent, intentViews);
   let bootstrapProfile = null;
-  const plannerPolicies = resolvePlannerPolicies({
-    workspaceState,
-    projectScan: scan,
-    projectIntent,
-    validatedAssumptions: []
-  });
+  const plannerRuntimeState = resetPlannerRuntimeState(createPlannerRuntimeState());
   if (resolvedWorkspaceRoot) {
     try {
       workspaceState = await detectWorkspaceState(resolvedWorkspaceRoot);
@@ -5761,14 +6451,21 @@ export async function runAgentLoop({
       workspaceState = { existingFiles: [], scan };
     }
   }
+  const plannerPolicies = resolvePlannerPolicies({
+    workspaceState,
+    projectScan: scan,
+    projectIntent,
+    validatedAssumptions: []
+  });
   if (plannerPolicies.ALLOW_PROJECT_BOOTSTRAP === true) {
     bootstrapProfile = resolveBootstrapProfile(projectIntent, workspaceState);
-    console.log('[BOOTSTRAP_PROFILE_RESOLVED]', {
+    console.log('[BOOTSTRAP_RECOMMENDATION_RESOLVED]', {
       profile: bootstrapProfile?.id || null,
       label: bootstrapProfile?.label || null,
       resolvedBy: bootstrapProfile?.resolvedBy || null,
       goalType: projectIntent.goalType || null,
-      workspaceFiles: Array.isArray(workspaceState.existingFiles) ? workspaceState.existingFiles.length : 0
+      workspaceFiles: Array.isArray(workspaceState.existingFiles) ? workspaceState.existingFiles.length : 0,
+      note: 'Bootstrap profile is recommendation-only; not used for execution candidate generation'
     });
   } else {
     bootstrapProfile = null;
@@ -5867,27 +6564,6 @@ export async function runAgentLoop({
     return executionStateRegistry;
   }
   if (toolPolicy.mode !== "UNKNOWN") {
-    // Extract planned write targets from objective before context building
-    const plannedWriteTargets = (() => {
-      const prompt = String(objective || '');
-      const regex = /(?:\b(?:file|files|path|paths)\b[:\s]+)?([A-Za-z0-9_.\-\\/]+\.(?:js|jsx|ts|tsx|mjs|cjs|json|html|css|php|py|cs|dart|yaml|yml|md))/gi;
-      const KNOWN_CONFIG_JS = /(?:^|\/)(?:package|tsconfig|composer|vite\.config|next\.config|nuxt\.config)\.js$/i;
-      const matches = [];
-      let m;
-      while ((m = regex.exec(prompt)) !== null) {
-        let p = m[1].replace(/^[^A-Za-z0-9_.\-\\/]+/, '').replace(/\\/g, '/').trim();
-        if (KNOWN_CONFIG_JS.test(p)) {
-          const corrected = p.replace(/\.js$/i, '.json');
-          console.log('[PACKAGE_JSON_CANONICAL]', { original: p, corrected, note: 'Forced .json for known config file' });
-          p = corrected;
-        }
-        if (p && !p.startsWith('node_modules/') && !p.includes('node_modules/')) {
-          matches.push(p);
-        }
-      }
-      return [...new Set(matches)];
-    })();
-    console.log('[PLANNED_FILE_EXTRACTED]', { count: plannedWriteTargets.length, files: plannedWriteTargets });
     const requestedFileDetails = Array.isArray(criteriaEffective.requestedFileDetails) ? criteriaEffective.requestedFileDetails : [];
     const explicitRequestedNewFiles = requestedFileDetails
       .filter(entry => [
@@ -5896,6 +6572,23 @@ export async function runAgentLoop({
       ].includes(String(entry?.kind || entry?.requestedKind || '').toUpperCase()))
       .map(entry => String(entry?.path || entry?.file || entry?.target || '').replace(/\\/g, '/').trim())
       .filter(Boolean);
+    const confirmedWriteMode = /^(?:CODING|WRITE|WRITE_AND_RUN)$/i.test(String(criteriaEffective.taskType || criteriaEffective.taskMode || '')) ||
+      /^(?:WRITE|WRITE_AND_RUN)$/i.test(String(toolPolicy.mode || ''));
+    const rawPromptTargets = confirmedWriteMode ? (() => {
+      const prompt = String(objective || '');
+      const regex = /(?:\b(?:file|files|path|paths)\b[:\s]+)?([A-Za-z0-9_.\-\\/]+\.(?:js|jsx|ts|tsx|mjs|cjs|json|html|css|php|py|cs|dart|yaml|yml|md))/gi;
+      const matches = [];
+      let m;
+      while ((m = regex.exec(prompt)) !== null) {
+        const p = m[1].replace(/^[^A-Za-z0-9_.\-\\/]+/, '').replace(/\\/g, '/').trim();
+        if (p && !p.startsWith('node_modules/') && !p.includes('node_modules/')) {
+          matches.push(p);
+        }
+      }
+      return matches;
+    })() : [];
+    const plannedWriteTargets = [...new Set([...explicitRequestedNewFiles, ...rawPromptTargets])];
+    console.log('[PLANNED_FILE_EXTRACTED]', { count: plannedWriteTargets.length, files: plannedWriteTargets });
     if (explicitRequestedNewFiles.length > 0) {
       console.log('[EXPLICIT_USER_AUTHORITY_DETECTED]', {
         count: explicitRequestedNewFiles.length,
@@ -5904,6 +6597,7 @@ export async function runAgentLoop({
       });
     }
 
+    consumeTaskIntent("planner", taskIntent);
     const planningContextResult = buildPlanningContext({
       workspaceState,
       projectScan: scan,
@@ -5921,7 +6615,14 @@ export async function runAgentLoop({
       criteria: criteriaEffective
     });
     const canonicalFileUniverse = [
-      ...new Set(Array.from(planningContextResult.snapshot?.discoveredFiles || []))
+      ...new Set([
+        ...(Array.isArray(planningContextResult.context?.discoveredFiles) ? planningContextResult.context.discoveredFiles : []),
+        ...(Array.isArray(planningContextResult.context?.verifiedFiles) ? planningContextResult.context.verifiedFiles : []),
+        ...(Array.isArray(planningContextResult.context?.explicitRequestedNewFiles) ? planningContextResult.context.explicitRequestedNewFiles : []),
+        ...(Array.isArray(planningContextResult.context?.plannedFiles) ? planningContextResult.context.plannedFiles : []),
+        ...(Array.isArray(planningContextResult.context?.generatedFiles) ? planningContextResult.context.generatedFiles : []),
+        ...(Array.isArray(planningContextResult.context?.dependencyReleasedFiles) ? planningContextResult.context.dependencyReleasedFiles : [])
+      ].map(value => String(value || "").replace(/\\/g, "/").trim()).filter(Boolean))
     ];
     const executionGraphPlan = createExecutionPlanner({
       objective,
@@ -7435,6 +8136,8 @@ After execution, return { "done": true, "final": "your summary here" }.`;
         }
 
         const eligibleWriteTasks = activeTasks.filter(task => task.tool === 'WRITE_FILE');
+        const incompleteCoordinatorBatches = getIncompleteWriteBatches(writeCoordinatorState);
+        const allowSingleTaskCoordinator = eligibleWriteTasks.length === 1 && (writeCoordinatorState.writeCoordinatorUsed || incompleteCoordinatorBatches.length > 0);
         const coordinatorResolution = eligibleWriteTasks.length >= 2
           ? await resolveParallelWriteCoordinator({
               groupIndex: planner.currentParallelGroupIndex,
@@ -7449,8 +8152,26 @@ After execution, return { "done": true, "final": "your summary here" }.`;
               plan,
               step,
               maxTokens: 4096,
-              localModelMode: LOCAL_MODEL_MODE
+              localModelMode: LOCAL_MODEL_MODE,
+              allowSingleTask: allowSingleTaskCoordinator
             })
+          : allowSingleTaskCoordinator
+            ? await resolveParallelWriteCoordinator({
+                groupIndex: planner.currentParallelGroupIndex,
+                tasks: eligibleWriteTasks,
+                originalPrompt: objective,
+                objective,
+                workspaceRoot: resolvedWorkspaceRoot,
+                layout: scan,
+                workspaceFiles: [...readFileCache.keys(), ...changedFiles],
+                requiredCommands: originalRequiredCommands,
+                generateResponse,
+                plan,
+                step,
+                maxTokens: 4096,
+                localModelMode: LOCAL_MODEL_MODE,
+                allowSingleTask: true
+              })
           : {
               eligible: false,
               used: false,
@@ -7521,7 +8242,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           console.log('[PLANNER_DISPATCH]', { step, taskId: task.id, tool: toolName, args, parallel: true });
           recordEvent('planner_dispatch', { step, taskId: task.id, tool: toolName, args });
 
-          const toolCtx = { workspaceRoot: resolvedWorkspaceRoot, layout: scan };
+          const toolCtx = { workspaceRoot: resolvedWorkspaceRoot, layout: scan, executionUnit: task };
           let dispatchArgs = args;
           if (toolName === 'WRITE_FILE') {
             if (!coordinatorResolution.preparedByTaskId?.has(task.id)) {
@@ -7748,7 +8469,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           console.log('[PLANNER_DISPATCH]', { step, taskId: nextTask.id, tool: toolName, args });
           recordEvent('planner_dispatch', { step, taskId: nextTask.id, tool: toolName, args });
 
-          const toolCtx = { workspaceRoot: resolvedWorkspaceRoot, layout: scan };
+          const toolCtx = { workspaceRoot: resolvedWorkspaceRoot, layout: scan, executionUnit: nextTask };
           let dispatchArgs = args;
           if (WRITE_TOOLS.has(toolName) && toolName === 'WRITE_FILE' && String(args?.content ?? '').trim()) {
             const moduleValidation = await normalizeGeneratedModuleContent({
@@ -9540,7 +10261,7 @@ After execution, return { "done": true, "final": "your summary here" }.`;
             console.log('[PLANNER_DIRECT_DISPATCH]', {
               taskId: readyTask.id, tool: readyTask.tool, args: effectiveArgs, step
             });
-            const toolCtx = { workspaceRoot: resolvedWorkspaceRoot, layout: scan };
+            const toolCtx = { workspaceRoot: resolvedWorkspaceRoot, layout: scan, executionUnit: readyTask };
             const startedAt = new Date();
             const toolResult = await executeTool(readyTask.tool, effectiveArgs, toolCtx);
             const completedAt = new Date();
@@ -9551,6 +10272,20 @@ After execution, return { "done": true, "final": "your summary here" }.`;
               result: toolResult, startedAt, completedAt
             };
             toolCalls.push(toolCall);
+            if (readyTask.tool === 'READ_FILE' && toolResult?.success === false && toolResult?.error === 'FILE_NOT_FOUND') {
+              const requestedKind = String(readyTask?.requestedKind || readyTask?.inputs?.requestedKind || '').toUpperCase();
+              if (requestedKind === 'DISCOVER_IF_EXISTS' || requestedKind === 'REFERENCE_ONLY' || requestedKind === 'CONDITIONAL') {
+                console.log('[OPTIONAL_DISCOVERY_READ_SKIPPED]', {
+                  path: effectiveArgs.path || effectiveArgs.file || null,
+                  requestedKind,
+                  reason: 'File not found and discovery is optional'
+                });
+                toolCall.success = true;
+                toolResult.success = true;
+                toolResult.skipped = true;
+                toolResult.error = null;
+              }
+            }
             updatePlannerMetricsFromTask(plannerMetrics, readyTask, { event: "started" });
             updatePlannerMetricsFromToolCall(plannerMetrics, toolCall, { requiredCommands: originalRequiredCommands });
             if (readyTask.tool === 'READ_FILE' && toolResult?.success && toolResult.file && toolResult.content) {
@@ -9640,9 +10375,9 @@ After execution, return { "done": true, "final": "your summary here" }.`;
           return keys.some(k => txt.includes(k));
         })();
 
-        if (hasWorkspace && toolName === "WRITE_FILE" && typeof args.path === "string" && args.path.trim()) {
+        if (hasWorkspace && toolName === "WRITE_FILE" && typeof args.path === "string" && args.path.trim() && toolContext.executionUnit) {
           try {
-            const resolved = await resolveWorkspacePathSafe(resolvedWorkspaceRoot, args.path, { allowMissing: true, layout: scan });
+            const resolved = await resolveWorkspacePathSafe(resolvedWorkspaceRoot, args.path, { allowMissing: true, layout: scan, executionUnit: toolContext.executionUnit, toolName: "WRITE_FILE" });
             try {
               await fs.stat(resolved.absolutePath);
               // File exists already — do not allow creating/editing before inspection

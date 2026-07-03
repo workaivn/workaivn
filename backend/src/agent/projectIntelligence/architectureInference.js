@@ -23,7 +23,8 @@ function inferFramework(surfaceType = "static-html", prompt = "", workspaceState
   const lowerPrompt = normalizeLower(prompt);
   const scan = workspaceState?.scan || {};
   if (workspaceState.hasNext || scan.projectType === "next" || /\bnext\.?js\b/.test(lowerPrompt)) return "nextjs-ts";
-  if (workspaceState.hasReactVite || scan.projectType === "vite" || /\breact\b|\bvite\b/.test(lowerPrompt) || /\b(?:dashboard|admin|frontend)\b/.test(lowerPrompt)) return "react-vite-ts";
+  if (/\breact\b/.test(lowerPrompt) && /\bcustom\b/.test(lowerPrompt)) return "generic-static-html";
+  if (workspaceState.hasReactVite || scan.projectType === "vite" || /\breact\s+vite\b/.test(lowerPrompt) || /\bvite\b/.test(lowerPrompt) || /\b(?:dashboard|admin|frontend)\b/.test(lowerPrompt)) return "react-vite-ts";
   if (workspaceState.hasNodeExpress || scan.projectType === "express" || /\bapi\b|\bbackend\b|\bserver\b/.test(lowerPrompt)) return "node-express";
   if (workspaceState.hasIndexPhp || workspaceState.hasLaravel || /\bphp\b/.test(lowerPrompt)) return "php-plain";
   if (workspaceState.hasCsproj || /\basp\.?net\b|\baspnet\b|\b\.net\b/.test(lowerPrompt)) return "aspnet-core";

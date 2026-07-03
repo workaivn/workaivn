@@ -144,20 +144,9 @@ test('Phase 4.30 Test 7 — planner blocking new project without approval', () =
     explicitRequestedNewFiles: []
   });
 
-  const approvedWriteUnits = [];
-  const rejectedUnits = [];
-  for (const unit of units) {
-    if (String(unit.type || '').toUpperCase() === 'ANALYZE' || String(unit.type || '').toUpperCase() === 'VERIFY') continue;
-    const approval = validatePlannerAuthority(unit, { plannerPolicies: { ALLOW_NEW_PROJECT_INITIALIZATION: false, ALLOW_NEW_FILE_CREATION: false } });
-    if (approval.valid) {
-      approvedWriteUnits.push(unit);
-    } else {
-      rejectedUnits.push({ unitId: unit.id, reason: approval.reason });
-    }
-  }
-
-  assert.equal(approvedWriteUnits.length, 0, 'No WRITE units should be approved without policies');
-  assert.ok(rejectedUnits.length > 0, 'WRITE units should be rejected');
+  const writeUnits = units.filter(unit => String(unit.type || '').toUpperCase() === 'WRITE');
+  assert.equal(writeUnits.length, 0, 'No WRITE units should be generated without initialization policy');
+  assert.ok(units.some(unit => String(unit.type || '').toUpperCase() === 'VERIFY') || units.length === 0);
 });
 
 test('Phase 4.30 Test 8 — QualityGate no-task handling via plannerFatalBlock', () => {

@@ -126,6 +126,13 @@ export function promoteExecutionUnitToTask(unit = {}, context = {}) {
     retryPolicy: approvedUnit.retryPolicy || {},
     verificationPolicy: approvedUnit.verificationPolicy || {},
     executionContract: approvedUnit.executionContract || null,
+    canonicalTargets: Array.isArray(approvedUnit.canonicalTargets) && approvedUnit.canonicalTargets.length > 0
+      ? [...approvedUnit.canonicalTargets]
+      : [
+          ...(Array.isArray(approvedUnit.targetFiles) ? approvedUnit.targetFiles : []),
+          ...(Array.isArray(approvedUnit.requiredReads) ? approvedUnit.requiredReads : []),
+          ...(Array.isArray(approvedUnit.requiredWrites) ? approvedUnit.requiredWrites : [])
+        ],
     authoritySource: approvedUnit.authoritySource || null,
     authorityState: approvedUnit.authorityState || 'approved',
     approvalId: approvedUnit.approvalId || null,

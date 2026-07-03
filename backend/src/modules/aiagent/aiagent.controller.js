@@ -1,5 +1,6 @@
 import AiProvider from "../../models/AiProvider.js";
 import mongoose from "mongoose";
+import { askAI } from "../../services/aiRouter.js";
 import AiAgent from "../../models/AiAgent.js";
 import AgentTask from "../../models/AgentTask.js";
 import AgentRun from "../../models/AgentRun.js";
@@ -13,6 +14,7 @@ import { sanitizeRunPayload } from "../../agent/runPayload.js";
 import { buildAcceptanceCriteria } from "../../agent/acceptanceCriteria.js";
 import { getWorkspaceByPublicId } from "../workspace/workspace.service.js";
 import { isRemoteWorkspaceMode } from "../../agent/workspace.js";
+import { assertPlannerEntryAllowed, classifyAnswerOnlyObjective } from "../../agent/planning/taskModeFirewall.js";
 
 const DEBUG = () => process.env.DEBUG_AGENT === "true";
 
@@ -61,6 +63,16 @@ function normalizeTaskType(value) {
   return "CODING";
 }
 
+async function resolveAnswerOnlyControllerEntry(objective = "", source = "controller", plannerDecision = null) {
+  console.log("[ANSWER_ONLY_BYPASS_HARD_STOP]", {
+    source,
+    taskMode: plannerDecision?.taskMode || "ANSWER_ONLY",
+    objective: String(objective || "").slice(0, 120),
+    reason: plannerDecision?.reason || "Direct answer requested without workspace interaction."
+  });
+  return resolveAnswerOnlyEntry(objective);
+}
+
 function buildProviderRequestFromAgent(agent = {}) {
   const providerId = agent.providerId?.code || agent.providerId?.id || agent.providerId || agent.providerCode || null;
   return {
@@ -68,6 +80,80 @@ function buildProviderRequestFromAgent(agent = {}) {
     model: agent.modelName || agent.model || null,
     providers: [agent].filter(Boolean)
   };
+}
+
+function normalizeDirectAnswerPrompt(prompt = "") {
+  return String(prompt || "").trim();
+}
+
+function extractSafeArithmeticExpression(prompt = "") {
+  const normalized = normalizeDirectAnswerPrompt(prompt)
+    .toLowerCase()
+    .replace(/^what\s+is\s+/i, "")
+    .replace(/^tinh\s+/i, "")
+    .replace(/\s+/g, "");
+
+  const candidate = normalized.replace(/=.*$/, "");
+  if (!candidate || !/^[0-9+\-*/().]+$/.test(candidate)) return null;
+  return candidate;
+}
+
+function evaluateSafeArithmeticExpression(expression = "") {
+  const sanitized = String(expression || "").trim();
+  if (!sanitized || !/^[0-9+\-*/().\s]+$/.test(sanitized)) return null;
+  try {
+    const value = Function('"use strict"; return (' + sanitized + ');')();
+    if (Number.isFinite(value)) {
+      return String(value);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function resolveDirectAnswerText(prompt = "") {
+  const arithmeticExpression = extractSafeArithmeticExpression(prompt);
+  const arithmeticAnswer = arithmeticExpression ? evaluateSafeArithmeticExpression(arithmeticExpression) : null;
+  if (arithmeticAnswer !== null) return arithmeticAnswer;
+
+  const response = await askAI({
+    messages: [
+      { role: "system", content: "Trả lời ngắn gọn, trực tiếp, không nhắc tới workspace hay planner." },
+      { role: "user", content: normalizeDirectAnswerPrompt(prompt) }
+    ],
+    mode: "chat",
+    plan: "free"
+  });
+  const text = String(response || "").trim();
+  return text || normalizeDirectAnswerPrompt(prompt);
+}
+
+async function resolveAnswerOnlyEntry(prompt = "") {
+  const finalText = await resolveDirectAnswerText(prompt);
+  return {
+    success: true,
+    error: null,
+    answerOnly: true,
+    finalText,
+    data: {
+      final: finalText,
+      answer: finalText,
+      taskMode: "ANSWER_ONLY",
+      workspaceRoot: null,
+      workspaceId: null
+    }
+  };
+}
+
+function extractChatText(rawResponse) {
+  const normalized = normalizeModelResponse(rawResponse, { mode: "content" });
+  const canonical = extractCanonicalContent(normalized?.parsed ?? rawResponse);
+  if (typeof canonical === "string" && canonical.trim()) return canonical.trim();
+  if (normalized?.canonical?.content && String(normalized.canonical.content).trim()) {
+    return String(normalized.canonical.content).trim();
+  }
+  return String(rawResponse ?? "").trim();
 }
 
 export { isFallbackError, autoGenerateResponse };
@@ -265,8 +351,42 @@ async function executeAgentRun({
   onEvent = () => {},
   fallbackAgents = null
 }) {
+  const objective = String(run?.inputPrompt || task?.inputPrompt || "").trim();
+  if (classifyAnswerOnlyObjective(objective)) {
+    const answerOnlyResult = await resolveAnswerOnlyEntry(objective);
+    run.status = "completed";
+    run.startedAt = run.startedAt || new Date();
+    run.completedAt = new Date();
+    run.workspaceId = null;
+    run.workspaceRoot = null;
+    run.outputText = answerOnlyResult.finalText;
+    run.errorMessage = null;
+    run.changedFiles = [];
+    run.toolCalls = [];
+    run.executionEvents = [];
+    run.diffSummary = { stat: "", numstat: "" };
+    run.plannerMetrics = {};
+    run.qualityGate = {
+      passed: !!answerOnlyResult.finalText,
+      score: answerOnlyResult.finalText ? 100 : 0,
+      failures: answerOnlyResult.finalText ? [] : ["No final text"],
+      feedback: answerOnlyResult.finalText ? "Quality gate passed." : "No final text"
+    };
+    run.executionSummary = {
+      changedFileCount: 0,
+      toolCallCount: 0,
+      eventCount: 0,
+      final: answerOnlyResult.finalText,
+      qualityScore: run.qualityGate.score
+    };
+    await run.save();
+    return { success: true, error: null, run };
+  }
+
   const isAutoMode = Array.isArray(fallbackAgents) && fallbackAgents.length > 0;
   let effectiveAgent = agent;
+  const workspaceId = workspace?.id ?? null;
+  const workspaceRoot = workspace?.rootPath ?? null;
 
   if (isAutoMode) {
     effectiveAgent = fallbackAgents[0];
@@ -278,7 +398,7 @@ async function executeAgentRun({
     console.log("[AgentRun] executeAgentRun agent=%s (%s) provider=%s model=%s",
       effectiveAgent.name, effectiveAgent.code, effectiveAgent.providerId.code, effectiveAgent.modelName);
     console.log("[AgentRun] workspace id=%s rootPath=%s sourceType=%s",
-      workspace.id, workspace.rootPath, workspace.sourceType);
+      workspaceId, workspaceRoot, workspace?.sourceType);
     console.log("[AgentRun] run=%s task=%s continue=%s autoMode=%s",
       run._id, task._id, continueRun, isAutoMode);
   }
@@ -314,8 +434,8 @@ async function executeAgentRun({
   run.status = "running";
   run.startedAt = new Date();
   run.completedAt = null;
-  run.workspaceId = workspace.id;
-  run.workspaceRoot = workspace.rootPath;
+  run.workspaceId = workspaceId;
+  run.workspaceRoot = workspaceRoot;
   // Reset fields to prevent stale data from previous runs
   run.outputText = "";
   run.errorMessage = null;
@@ -331,7 +451,7 @@ async function executeAgentRun({
       runId: String(run._id),
       provider: effectiveAgent.providerId.code,
       model: effectiveAgent.modelName,
-      workspaceRoot: workspace.rootPath,
+      workspaceRoot,
       originalPrompt: run.inputPrompt,
       promptLength: (run.inputPrompt || "").length,
       timestamp: new Date().toISOString()
@@ -476,7 +596,7 @@ async function executeAgentRun({
         : []),
       { role: "user", content: run.inputPrompt }
     ],
-    workspaceId: workspace.id,
+    workspaceId,
     workspaceRoot: run.workspaceRoot,
     maxSteps: policy.maxSteps,
     acceptanceCriteria: criteria?.objective ? criteria : null,
@@ -875,13 +995,6 @@ export async function runTask(req, res) {
     const { taskId } = req.params;
     const { agentId, workspaceId } = req.body;
 
-    if (!workspaceId) {
-      return res.status(400).json({
-        success: false,
-        message: "Please create or select a workspace first."
-      });
-    }
-
     if (!agentId) {
       return res.status(400).json({
         success: false,
@@ -899,6 +1012,17 @@ export async function runTask(req, res) {
     }
 
     // Get agent
+    const objective = task.normalizedPrompt || task.inputPrompt || "";
+    const plannerDecision = assertPlannerEntryAllowed(objective, classifyAnswerOnlyObjective(objective) ? "ANSWER_ONLY" : null);
+    if (plannerDecision.allowed === false && plannerDecision.directAnswer === true) {
+      const answerOnlyResult = await resolveAnswerOnlyControllerEntry(objective, "runTask", plannerDecision);
+      return res.status(200).json({
+        success: true,
+        data: answerOnlyResult.data,
+        message: "Direct answer returned"
+      });
+    }
+
     const agent = await AiAgent.findById(agentId).populate("providerId");
     if (!agent) {
       return res.status(404).json({
@@ -906,7 +1030,17 @@ export async function runTask(req, res) {
         message: "Agent not found"
       });
     }
-    const workspace = await getWorkspaceByPublicId(workspaceId);
+
+    if (!isAnswerOnlyObjective && !workspaceId) {
+      return res.status(400).json({
+        success: false,
+        message: "Please create or select a workspace first."
+      });
+    }
+
+    const resolvedWorkspace = isAnswerOnlyObjective
+      ? { id: null, rootPath: null, sourceType: "answer_only" }
+      : await getWorkspaceByPublicId(workspaceId);
 
     // Create run
     run = new AgentRun({
@@ -915,8 +1049,8 @@ export async function runTask(req, res) {
       providerCode: agent.providerId.code,
       modelName: agent.modelName,
       inputPrompt: task.normalizedPrompt || task.inputPrompt,
-      workspaceId: workspace.id,
-      workspaceRoot: workspace.rootPath,
+      workspaceId: resolvedWorkspace.id,
+      workspaceRoot: resolvedWorkspace.rootPath,
       status: "pending"
     });
 
@@ -924,10 +1058,10 @@ export async function runTask(req, res) {
 
     task.status = "running";
     task.selectedAgentId = agent._id;
-    task.workspaceId = workspace.id;
+    task.workspaceId = resolvedWorkspace.id;
     await task.save();
 
-    const result = await executeAgentRun({ task, agent, run, workspace });
+    const result = await executeAgentRun({ task, agent, run, workspace: resolvedWorkspace });
     task.status = taskStatusForRun(result.run);
     await task.save();
 
@@ -1230,16 +1364,26 @@ export async function runAgentPrompt(req, res) {
   try {
     const { workspaceId, prompt, agentId } = req.body;
 
+    const normalizedPrompt = String(prompt || "").trim();
+    if (!normalizedPrompt) {
+      return res.status(400).json({ success: false, message: "prompt is required" });
+    }
+
+    const plannerDecision = assertPlannerEntryAllowed(normalizedPrompt, classifyAnswerOnlyObjective(normalizedPrompt) ? "ANSWER_ONLY" : null);
+    if (plannerDecision.allowed === false && plannerDecision.directAnswer === true) {
+      const answerOnlyResult = await resolveAnswerOnlyControllerEntry(normalizedPrompt, "runAgentPrompt", plannerDecision);
+      return res.status(200).json({
+        success: true,
+        data: answerOnlyResult.data,
+        message: "Direct answer returned"
+      });
+    }
+
     if (!workspaceId) {
       return res.status(400).json({
         success: false,
         message: "Please create or select a workspace first."
       });
-    }
-
-    const normalizedPrompt = String(prompt || "").trim();
-    if (!normalizedPrompt) {
-      return res.status(400).json({ success: false, message: "prompt is required" });
     }
 
     const workspace = await getWorkspaceByPublicId(workspaceId);

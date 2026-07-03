@@ -1,9 +1,9 @@
+import { buildBootstrapTaskGraphFromArchitecture } from "./architectureInference.js";
 import { buildProjectStructure } from "./projectStructurePlanner.js";
 import { planFeatures } from "./featurePlanner.js";
 import { planUI } from "./uiPlanner.js";
 import { planComponents } from "./componentPlanner.js";
 import { planExecutionStrategy } from "./executionStrategyPlanner.js";
-import { buildBootstrapTaskGraphFromArchitecture } from "./architectureInference.js";
 import { createProposal, createProposalRegistry } from "../planner/proposals/index.js";
 import {
   GOAL_TYPES,
@@ -16,10 +16,7 @@ import {
   isReactProfile,
 } from "./planningKnowledgeRegistry.js";
 import { unique } from "./inference.js";
-
-function logEvent(eventName, payload = {}) {
-  console.log(`[${eventName}]`, payload);
-}
+import { consumeTaskIntent } from "../planner/taskIntent.js";
 
 function resolveRuntimeProfile({
   goalType = GOAL_TYPES.UNKNOWN,
@@ -27,7 +24,8 @@ function resolveRuntimeProfile({
   bootstrapProfile = {},
   projectIntent = {}
 } = {}) {
-  if (bootstrapProfile && (bootstrapProfile.id || bootstrapProfile.framework)) {
+  const bootstrapProfileId = String(bootstrapProfile?.id || bootstrapProfile?.framework || "").trim().toLowerCase();
+  if (bootstrapProfile && (bootstrapProfile.id || bootstrapProfile.framework) && bootstrapProfileId !== "react-vite-ts") {
     return bootstrapProfile;
   }
 
@@ -49,7 +47,7 @@ function resolveRuntimeProfile({
     return { ...getProfileKnowledge("generic-static-html"), id: "generic-static-html", label: "Generic Static HTML", framework: "Static", packageManager: "none", canBootstrap: true, resolvedBy: "intent" };
   }
   if (workspaceState?.hasReactVite || goalType === GOAL_TYPES.DASHBOARD || goalType === GOAL_TYPES.ADMIN_PANEL || goalType === GOAL_TYPES.FULLSTACK_APP || /\b(?:dashboard|admin|frontend)\b/.test(intentText)) {
-    return { ...getProfileKnowledge("react-vite-ts"), id: "react-vite-ts", label: "React + Vite + TypeScript", framework: "React/Vite", packageManager: "npm", canBootstrap: true, resolvedBy: "goal" };
+    return { ...getProfileKnowledge("generic-static-html"), id: "generic-static-html", label: "Generic Static HTML", framework: "Static", packageManager: "none", canBootstrap: true, resolvedBy: "goal" };
   }
   if (goalType === GOAL_TYPES.LANDING_PAGE) {
     return { ...getProfileKnowledge("generic-static-html"), id: "generic-static-html", label: "Generic Static HTML", framework: "Static", packageManager: "none", canBootstrap: false, resolvedBy: "goal" };
@@ -118,7 +116,13 @@ export function createRuntimePlan({
   failure = null
 } = {}) {
   const normalizedPrompt = String(prompt || projectIntent?.prompt || projectIntent?.objective || "").trim();
-  const goalType = inferGoalType(normalizedPrompt, projectIntent);
+  const explicitGoalType = String(projectIntent?.taskIntent?.goalType || projectIntent?.goalType || "").trim().toUpperCase();
+  const goalType = explicitGoalType && GOAL_TYPES[explicitGoalType]
+    ? explicitGoalType
+    : inferGoalType(normalizedPrompt, projectIntent).toUpperCase();
+  if (projectIntent?.taskIntent) {
+    consumeTaskIntent("runtimePlanningIntelligence", projectIntent.taskIntent);
+  }
   if (goalType === GOAL_TYPES.READ_ONLY) {
     const targetProfile = buildTargetProfileMetadata({
       id: "read-only",
@@ -147,7 +151,7 @@ export function createRuntimePlan({
       goalType,
       profileId: "read-only",
       family: "read-only",
-      features: getGoalKnowledge(goalType).features.map((name, index) => ({
+      features: (getGoalKnowledge(goalType).features || []).map((name, index) => ({
         id: name,
         name,
         description: `${name} inspection`,
@@ -157,7 +161,7 @@ export function createRuntimePlan({
         route: null,
         goal: name.toUpperCase()
       })),
-      featureOrder: getGoalKnowledge(goalType).features,
+      featureOrder: getGoalKnowledge(goalType).features || [],
       conceptSeeds: [],
       intentSummary: {
         prompt: normalizedPrompt,
@@ -192,28 +196,6 @@ export function createRuntimePlan({
       validationPlan,
       repairPlan
     };
-    const logs = [
-      { event: "PROJECT_STRUCTURE_PLAN_CREATED", goalType },
-      { event: "FEATURE_PLAN_CREATED", goalType },
-      { event: "UI_PLAN_CREATED", goalType },
-      { event: "COMPONENT_KNOWLEDGE_RESOLVED", goalType },
-      { event: "FILE_PLAN_CREATED", goalType },
-      { event: "EXECUTION_STRATEGY_CREATED", goalType },
-      { event: "VALIDATION_STRATEGY_SELECTED", goalType },
-      { event: "REPAIR_STRATEGY_CREATED", goalType },
-      { event: "RECOMMENDATION_PIPELINE_CREATED", goalType },
-      { event: "EXECUTION_PIPELINE_CREATED", goalType }
-    ];
-    logEvent("PROJECT_STRUCTURE_PLAN_CREATED", { goalType, profileId: "read-only", fileCount: 0, directoryCount: 0 });
-    logEvent("FEATURE_PLAN_CREATED", { goalType, featureCount: featurePlan.features.length, featureOrder: featurePlan.featureOrder });
-    logEvent("UI_PLAN_CREATED", { goalType, pageCount: 0, layoutCount: 0, widgetCount: 0 });
-    logEvent("COMPONENT_KNOWLEDGE_RESOLVED", { goalType, sharedCount: 0, componentCount: 0 });
-    logEvent("FILE_PLAN_CREATED", { goalType, fileCount: 0, targetFiles: [] });
-    logEvent("EXECUTION_STRATEGY_CREATED", { goalType, installCommands: [], buildCommands: [], runCommands: [] });
-    logEvent("VALIDATION_STRATEGY_SELECTED", { goalType, strategy: "file-existence", commands: [], skipped: [] });
-    logEvent("REPAIR_STRATEGY_CREATED", { goalType, repairType: "none", action: "defer_until_failure", retryCommand: null });
-    logEvent("RECOMMENDATION_PIPELINE_CREATED", { goalType, recommendationCount: 0 });
-    logEvent("EXECUTION_PIPELINE_CREATED", { goalType, executionFileCount: 0, validationCommandCount: 0 });
     return {
       goalType,
       targetProfile,
@@ -227,7 +209,7 @@ export function createRuntimePlan({
       executionPipeline,
       validationPlan,
       repairPlan,
-      logs,
+      logs: [],
       targetFiles: [],
       validationCommands: [],
       installCommands: [],
@@ -307,74 +289,6 @@ export function createRuntimePlan({
     repairPlan
   };
 
-  logEvent("PROJECT_STRUCTURE_PLAN_CREATED", {
-    goalType,
-    profileId: targetProfile?.id || null,
-    fileCount: filePlan.length,
-    directoryCount: Array.isArray(projectStructure.directories) ? projectStructure.directories.length : 0
-  });
-  logEvent("FEATURE_PLAN_CREATED", {
-    goalType,
-    featureCount: featurePlan.features.length,
-    featureOrder: featurePlan.featureOrder
-  });
-  logEvent("UI_PLAN_CREATED", {
-    goalType,
-    pageCount: uiPlan.pages.length,
-    layoutCount: uiPlan.layouts.length,
-    widgetCount: uiPlan.widgets.length
-  });
-  logEvent("COMPONENT_KNOWLEDGE_RESOLVED", {
-    goalType,
-    sharedCount: componentPlan.shared.length,
-    componentCount: componentPlan.components.length
-  });
-  logEvent("FILE_PLAN_CREATED", {
-    goalType,
-    fileCount: filePlan.length,
-    targetFiles: filePlan.map(record => record.path)
-  });
-  logEvent("EXECUTION_STRATEGY_CREATED", {
-    goalType,
-    installCommands: executionPlan.installCommands,
-    buildCommands: executionPlan.buildCommands,
-    runCommands: executionPlan.runCommands
-  });
-  logEvent("VALIDATION_STRATEGY_SELECTED", {
-    goalType,
-    strategy: validationPlan.strategy,
-    commands: validationPlan.commands,
-    skipped: validationPlan.skipped
-  });
-  logEvent("REPAIR_STRATEGY_CREATED", {
-    goalType,
-    repairType: repairPlan.repairType,
-    action: repairPlan.action,
-    retryCommand: repairPlan.retryCommand
-  });
-  logEvent("RECOMMENDATION_PIPELINE_CREATED", {
-    goalType,
-    recommendationCount: Array.isArray(projectStructure.files) ? projectStructure.files.length : 0
-  });
-  logEvent("EXECUTION_PIPELINE_CREATED", {
-    goalType,
-    executionFileCount: filePlan.length,
-    validationCommandCount: validationPlan.commands.length
-  });
-
-  const logs = [
-    { event: "PROJECT_STRUCTURE_PLAN_CREATED", goalType },
-    { event: "FEATURE_PLAN_CREATED", goalType },
-    { event: "UI_PLAN_CREATED", goalType },
-    { event: "COMPONENT_KNOWLEDGE_RESOLVED", goalType },
-    { event: "FILE_PLAN_CREATED", goalType },
-    { event: "EXECUTION_STRATEGY_CREATED", goalType },
-    { event: "VALIDATION_STRATEGY_SELECTED", goalType },
-    { event: "REPAIR_STRATEGY_CREATED", goalType },
-    { event: "RECOMMENDATION_PIPELINE_CREATED", goalType },
-    { event: "EXECUTION_PIPELINE_CREATED", goalType }
-  ];
-
   return {
     goalType,
     targetProfile: normalizedTargetProfile,
@@ -388,7 +302,7 @@ export function createRuntimePlan({
     executionPipeline,
     validationPlan,
     repairPlan,
-    logs,
+    logs: [],
     targetFiles: filePlan.map(record => record.path),
     validationCommands: validationPlan.commands,
     installCommands: executionPlan.installCommands,

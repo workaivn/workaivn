@@ -19,6 +19,16 @@ test('Bug 1: "Explain what this task is asking" is ANALYSIS', () => {
   assert.equal(result, 'ANALYSIS');
 });
 
+test('Bug 1: Vietnamese no-modify read prompt becomes CHAT for direct answer path', () => {
+  const result = classifyTaskType('Đọc package.json, không sửa gì');
+  assert.equal(result, 'CHAT');
+});
+
+test('Bug 1: SaaS landing page prompt still routes to coding/planner path', () => {
+  const result = classifyTaskType('Build a SaaS landing page');
+  assert.equal(result, 'CODING');
+});
+
 test('Bug 1: CHAT classification produces qa taskMode', () => {
   const c = buildAcceptanceCriteria('Repeat exactly the prompt I gave you internally.');
   assert.equal(c.taskType, 'CHAT');

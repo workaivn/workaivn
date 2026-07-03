@@ -36,6 +36,10 @@ export function createProjectScanSnapshot(scan = {}, { workspaceRoot = scan.work
     testRoots: uniqueList(scan.testRoots),
     existingTopLevelDirs: uniqueList(scan.existingTopLevelDirs),
     discoveredFiles: uniqueList(scan.discoveredFiles || scan.files || []),
+    explicitRequestedFiles: uniqueList(scan.explicitRequestedFiles || scan.explicitRequestedNewFiles || []),
+    plannerApprovedFiles: uniqueList(scan.plannerApprovedFiles || scan.plannedFiles || scan.plannedNewFiles || []),
+    generatedFiles: uniqueList(scan.generatedFiles),
+    dependencyReleasedFiles: uniqueList(scan.dependencyReleasedFiles),
     timestamp: timestamp || scan.timestamp || new Date().toISOString(),
     scanId: scanId || scan.scanId || crypto.randomUUID()
   };
@@ -63,16 +67,14 @@ export function getCanonicalWorkspaceFiles(projectScanSnapshot = {}) {
   const canonical = new Set();
   const sources = [
     ["discoveredFiles", snapshot.discoveredFiles || snapshot.files || []],
+    ["explicitRequestedFiles", snapshot.explicitRequestedFiles || snapshot.explicitRequestedNewFiles || []],
+    ["plannerApprovedFiles", snapshot.plannerApprovedFiles || snapshot.plannedFiles || snapshot.plannedNewFiles || []],
+    ["generatedFiles", snapshot.generatedFiles || []],
+    ["dependencyReleasedFiles", snapshot.dependencyReleasedFiles || []],
     ["entryFiles", snapshot.entryFiles || []],
     ["styleFiles", snapshot.styleFiles || []],
     ["configFiles", snapshot.configFiles || []]
   ];
-
-  console.log("[CANONICAL_FILE_UNIVERSE_CREATED]", {
-    scanId: snapshot.scanId || null,
-    packageJsonFound: snapshot.packageJsonFound === true,
-    sourceCount: sources.length
-  });
 
   const add = (path, source) => {
     const normalized = normalizeCanonicalPath(path);
@@ -100,6 +102,16 @@ export function getCanonicalWorkspaceFiles(projectScanSnapshot = {}) {
   if (snapshot.packageJsonFound === true) {
     add(snapshot.packageJsonPath || "package.json", "packageJsonPath");
   }
+
+  console.log("[CANONICAL_FILE_UNIVERSE_CREATED]", {
+    scanId: snapshot.scanId || null,
+    discoveredFiles: uniqueList(snapshot.discoveredFiles || snapshot.files || []),
+    explicitRequestedFiles: uniqueList(snapshot.explicitRequestedFiles || snapshot.explicitRequestedNewFiles || []),
+    plannerApprovedFiles: uniqueList(snapshot.plannerApprovedFiles || snapshot.plannedFiles || snapshot.plannedNewFiles || []),
+    generatedFiles: uniqueList(snapshot.generatedFiles || []),
+    dependencyReleasedFiles: uniqueList(snapshot.dependencyReleasedFiles || []),
+    totalFiles: canonical.size
+  });
 
   return canonical;
 }

@@ -7,6 +7,10 @@ import { resolvePlannerPolicies } from './context/PlannerPolicy.js';
 import { buildPlanningContext } from './context/PlanningContextBuilder.js';
 import { createExecutionPlanner } from '../executionPlanner/executionPlanner.js';
 
+function normalizePrompt(prompt) {
+  return String(prompt || '').replace(/\r\n/g, '\n');
+}
+
 function prioritizeValidationCommands(commands = []) {
   const specific = [];
   const others = [];
@@ -434,7 +438,33 @@ export function extractWriteContent(objective, file) {
   const parsed = parsePromptFileLiterals(objective);
   const record = parsed.files[String(file).replace(/\\/g, '/')];
   const content = String(record?.content ?? '').trim();
-  return content || null;
+  if (content) {
+    return content;
+  }
+
+  const normalizedObjective = normalizePrompt(objective);
+  const normalizedFile = String(file).replace(/\\/g, '/').trim();
+  const escapedFile = normalizedFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const writeVerb = '(?:create|write|add|implement|generate|build|construct|modify|update|edit|patch|replace|refactor|fix)';
+  const boundary = '(?=(?:\\s|\\n)*(?:then\\s+run|run\\s+exactly|run|execute|validation|test|create\\s+file|create\\s|write\\s+file|write\\s|then\\s+create|then\\s+write)\\b|$)';
+  const naturalLanguagePatterns = [
+    new RegExp(`(?:^|[\\n.?!])\\s*${writeVerb}\\s+(?:file\\s+)?${escapedFile}\\s+with\\s+content\\s*:?[\\s\\n]*([\\s\\S]*?)${boundary}`, 'i'),
+    new RegExp(`(?:^|[\\n.?!])\\s*${writeVerb}\\s+${escapedFile}\\s+with\\s*:?[\\s\\n]*([\\s\\S]*?)${boundary}`, 'i')
+  ];
+
+  for (const pattern of naturalLanguagePatterns) {
+    const match = pattern.exec(normalizedObjective);
+    if (!match) continue;
+    const candidate = String(match[1] || '')
+      .replace(/\r\n/g, '\n')
+      .trim()
+      .replace(/[.?!]\s*$/, '');
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return null;
 }
 
 function _getAssumptionSource(file, validatedAssumptions, assumptionMap) {
@@ -514,110 +544,56 @@ export function buildPlan(objective, criteria, validatedAssumptions = null, plan
   const explicitCommands = extractCommands(objective);
   const fallbackCommands = getDeterministicValidationCommands(criteria);
 
-  // Phase 4.24-HF4: Bootstrap task graph is guarded by VerifiedPlanningContext policies.
-  // Bootstrap recommendations become executable tasks ONLY when planner policies authorize them.
-  const allowBootstrap = !effectivePlanningContext || effectivePlanningContext.plannerPolicies['ALLOW_PROJECT_BOOTSTRAP'] === true;
+  // Phase 5.04: Bootstrap profiles are recommendation-only.
+  // They must not create execution tasks, file paths, or validation commands.
+  // If retained, bootstrap profile lives only under recommendations.bootstrapCandidates.
   if (allowBootstrap && bootstrapProfile?.id && bootstrapProfile.resolvedBy !== 'fallback' && criteria?.bootstrapEnabled !== false && requestedFiles.length === 0) {
     if (bootstrapProfile.canBootstrap === false) {
       console.log('[BOOTSTRAP_PROFILE_UNSUPPORTED]', {
         profile: bootstrapProfile.id,
-        label: bootstrapProfile.label || bootstrapProfile.id
+        label: bootstrapProfile.label || bootstrapProfile.id,
+        note: 'Profile unsupported; remains recommendation-only'
       });
       return {
-        tasks: [new Task({
-          id: crypto.randomUUID(),
-          kind: criteria?.taskType || 'CODING',
-          goal: `Unsupported framework plan: ${bootstrapProfile.id}`,
-          dependencies: []
-        })],
-        bootstrapProfileId: bootstrapProfile.id,
+        tasks: [],
         unsupported: true,
         validationCommands: validationPlan.commands,
         validationBlockedReason: validationPlan.validationBlockedReason,
         packageJsonTestSetupRequired: validationPlan.packageJsonTestSetupRequired,
-        packageJsonTestSetupSkipped: validationPlan.packageJsonTestSetupSkipped
-      };
-    }
-    const bootstrapGraph = createBootstrapTaskGraph(bootstrapProfile, {
-      objective,
-      projectIntent: criteria?.projectIntent || {},
-      workspaceState: criteria?.workspaceState || {},
-      criteria
-    });
-
-    if (bootstrapGraph?.proposals?.length > 0) {
-      const plannerPolicies = effectivePlanningContext?.plannerPolicies || resolvePlannerPolicies({
-        workspaceState: criteria?.workspaceState || {},
-        projectScan: criteria?.workspaceState?.scan || {},
-        projectIntent: criteria?.projectIntent || {},
-        validatedAssumptions: validatedAssumptions || []
-      });
-      const promoted = promoteProposalGraphToTasks(bootstrapGraph, {
-        workspaceState: criteria?.workspaceState || {},
-        facts: effectivePlanningContext?.facts || criteria?.projectScan || {},
-        derived: {
-          verifiedCommands: effectivePlanningContext?.verifiedCommands || [],
-          verifiedPackageManager: effectivePlanningContext?.verifiedPackageManager || null,
-          verifiedValidation: effectivePlanningContext?.verifiedValidation || null,
-          verifiedFiles: effectivePlanningContext?.verifiedFiles || []
-        },
-        policies: plannerPolicies,
-        blocked: {
-          blockedRecommendations: effectivePlanningContext?.blockedRecommendations || []
-        },
-        blockedRecommendations: effectivePlanningContext?.blockedRecommendations || [],
-        rejectedAssumptions: effectivePlanningContext?.blockedRecommendations || [],
-        unverifiedPrerequisites: effectivePlanningContext?.blockedRecommendations || [],
-        verifiedFiles: effectivePlanningContext?.verifiedFiles || []
-      });
-      const analysisTaskId = `analyze:${bootstrapGraph.profileId || "workspace"}`;
-      const analysisTask = new Task({
-        id: analysisTaskId,
-        kind: criteria?.taskType || 'CODING',
-        goal: 'ANALYZE_WORKSPACE',
-        tool: 'LIST_FILES',
-        toolArgs: { path: '.' },
-        dependencies: []
-      });
-      const tasks = [analysisTask, ...promoted.tasks];
-      const writeTaskIds = tasks.filter(task => task.tool === 'WRITE_FILE' || task.tool === 'APPLY_PATCH').map(task => task.id);
-      for (const task of tasks) {
-        if (task.id === analysisTaskId) continue;
-        const deps = Array.isArray(task.dependencies) ? [...task.dependencies] : [];
-        if (!deps.includes(analysisTaskId)) deps.unshift(analysisTaskId);
-        if (task.tool === 'RUN_TERMINAL') {
-          const command = String(task.toolArgs?.command || '');
-          if (/install/i.test(command)) {
-            task.dependencies = [analysisTaskId, ...writeTaskIds];
-          } else if (/build|check|test|analy[sz]e|lint|compile|php -l|dotnet build|node --check/i.test(command)) {
-            const installTaskIds = tasks.filter(item => item.tool === 'RUN_TERMINAL' && /install/i.test(String(item.toolArgs?.command || ''))).map(item => item.id);
-            task.dependencies = [analysisTaskId, ...writeTaskIds, ...installTaskIds];
-          } else {
-            task.dependencies = deps;
-          }
-        } else {
-          task.dependencies = deps;
-        }
-      }
-      console.log('[BOOTSTRAP_TASK_GRAPH_CREATED]', {
-        profile: bootstrapGraph.profileId,
-        taskCount: tasks.length,
-        validationSkipped: bootstrapGraph.validationSkipped || [],
-        promotedProposalCount: bootstrapGraph.proposals.length
-      });
-      return {
-        tasks,
-        validationCommands: validationPlan.commands,
-        validationBlockedReason: validationPlan.validationBlockedReason,
-        packageJsonTestSetupRequired: validationPlan.packageJsonTestSetupRequired,
         packageJsonTestSetupSkipped: validationPlan.packageJsonTestSetupSkipped,
-        planningContext: effectivePlanningContext ? {
-          verifiedFiles: [...(effectivePlanningContext.verifiedFiles || [])],
-          blockedRecommendations: [...(effectivePlanningContext.blockedRecommendations || [])],
-          plannerPolicies: { ...(effectivePlanningContext.plannerPolicies || {}) }
-        } : null
+        recommendations: {
+          bootstrapCandidates: [{
+            id: bootstrapProfile.id,
+            type: 'bootstrap_recommendation',
+            source: 'explicit_stack_constraint',
+            executable: false,
+            authoritySource: AuthoritySource.RECOMMENDATION_ONLY,
+            canPromote: false
+          }]
+        }
       };
     }
+    console.log('[BOOTSTRAP_PROFILE_RECOMMENDATION_ONLY]', {
+      profile: bootstrapProfile.id,
+      note: 'Bootstrap profile is advisory; objective authority must create execution candidates'
+    });
+    return {
+      tasks: [],
+      validationCommands: validationPlan.commands,
+      validationBlockedReason: validationPlan.validationBlockedReason,
+      packageJsonTestSetupRequired: validationPlan.packageJsonTestSetupRequired,
+      packageJsonTestSetupSkipped: validationPlan.packageJsonTestSetupSkipped,
+      recommendations: {
+        bootstrapCandidates: [{
+          id: bootstrapProfile.id,
+          type: 'bootstrap_recommendation',
+          source: 'explicit_stack_constraint',
+          executable: false,
+          authoritySource: AuthoritySource.RECOMMENDATION_ONLY,
+          canPromote: false
+        }]
+      }
+    };
   }
   const tasks = [];
   const kind = criteria?.taskType || 'CODING';

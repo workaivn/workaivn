@@ -5,9 +5,14 @@ import { createPlanningContextSnapshot } from './PlanningContextSnapshot.js';
 import { createProjectScanSnapshot, getCanonicalWorkspaceFiles } from '../../context/ProjectScanSnapshot.js';
 import { validateContextConsistency } from '../../context/ContextConsistencyValidator.js';
 import { normalizeCanonicalPath } from '../../context/canonicalPath.js';
+import { buildObjectiveConstraintGraph } from '../../planning/objectiveConstraintExtractor.js';
+import { buildPlanningStrategyGraph } from '../../planning/constraintResolver.js';
+import { resolveImplementationStrategy } from '../../planning/implementationStrategy/implementationStrategyResolver.js';
 import { REQUESTED_FILE_KIND } from '../../acceptanceCriteria.js';
 import { createRuntimePlan } from '../../projectIntelligence/runtimePlanningIntelligence.js';
 import { createDerivedRequestedFileDetails as inferFileIntentDetails } from '../fileIntentInference.js';
+import { detectProjectInitialization } from './ProjectInitializationDetector.js';
+import { scanWorkspaceCapabilities } from '../../../planner/workspaceCapability/workspaceCapabilityScanner.js';
 
 function uniqueNormalizedPaths(values = []) {
   return [...new Set((Array.isArray(values) ? values : []).map(value => preserveCanonicalPath(value)).filter(Boolean))];
@@ -56,13 +61,18 @@ function normalizeRequestedFileDetails(classifierRequestedFiles = []) {
 
 function normalizeAuthoritySource(value = '') {
   const source = String(value || '').trim().toLowerCase();
-  if (source === 'explicit_user_request' || source === 'explicit_user') return 'explicit_user_request';
-  if (source === 'planner_derived') return 'planner_derived';
-  if (source === 'workspace_derived') return 'workspace_derived';
+  if (source === 'objective_authority') return 'objective_authority';
+  if (source === 'workspace_authority') return 'workspace_authority';
   if (source === 'verified_planning_context') return 'verified_planning_context';
-  if (source === 'workspace_evidence') return 'workspace_evidence';
-  if (source === 'model_invented' || source === 'model_output' || source === 'model reasoning' || source === 'model_reasoning') return 'model_invented';
-  return source || 'explicit_user_request';
+  if (source === 'explicit_user_request' || source === 'explicit_user' || source === 'workspace_derived' || source === 'workspace_evidence') return 'workspace_authority';
+  if (source === 'planner_derived') return 'model_suggestion';
+  if (source === 'recommendation_only' || source === 'recommendation') return 'recommendation_only';
+  if (source === 'template') return 'template';
+  if (source === 'framework_hint') return 'framework_hint';
+  if (source === 'bootstrap_hint') return 'bootstrap_hint';
+  if (source === 'default_hint') return 'default_hint';
+  if (source === 'model_suggestion' || source === 'model_invented' || source === 'model_output' || source === 'model reasoning' || source === 'model_reasoning') return 'model_suggestion';
+  return source || 'recommendation_only';
 }
 
 function uniqueNormalized(entries = []) {
@@ -154,7 +164,41 @@ function buildRequestedFileMetadata({
     bootstrapProfile,
     requestedFileDetails: normalizeRequestedFileDetails(classifierRequestedFiles)
   });
-  const requestedFileDetails = Array.isArray(inferredFileIntents) ? inferredFileIntents : (inferredFileIntents?.requestedFileDetails || []);
+  const inferredRequestedFileDetails = Array.isArray(inferredFileIntents) ? inferredFileIntents : (inferredFileIntents?.requestedFileDetails || []);
+  const workspaceExistingFiles = new Set([
+    ...(Array.isArray(workspaceState?.existingFiles) ? workspaceState.existingFiles : []),
+    ...(Array.isArray(projectScan?.discoveredFiles) ? projectScan.discoveredFiles : []),
+    ...(Array.isArray(projectScan?.files) ? projectScan.files : [])
+  ].map(file => canonicalPathKey(file)));
+  const explicitRequestedDetails = uniqueNormalizedPaths(explicitRequestedNewFiles).map(path => {
+    const verified = workspaceExistingFiles.has(canonicalPathKey(path));
+    return {
+      path,
+      kind: verified ? REQUESTED_FILE_KIND.EXPLICIT_MODIFICATION : REQUESTED_FILE_KIND.EXPLICIT_CREATE,
+      authoritySource: 'workspace_authority',
+      conditional: false,
+      explicit: true,
+      verified,
+      plannedNewFile: !verified
+    };
+  });
+  const plannedWriteDetails = uniqueNormalizedPaths(plannedWriteTargets).map(path => {
+    const verified = workspaceExistingFiles.has(canonicalPathKey(path));
+    return {
+      path,
+      kind: verified ? REQUESTED_FILE_KIND.EXPLICIT_MODIFICATION : REQUESTED_FILE_KIND.EXPLICIT_CREATE,
+      authoritySource: 'workspace_authority',
+      conditional: false,
+      explicit: true,
+      verified,
+      plannedNewFile: !verified
+    };
+  });
+  const requestedFileDetails = uniqueNormalized([
+    ...inferredRequestedFileDetails,
+    ...explicitRequestedDetails,
+    ...plannedWriteDetails
+  ]);
   const requestedFileKinds = [...new Set(requestedFileDetails.map(entry => entry.kind).filter(Boolean))];
   const plannedNewFilePaths = uniqueNormalizedPaths(
     requestedFileDetails
@@ -163,7 +207,7 @@ function buildRequestedFileMetadata({
   );
   const explicitRequestedNewFilePaths = uniqueNormalizedPaths(
     requestedFileDetails
-      .filter(entry => entry.kind === REQUESTED_FILE_KIND.EXPLICIT_CREATE && entry.authoritySource === 'explicit_user_request')
+      .filter(entry => entry.kind === REQUESTED_FILE_KIND.EXPLICIT_CREATE && entry.explicit === true)
       .map(entry => entry.path)
   );
   const plannedNewFileSet = new Set(plannedNewFilePaths.map(path => canonicalPathKey(path)));
@@ -216,7 +260,7 @@ export function buildPlanningContext({
     packageJsonFound: projectScan.packageJsonFound === true,
     existingFileCount: (workspaceState.existingFiles || []).length,
     assumptionCount: validatedAssumptions.length,
-    bootstrapProfileId: bootstrapProfile?.id || null
+    bootstrapProfile: bootstrapProfile ? { id: bootstrapProfile.id, framework: bootstrapProfile.framework, note: 'recommendation-only' } : null
   });
 
   const mergedDiscoveredFiles = [
@@ -234,7 +278,42 @@ export function buildPlanningContext({
     bootstrapProfile,
     objective: projectIntent?.prompt || projectIntent?.objective || ''
   });
-  const plannedFilesList = uniqueNormalizedPaths(requestedFileMetadata.plannedNewFiles);
+  const objectiveConstraintGraph = buildObjectiveConstraintGraph({
+    objective: projectIntent?.prompt || projectIntent?.objective || '',
+    projectIntent
+  });
+  const planningStrategyGraph = buildPlanningStrategyGraph({
+    objective: projectIntent?.prompt || projectIntent?.objective || '',
+    projectIntent,
+    constraintGraph: objectiveConstraintGraph
+  });
+  const implementationResolution = resolveImplementationStrategy({
+    objective: projectIntent?.prompt || projectIntent?.objective || '',
+    objectiveConstraints: Array.isArray(objectiveConstraintGraph?.constraints) ? objectiveConstraintGraph.constraints : [],
+    planningStrategies: Array.isArray(planningStrategyGraph?.strategies) ? planningStrategyGraph.strategies : [],
+    initializationStrategies: Array.isArray(planningStrategyGraph?.initializationStrategies) ? planningStrategyGraph.initializationStrategies : [],
+    planningContext: {
+      plannerPolicies: {},
+      policies: {},
+      initializationMode: null,
+      objectiveAuthorityEligible: false,
+      facts: {
+        projectType: projectScan.projectType || 'generic',
+        packageJsonFound: projectScan.packageJsonFound === true,
+        packageManager: projectScan.packageManager || null
+      }
+    },
+    projectScanSnapshot: projectScan?.scanId ? projectScan : {
+      ...projectScan,
+      discoveredFiles: Array.isArray(projectScan?.discoveredFiles) ? projectScan.discoveredFiles : []
+    },
+    projectIntent
+  });
+  const plannedFilesList = uniqueNormalizedPaths([
+    ...(Array.isArray(requestedFileMetadata.plannedNewFiles) ? requestedFileMetadata.plannedNewFiles : []),
+    ...(Array.isArray(explicitRequestedNewFiles) ? explicitRequestedNewFiles : []),
+    ...(Array.isArray(plannedWriteTargets) ? plannedWriteTargets : [])
+  ]);
   const scanInput = projectScan?.scanId
     ? projectScan
     : {
@@ -243,7 +322,11 @@ export function buildPlanningContext({
       };
   const scanWithRequestedMetadata = {
     ...scanInput,
-    ...requestedFileMetadata
+    ...requestedFileMetadata,
+    explicitRequestedFiles: uniqueNormalizedPaths(explicitRequestedNewFiles),
+    plannerApprovedFiles: uniqueNormalizedPaths(plannedFilesList),
+    generatedFiles: uniqueNormalizedPaths(projectScan?.generatedFiles || []),
+    dependencyReleasedFiles: uniqueNormalizedPaths(projectScan?.dependencyReleasedFiles || [])
   };
 
   const facts = createProjectScanSnapshot(scanWithRequestedMetadata, {
@@ -253,6 +336,15 @@ export function buildPlanningContext({
   });
   const canonicalFiles = getCanonicalWorkspaceFiles(facts);
   const discoveredFiles = [...canonicalFiles];
+  const capabilityScan = scanWorkspaceCapabilities({
+    projectScanSnapshot: facts,
+    planningContext: {
+      verifiedFiles: [],
+      plannedFiles: plannedFilesList,
+      facts
+    },
+    objective: projectIntent?.prompt || projectIntent?.objective || ''
+  });
 
   const verifiedFiles = [];
   const verifiedRecommendations = [];
@@ -267,17 +359,43 @@ export function buildPlanningContext({
     verifiedSourceRoots: [],
     verifiedModuleRoots: [],
     verifiedRecommendations: [],
-    blockedRecommendations: []
+    blockedRecommendations: [],
+    workspaceCapabilities: capabilityScan.workspaceCapabilities,
+    artifactCandidates: [],
+    artifactGraph: null,
+    artifactOperations: {},
+    plannerApprovedArtifacts: [],
+    implementationStrategies: Array.isArray(implementationResolution?.implementationStrategies) ? implementationResolution.implementationStrategies : [],
+    implementationVariants: Array.isArray(implementationResolution?.implementationVariants) ? implementationResolution.implementationVariants : [],
+    selectedImplementation: implementationResolution?.selectedImplementation || null,
+    implementationEvidence: Array.isArray(implementationResolution?.implementationEvidence) ? implementationResolution.implementationEvidence : [],
+    implementationPolicyDecision: implementationResolution?.implementationPolicyDecision || null,
+    implementationVariantGraph: implementationResolution?.implementationVariantGraph || null,
+    satisfiedCapabilities: [],
+    missingCapabilities: [],
+    capabilityCoverage: { total: 0, satisfied: 0, partial: 0, missing: 0, blocked: 0, unknown: 0, coverage: 0 },
+    capabilityGapGraph: null,
+    satisfiedCapabilityGraph: null,
+    missingCapabilityGraph: null,
+    initializationCapabilities: [],
+    capabilitySatisfaction: null,
+    artifactOwnership: {},
+    artifactLifecycle: {},
+    operationPlan: [],
+    capabilityEvidence: capabilityScan.capabilityEvidence,
+    objectiveConstraintGraph,
+    planningStrategyGraph,
+    requiredFramework: null
   };
 
   for (const p of plannedFilesList) {
     console.log("[PLANNED_FILE_REGISTERED]", { path: p });
   }
   for (const p of requestedFileMetadata.explicitRequestedNewFiles) {
-    console.log("[EXPLICIT_USER_AUTHORITY_DETECTED]", { path: p, authoritySource: 'explicit_user_request' });
+    console.log("[EXPLICIT_USER_AUTHORITY_DETECTED]", { path: p, authoritySource: 'workspace_authority' });
   }
   for (const detail of requestedFileMetadata.requestedFileDetails) {
-    if (detail.authoritySource === 'planner_derived' || detail.authoritySource === 'workspace_derived') {
+    if (detail.authoritySource === 'model_suggestion' || detail.authoritySource === 'workspace_authority') {
       console.log('[PLANNER_DERIVED_FILE]', {
         name: detail.path,
         authoritySource: detail.authoritySource,
@@ -286,9 +404,9 @@ export function buildPlanningContext({
     }
   }
   console.log('[PLANNER_FILE_AUTHORITY]', {
-    explicit: requestedFileMetadata.requestedFileDetails.filter(entry => entry.authoritySource === 'explicit_user_request').length,
-    plannerDerived: requestedFileMetadata.requestedFileDetails.filter(entry => entry.authoritySource === 'planner_derived').length,
-    workspaceDerived: requestedFileMetadata.requestedFileDetails.filter(entry => entry.authoritySource === 'workspace_derived').length,
+    explicit: requestedFileMetadata.requestedFileDetails.filter(entry => entry.explicit === true).length,
+    plannerDerived: requestedFileMetadata.requestedFileDetails.filter(entry => entry.authoritySource === 'model_suggestion').length,
+    workspaceDerived: requestedFileMetadata.requestedFileDetails.filter(entry => entry.authoritySource === 'workspace_authority').length,
     invented: requestedFileMetadata.requestedFileDetails.filter(entry => entry.authoritySource === 'model_invented').length
   });
 
@@ -389,16 +507,25 @@ export function buildPlanningContext({
       ...(Array.isArray(bootstrapProfile.installCommands) ? bootstrapProfile.installCommands : [])
     ].map(cmd => String(cmd || '').trim()).filter(Boolean);
     if (recommendedCommands.length > 0) {
-      console.log('[PLANNING_CONTEXT_RECOMMENDATION_ONLY]', {
+      console.log('[BOOTSTRAP_RECOMMENDATION_CREATED]', {
         source: 'bootstrap_profile',
+        profileId: bootstrapProfile?.id || null,
         commandCount: recommendedCommands.length,
-        commands: recommendedCommands
+        commands: recommendedCommands,
+        note: 'Profile recommendations only — not executable authority'
       });
     }
   }
 
   if (facts.projectType) {
     derived.verifiedFramework = facts.projectType;
+  }
+
+  const requiredFrameworkConstraint = Array.isArray(objectiveConstraintGraph?.constraints)
+    ? objectiveConstraintGraph.constraints.find(constraint => String(constraint.category || '').toUpperCase() === 'FRAMEWORK')
+    : null;
+  if (requiredFrameworkConstraint) {
+    derived.requiredFramework = requiredFrameworkConstraint.value || null;
   }
 
   if (facts.entryFiles) {
@@ -443,6 +570,16 @@ export function buildPlanningContext({
     projectIntent,
     validatedAssumptions
   });
+  const initialization = detectProjectInitialization({
+    workspaceState,
+    projectScan: facts,
+    projectIntent,
+    objective: projectIntent?.prompt || projectIntent?.objective || '',
+    verifiedPlanningContext: {
+      verifiedFiles,
+      verifiedCommands
+    }
+  });
 
   const context = new VerifiedPlanningContext({
     workspace: workspaceState,
@@ -459,7 +596,38 @@ export function buildPlanningContext({
     blockedRecommendations,
     proposals: [],
     plannedFiles: plannedFilesList,
-    explicitRequestedNewFiles: requestedFileMetadata.explicitRequestedNewFiles
+    explicitRequestedNewFiles: requestedFileMetadata.explicitRequestedNewFiles,
+    initializationMode: initialization.initializationMode,
+    objectiveAuthorityEligible: initialization.objectiveAuthorityEligible,
+    workspaceCapabilities: capabilityScan.workspaceCapabilities,
+    artifactCandidates: [],
+    artifactGraph: null,
+    artifactOperations: {},
+    plannerApprovedArtifacts: [],
+    implementationStrategies: Array.isArray(implementationResolution?.implementationStrategies) ? implementationResolution.implementationStrategies : [],
+    implementationVariants: Array.isArray(implementationResolution?.implementationVariants) ? implementationResolution.implementationVariants : [],
+    selectedImplementation: implementationResolution?.selectedImplementation || null,
+    implementationEvidence: Array.isArray(implementationResolution?.implementationEvidence) ? implementationResolution.implementationEvidence : [],
+    implementationPolicyDecision: implementationResolution?.implementationPolicyDecision || null,
+    implementationVariantGraph: implementationResolution?.implementationVariantGraph || null,
+    satisfiedCapabilities: [],
+    missingCapabilities: [],
+    capabilityCoverage: { total: 0, satisfied: 0, partial: 0, missing: 0, blocked: 0, unknown: 0, coverage: 0 },
+    capabilityGapGraph: null,
+    satisfiedCapabilityGraph: null,
+    missingCapabilityGraph: null,
+    initializationCapabilities: [],
+    capabilitySatisfaction: null,
+    artifactOwnership: {},
+    artifactLifecycle: {},
+    operationPlan: [],
+    capabilityEvidence: capabilityScan.capabilityEvidence,
+    constraintGraph: objectiveConstraintGraph,
+    planningStrategyGraph,
+    objectiveConstraints: Array.isArray(objectiveConstraintGraph?.constraints) ? objectiveConstraintGraph.constraints : [],
+    planningStrategies: Array.isArray(planningStrategyGraph?.strategies) ? planningStrategyGraph.strategies : [],
+    initializationStrategies: Array.isArray(planningStrategyGraph?.initializationStrategies) ? planningStrategyGraph.initializationStrategies : [],
+    requiredFramework: derived.requiredFramework
   });
 
   const validation = validatePlanningContext(context);

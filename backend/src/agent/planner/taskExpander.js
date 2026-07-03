@@ -85,7 +85,7 @@ function isValidReactLandingTarget(filePath, fileContents) {
 const ENTRY_PRIORITY = [
   'src/App.js', 'src/App.jsx', 'src/App.tsx',
   'src/index.js', 'src/index.jsx', 'src/index.tsx',
-  'src/main.js', 'src/main.jsx',
+  'src/main.jsx',
   'app/layout.tsx', 'app/layout.js', 'app/page.tsx', 'app/page.js',
   'pages/index.tsx', 'pages/index.js',
   'lib/main.dart',
@@ -116,7 +116,7 @@ function inferTargetFiles(projectType, entryFiles, goal) {
       break;
     case 'node_react':
     case 'react':
-      typeFiles.push('src/App.js', 'src/App.jsx', 'src/App.tsx', 'src/index.js', 'src/index.jsx', 'src/index.tsx', 'src/main.js', 'src/main.jsx');
+      typeFiles.push('src/App.js', 'src/App.jsx', 'src/App.tsx', 'src/index.js', 'src/index.jsx', 'src/index.tsx', 'src/main.jsx');
       break;
     case 'flutter':
       typeFiles.push('lib/main.dart');

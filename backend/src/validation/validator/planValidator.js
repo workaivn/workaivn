@@ -82,9 +82,15 @@ export function validatePlanCompletion({
       if (status === TASK_STATUSES.SUCCESS || status === TASK_STATUSES.RECOVERED) {
         const filePath = task.toolArgs?.path || task.toolArgs?.file || '';
         if (filePath) {
+          const normalizePath = (input) => {
+            if (!input) return '';
+            const str = typeof input === 'string' ? input : (input.path || input.file || input.filePath || '');
+            if (!str) return '';
+            return str.replace(/\\/g, '/').toLowerCase();
+          };
           const fileExists = changedFiles.some(f => {
-            const normalizedF = (f.path || f.file || f).replace(/\\/g, '/').toLowerCase();
-            return normalizedF === filePath.replace(/\\/g, '/').toLowerCase();
+            const normalizedF = normalizePath(f);
+            return normalizedF === normalizePath(filePath);
           });
           if (!fileExists) {
             warnings.push({ id: task.id, kind: task.kind, message: `WRITE_FILE task completed but file '${filePath}' not found in changedFiles evidence` });

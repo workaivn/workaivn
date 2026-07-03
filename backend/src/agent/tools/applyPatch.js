@@ -1,5 +1,7 @@
 import fs from "fs/promises";
+import path from "node:path";
 import { normalizeGeneratedModuleContent, resolveWorkspacePathSafe } from "../workspace.js";
+import { assertExecutableUnit } from "../execution/ExecutionInputGuard.js";
 
 function applyExactPatch(original, find, replace) {
   const needle = String(find ?? "");
@@ -24,14 +26,57 @@ function applyExactPatch(original, find, replace) {
   return { success: true, updated };
 }
 
-export async function applyPatchTool({ file, find, replace, activeFiles = [], workspaceRoot, layout = null }) {
-  // Validate arguments early to avoid EISDIR or cryptic errors
-  if (!String(file || "").trim() || !String(find || "").trim() || !String(replace || "").trim()) {
+export async function applyPatchTool({ file, find, replace, activeFiles = [], workspaceRoot, layout = null, executionUnit = null }) {
+  if (!String(file || "").trim()) {
     return { success: false, error: "INVALID_PATCH_ARGUMENTS", changed: false };
+  }
+  if (!executionUnit) {
+    return { success: false, error: "WRITE_WITHOUT_EXECUTION_UNIT", changed: false };
   }
   if (workspaceRoot) {
     try {
-      const resolved = await resolveWorkspacePathSafe(workspaceRoot, file, { layout });
+      assertExecutableUnit(executionUnit, { path: file, toolName: "APPLY_PATCH" });
+      const resolved = await resolveWorkspacePathSafe(workspaceRoot, file, { allowMissing: true, layout, executionUnit, toolName: "APPLY_PATCH" });
+      const exists = await fs.stat(resolved.absolutePath).then(stat => stat?.isFile() === true).catch(() => false);
+      if (!exists) {
+        console.log("[PATCH_CONVERTED_TO_WRITE]", {
+          path: resolved.relativePath,
+          reason: "file does not exist, using WRITE_FILE semantics"
+        });
+        const nextContent = String(replace ?? "");
+        const normalizedWrite = await normalizeGeneratedModuleContent({
+          workspaceRoot,
+          targetPath: resolved.relativePath,
+          content: nextContent,
+          layout,
+          workspaceFiles: activeFiles.map(item => String(item.path || item.name || ""))
+        });
+        if (!normalizedWrite.success) {
+          return {
+            success: false,
+            error: normalizedWrite.error,
+            file: resolved.relativePath,
+            changed: false,
+            moduleSystem: normalizedWrite.moduleSystem || "unknown"
+          };
+        }
+        await fs.mkdir(path.dirname(resolved.absolutePath), { recursive: true });
+        await fs.writeFile(resolved.absolutePath, String(normalizedWrite.content ?? nextContent), "utf8");
+        return {
+          success: true,
+          file: resolved.relativePath,
+          changed: true,
+          created: true,
+          convertedToWrite: true,
+          moduleSystem: normalizedWrite.moduleSystem || "unknown",
+          transformed: normalizedWrite.transformed === true
+        };
+      }
+
+      if (!String(find || "").trim() || !String(replace || "").trim()) {
+        return { success: false, error: "INVALID_PATCH_ARGUMENTS", changed: false };
+      }
+
       const original = await fs.readFile(resolved.absolutePath, "utf8");
       const patch = applyExactPatch(original, find, replace);
       if (!patch.success) return { ...patch, file: resolved.relativePath, changed: false };
@@ -65,6 +110,18 @@ export async function applyPatchTool({ file, find, replace, activeFiles = [], wo
         transformed: normalizedWrite.transformed === true
       };
     } catch (error) {
+      if (error.code === "NON_EXECUTABLE_PATH_REJECTED") {
+        return { success: false, error: "WRITE_WITHOUT_EXECUTION_UNIT" };
+      }
+      if (error.code === "NON_CANONICAL_FILE_BLOCKED") {
+        return { success: false, error: "PATCH_TARGET_BLOCKED_NON_CANONICAL" };
+      }
+      if (error.code === "FILE_NOT_FOUND" || error.code === "ENOENT" || error.code === "CANONICAL_PATH_MISSING_REJECTED") {
+        return { success: false, error: "PATCH_TARGET_MISSING", changed: false };
+      }
+      if (error.code === "WORKSPACE_ESCAPE_ATTEMPT") {
+        return { success: false, error: "WORKSPACE_ESCAPE_ATTEMPT", changed: false };
+      }
       return { success: false, error: error.message };
     }
   }

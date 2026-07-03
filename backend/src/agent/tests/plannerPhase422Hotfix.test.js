@@ -1354,6 +1354,265 @@ test('Phase 4.22-HF12: coordinator retry preserves previously validated files ac
   }
 });
 
+test('Phase 5.03-HF2: write coordinator retries only the missing file and completes the batch', async () => {
+  const root = await createGitWorkspace();
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+    name: 'hotfix-test',
+    version: '1.0.0',
+    type: 'module',
+    scripts: {
+      test: 'node --test src/math.test.js'
+    }
+  }, null, 2), 'utf8');
+  const originalLog = console.log;
+  const capturedLogs = [];
+  let coordinatorCalls = 0;
+
+  try {
+    console.log = (...args) => capturedLogs.push(args.map(value => {
+      if (typeof value === 'string') return value;
+      try { return JSON.stringify(value); } catch { return String(value); }
+    }).join(' '));
+
+    const mathJsContent = [
+      'export function add(a, b) { return a + b; }',
+      'export function subtract(a, b) { return a - b; }',
+      'export function multiply(a, b) { return a * b; }',
+      'export function divide(a, b) { return a / b; }'
+    ].join('\n');
+    const mathTestContent = [
+      'import { test } from "node:test";',
+      'import * as assert from "node:assert/strict";',
+      'import { add, subtract, multiply, divide } from "./math.js";',
+      '',
+      'test("math", () => {',
+      '  assert.equal(add(1, 2), 3);',
+      '  assert.equal(subtract(5, 2), 3);',
+      '  assert.equal(multiply(2, 3), 6);',
+      '  assert.equal(divide(6, 2), 3);',
+      '});'
+    ].join('\n');
+
+    const result = await runAgentLoop({
+      messages: [{
+        role: 'user',
+        content: [
+          'Create src/math.js and src/math.test.js.',
+          'Implement add/subtract/multiply/divide.',
+          'Use the detected test framework.',
+          'Do NOT modify package.json unless absolutely necessary.',
+          'Run validation.'
+        ].join('\n')
+      }],
+      workspaceRoot: root,
+      maxSteps: 12,
+      generateResponse: async ({ messages }) => {
+        const promptText = messages.map(message => String(message?.content || '')).join('\n');
+        if (promptText.includes('WRITE COORDINATOR MODE.')) {
+          coordinatorCalls += 1;
+          if (coordinatorCalls === 1) {
+            return JSON.stringify({
+              files: [{ path: 'src/math.js', content: mathJsContent }]
+            });
+          }
+          return mathTestContent;
+        }
+        if (promptText.includes('src/math.test.js')) {
+          return JSON.stringify({ content: mathTestContent });
+        }
+        if (promptText.includes('src/math.js')) {
+          return JSON.stringify({ content: mathJsContent });
+        }
+        return JSON.stringify({ done: true, final: 'finished' });
+      }
+    });
+
+    assert.equal(coordinatorCalls, 2, 'Coordinator must retry the missing file once');
+    assert.equal(result.success, true, `Run should succeed: ${result.error || ''}`);
+    assert.equal(result.qualityGate?.passed, true, `QualityGate should pass: ${JSON.stringify(result.qualityGate?.failures || [])}`);
+    assert.ok(capturedLogs.some(line => line.includes('[WRITE_BATCH_COMPLETENESS_CHECK]') && line.includes('src/math.js') && line.includes('src/math.test.js')));
+    assert.ok(capturedLogs.some(line => line.includes('[WRITE_BATCH_MISSING_FILES]') && line.includes('src/math.test.js')));
+    assert.ok(capturedLogs.some(line => line.includes('[WRITE_BATCH_RETRY_MISSING]') && line.includes('src/math.test.js')));
+    assert.ok(capturedLogs.some(line => line.includes('[WRITE_BATCH_COMPLETE]') && line.includes('src/math.js') && line.includes('src/math.test.js')));
+    await fs.access(path.join(root, 'src/math.js'));
+    await fs.access(path.join(root, 'src/math.test.js'));
+  } finally {
+    console.log = originalLog;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('Phase 5.03-HF2: retry exhaustion reports the missing file explicitly and does not pass quality gate', async () => {
+  const root = await createGitWorkspace();
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+    name: 'hotfix-test',
+    version: '1.0.0',
+    type: 'module',
+    scripts: {
+      test: 'node --test src/math.test.js'
+    }
+  }, null, 2), 'utf8');
+  const originalLog = console.log;
+  const capturedLogs = [];
+  let coordinatorCalls = 0;
+
+  try {
+    console.log = (...args) => capturedLogs.push(args.map(value => {
+      if (typeof value === 'string') return value;
+      try { return JSON.stringify(value); } catch { return String(value); }
+    }).join(' '));
+
+    const mathJsContent = [
+      'export function add(a, b) { return a + b; }',
+      'export function subtract(a, b) { return a - b; }',
+      'export function multiply(a, b) { return a * b; }',
+      'export function divide(a, b) { return a / b; }'
+    ].join('\n');
+    const mathTestContent = [
+      'import { test } from "node:test";',
+      'import * as assert from "node:assert/strict";',
+      'import { add, subtract, multiply, divide } from "./math.js";',
+      '',
+      'test("math", () => {',
+      '  assert.equal(add(1, 2), 3);',
+      '  assert.equal(subtract(5, 2), 3);',
+      '  assert.equal(multiply(2, 3), 6);',
+      '  assert.equal(divide(6, 2), 3);',
+      '});'
+    ].join('\n');
+
+    const result = await runAgentLoop({
+      messages: [{
+        role: 'user',
+        content: [
+          'Create src/math.js and src/math.test.js.',
+          'Implement add/subtract/multiply/divide.',
+          'Use the detected test framework.',
+          'Do NOT modify package.json unless absolutely necessary.',
+          'Run validation.'
+        ].join('\n')
+      }],
+      workspaceRoot: root,
+      maxSteps: 12,
+      generateResponse: async ({ messages }) => {
+        const promptText = messages.map(message => String(message?.content || '')).join('\n');
+        if (promptText.includes('WRITE COORDINATOR MODE.')) {
+          coordinatorCalls += 1;
+          return JSON.stringify({
+            files: [{ path: 'src/math.js', content: mathJsContent }]
+          });
+        }
+        if (promptText.includes('src/math.test.js')) {
+          return JSON.stringify({ content: '' });
+        }
+        if (promptText.includes('src/math.js')) {
+          return JSON.stringify({ content: mathJsContent });
+        }
+        return JSON.stringify({ done: true, final: 'finished' });
+      }
+    });
+
+    assert.equal(coordinatorCalls, 3, 'Coordinator must exhaust the retry budget');
+    assert.equal(result.success, false, 'Run must not report success');
+    assert.match(String(result.error || ''), /Finalization blocked: explicit requested file missing: src\/math\.test\.js|Expected file was not generated: src\/math\.test\.js/);
+    assert.notEqual(result.qualityGate?.passed, true, 'Quality gate must not pass on an incomplete batch');
+    assert.ok(capturedLogs.some(line => line.includes('[WRITE_BATCH_INCOMPLETE_BLOCKED]') && line.includes('src/math.test.js')));
+    assert.ok(!capturedLogs.some(line => line.includes('generic patch validation failed')), 'failure must not collapse into generic patch validation');
+  } finally {
+    console.log = originalLog;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('Phase 5.03-HF2: markdown file headers and fenced paths are parsed as write batch files', async () => {
+  const root = await createGitWorkspace();
+  await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+    name: 'hotfix-test',
+    version: '1.0.0',
+    type: 'module',
+    scripts: {
+      test: 'node --test src/math.test.js'
+    }
+  }, null, 2), 'utf8');
+  const originalLog = console.log;
+  const capturedLogs = [];
+  let coordinatorCalls = 0;
+
+  try {
+    console.log = (...args) => capturedLogs.push(args.map(value => {
+      if (typeof value === 'string') return value;
+      try { return JSON.stringify(value); } catch { return String(value); }
+    }).join(' '));
+
+    const mathJsContent = [
+      'export function add(a, b) { return a + b; }',
+      'export function subtract(a, b) { return a - b; }',
+      'export function multiply(a, b) { return a * b; }',
+      'export function divide(a, b) { return a / b; }'
+    ].join('\n');
+    const mathTestContent = [
+      'import { test } from "node:test";',
+      'import * as assert from "node:assert/strict";',
+      'import { add, subtract, multiply, divide } from "./math.js";',
+      '',
+      'test("math", () => {',
+      '  assert.equal(add(1, 2), 3);',
+      '  assert.equal(subtract(5, 2), 3);',
+      '  assert.equal(multiply(2, 3), 6);',
+      '  assert.equal(divide(6, 2), 3);',
+      '});'
+    ].join('\n');
+
+    const result = await runAgentLoop({
+      messages: [{
+        role: 'user',
+        content: [
+          'Create src/math.js and src/math.test.js.',
+          'Implement add/subtract/multiply/divide.',
+          'Use the detected test framework.',
+          'Do NOT modify package.json unless absolutely necessary.',
+          'Run validation.'
+        ].join('\n')
+      }],
+      workspaceRoot: root,
+      maxSteps: 12,
+      generateResponse: async ({ messages }) => {
+        const promptText = messages.map(message => String(message?.content || '')).join('\n');
+        if (promptText.includes('WRITE COORDINATOR MODE.')) {
+          coordinatorCalls += 1;
+          return [
+            'File: src/math.js',
+            '```javascript path="src/math.js"',
+            ...mathJsContent.split('\n'),
+            '```',
+            'Path: src/math.test.js',
+            '```javascript filename="src/math.test.js"',
+            ...mathTestContent.split('\n'),
+            '```'
+          ].join('\n');
+        }
+        if (promptText.includes('src/math.test.js')) {
+          return JSON.stringify({ content: mathTestContent });
+        }
+        if (promptText.includes('src/math.js')) {
+          return JSON.stringify({ content: mathJsContent });
+        }
+        return JSON.stringify({ done: true, final: 'finished' });
+      }
+    });
+
+    assert.ok(coordinatorCalls >= 1, 'Markdown response should trigger coordinator');
+    assert.equal(result.success, true, `Run should succeed: ${result.error || ''}`);
+    assert.equal(result.qualityGate?.passed, true, `QualityGate should pass: ${JSON.stringify(result.qualityGate?.failures || [])}`);
+    assert.ok(capturedLogs.some(line => line.includes('[WRITE_BATCH_COMPLETE]') && line.includes('src/math.js') && line.includes('src/math.test.js')));
+    await fs.access(path.join(root, 'src/math.js'));
+    await fs.access(path.join(root, 'src/math.test.js'));
+  } finally {
+    console.log = originalLog;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('Phase 4.22-HF13.5: coordinator batch failure does not block sibling write tasks', async () => {
   const root = await createGitWorkspace();
   const originalLog = console.log;

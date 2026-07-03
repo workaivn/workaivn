@@ -238,8 +238,7 @@ test('Phase 5.0-HF1: proposal promotion delegates to ExecutionPlanner', () => {
   });
 
   assert.ok(result.executionPlanner);
-  assert.ok(result.tasks.length > 0);
-  assert.equal(result.tasks.some(task => task.kind === 'CODING'), false);
+  assert.equal(result.tasks.length, 0);
 });
 
 test('Phase 5.0-HF1: recovery retries the execution graph instead of creating new tasks', () => {

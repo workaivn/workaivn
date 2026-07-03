@@ -5,6 +5,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { fileURLToPath } from "url";
 import { parse as parseJavaScript } from "@babel/parser";
+import { assertExecutableUnit } from "./execution/ExecutionInputGuard.js";
 import {
   FrameworkAdapter,
   buildGenerationHints,
@@ -1589,6 +1590,37 @@ async function hasExistingAncestor(root, targetPath) {
   return false;
 }
 
+async function findNearestExistingParent(root, targetPath) {
+  const realRoot = await fs.realpath(root);
+  let current = path.dirname(targetPath);
+
+  while (current && isInsidePath(root, current)) {
+    const stats = await fs.stat(current).catch(() => null);
+    if (stats?.isDirectory()) {
+      const realParent = await fs.realpath(current);
+      if (!isInsidePath(realRoot, realParent)) {
+        const error = new Error(`Resolved path escapes selected workspace: ${targetPath}`);
+        error.code = "WORKSPACE_ESCAPE_ATTEMPT";
+        error.details = { requestedPath: targetPath, resolvedPath: realParent };
+        throw error;
+      }
+      return {
+        realRoot,
+        realParent,
+        nearestExistingParent: current
+      };
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  const error = new Error(`Missing path is not allowed: ${targetPath}`);
+  error.code = "CANONICAL_PATH_MISSING_REJECTED";
+  error.details = { requestedPath: targetPath };
+  throw error;
+}
+
 function getNormalizedLayoutRoots(layout = null, files = []) {
   const roots = [];
   const seen = new Set();
@@ -1722,12 +1754,16 @@ function assertRelativePathAllowed(relativePath) {
   const normalizedInput = String(relativePath ?? ".").replace(/\\/g, "/").trim() || ".";
 
   if (path.isAbsolute(normalizedInput) || /^[A-Za-z]:\//.test(normalizedInput)) {
-    throw new Error("File path must be relative to the selected workspace");
+    const error = new Error("File path must be relative to the selected workspace");
+    error.code = "WORKSPACE_ESCAPE_ATTEMPT";
+    throw error;
   }
 
   const normalized = path.posix.normalize(normalizedInput);
   if (normalized === ".." || normalized.startsWith("../")) {
-    throw new Error(`Path escapes selected workspace: ${relativePath}`);
+    const error = new Error(`Path escapes selected workspace: ${relativePath}`);
+    error.code = "WORKSPACE_ESCAPE_ATTEMPT";
+    throw error;
   }
 
   const segments = normalized.split("/").filter(Boolean);
@@ -1760,12 +1796,23 @@ export function resolveWorkspacePath(workspaceRoot, requestedPath = ".") {
 export async function resolveWorkspacePathSafe(
   workspaceRoot,
   requestedPath = ".",
-  { allowMissing = false, layout = null } = {}
+  { allowMissing = false, layout = null, executionUnit = null, toolName = null } = {}
 ) {
   const root = getWorkspaceRoot(workspaceRoot);
+  if (executionUnit) {
+    assertExecutableUnit(executionUnit, {
+      path: requestedPath,
+      toolName: toolName || executionUnit.tool || executionUnit.type || null
+    });
+  }
   const normalized = normalizeWorkspaceRelativePath(requestedPath, root);
   if (!normalized) {
-    throw new Error("File path escapes selected workspace and must be relative to the selected workspace");
+    const error = new Error("File path escapes selected workspace and must be relative to the selected workspace");
+    const normalizedInput = String(requestedPath ?? "").replace(/\\/g, "/").trim();
+    error.code = (path.isAbsolute(normalizedInput) || /^[A-Za-z]:\//.test(normalizedInput) || normalizedInput.startsWith("../") || normalizedInput === "..")
+      ? "WORKSPACE_ESCAPE_ATTEMPT"
+      : "CANONICAL_PATH_MISSING_REJECTED";
+    throw error;
   }
   console.log("[WRITE_PATH_NORMALIZED]", {
     requestedPath: String(requestedPath || ""),
@@ -1823,40 +1870,37 @@ export async function resolveWorkspacePathSafe(
   if (allowMissing) {
     for (const relativeCandidate of candidateRelativePaths) {
       const candidateAbsolute = path.resolve(root, relativeCandidate);
-      const candidateRoot = relativeCandidate.split("/")[0];
-      const workspacePrefixAllowed = workspaceFiles.some(file => {
-        const normalizedFile = String(file || "").replace(/\\/g, "/").trim();
-        return normalizedFile === candidateRoot || normalizedFile.startsWith(`${candidateRoot}/`);
-      });
-      const layoutPrefixAllowed = layoutRoots.length === 0
-        ? true
-        : layoutRoots.some(rootHint => {
-            const normalizedHint = String(rootHint || "").replace(/\\/g, "/").trim();
-            if (!normalizedHint) return false;
-            if (normalizedHint === ".") return true;
-            return relativeCandidate === normalizedHint ||
-              relativeCandidate.startsWith(`${normalizedHint}/`) ||
-              candidateRoot === normalizedHint;
-          });
-      const candidatePrefixAllowed = workspacePrefixAllowed || layoutPrefixAllowed;
-
-      if (!candidatePrefixAllowed) continue;
-      if (await hasExistingAncestor(root, candidateAbsolute)) {
-        const realRoot = await fs.realpath(root);
+      if (!isInsidePath(root, candidateAbsolute)) continue;
+      try {
+        const { realRoot, realParent, nearestExistingParent } = await findNearestExistingParent(root, candidateAbsolute);
+        console.log("[CANONICAL_PATH_RESOLVED_MISSING]", {
+          requestedPath: normalized,
+          normalizedPath: relativeCandidate,
+          nearestExistingParent: path.relative(realRoot, realParent).replace(/\\/g, "/") || ".",
+          allowMissing: true
+        });
         if (relativeCandidate !== normalized) {
           console.log("[WRITE_PATH_CANONICALIZED]", {
             requestedPath: normalized,
             canonicalPath: relativeCandidate,
-            verifiedMapping: false
+            verifiedMapping: nearestExistingParent !== root
           });
         }
         return {
           root: realRoot,
           absolutePath: candidateAbsolute,
-          relativePath: path.relative(realRoot, candidateAbsolute).replace(/\\/g, "/") || "."
+          relativePath: relativeCandidate
         };
+      } catch (error) {
+        if (error?.code === "WORKSPACE_ESCAPE_ATTEMPT") {
+          throw error;
+        }
       }
     }
+    const error = new Error(`Missing path is not allowed: ${requestedPath}`);
+    error.code = "CANONICAL_PATH_MISSING_REJECTED";
+    error.details = { requestedPath, allowMissing };
+    throw error;
   }
 
   const resolvedStrict = resolveWorkspacePath(workspaceRoot, requestedPath);
@@ -1866,13 +1910,23 @@ export async function resolveWorkspacePathSafe(
   try {
     realTarget = await fs.realpath(resolvedStrict.absolutePath);
   } catch (error) {
-    if (!allowMissing || error.code !== "ENOENT") throw error;
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+    if (!allowMissing) {
+      const missing = new Error(`File not found: ${requestedPath}`);
+      missing.code = "FILE_NOT_FOUND";
+      missing.details = { requestedPath };
+      throw missing;
+    }
     const realParent = await fs.realpath(path.dirname(resolvedStrict.absolutePath));
     realTarget = path.join(realParent, path.basename(resolvedStrict.absolutePath));
   }
 
   if (!isInsidePath(realRoot, realTarget)) {
-    throw new Error(`Resolved path escapes selected workspace: ${requestedPath}`);
+    const error = new Error(`Resolved path escapes selected workspace: ${requestedPath}`);
+    error.code = "WORKSPACE_ESCAPE_ATTEMPT";
+    throw error;
   }
 
   return {
