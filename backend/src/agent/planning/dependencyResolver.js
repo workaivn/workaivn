@@ -301,14 +301,11 @@ function buildDiscoveryUnit({ intentNode, dependencyIds = [], context = {}, unit
 }
 
 function discoverReadPath(unit = {}, context = {}) {
-  const projectType = String(context?.projectScanSnapshot?.projectType || '').toLowerCase();
   const packageJsonFound = context?.projectScanSnapshot?.packageJsonFound === true;
-  const packageJsonPath = normalizePath(context?.projectScanSnapshot?.packageJsonPath || 'package.json');
+  const packageJsonPath = normalizePath(context?.projectScanSnapshot?.packageJsonPath || '');
   const entryFiles = unique(context?.projectScanSnapshot?.entryFiles || []);
-  if (packageJsonFound) return packageJsonPath;
-  if (projectType === 'laravel') return 'composer.json';
+  if (packageJsonFound && packageJsonPath) return packageJsonPath;
   if (entryFiles.length > 0) return entryFiles[0];
-  if (/react|vite|next|node/.test(projectType)) return packageJsonPath;
   return null;
 }
 

@@ -95,16 +95,15 @@ function resolveTargetPath(intentNode = {}, context = {}, executionType = '') {
   if (explicitPath) return explicitPath;
 
   const projectScan = context?.projectScanSnapshot || context?.projectScan || {};
-  const projectType = String(projectScan?.projectType || context?.projectIntent?.requestedFramework || '').toLowerCase();
   if (executionType === EXECUTION_UNIT_TYPES.READ) {
     if (upper(intentNode?.intent || '') === 'READ_CONTEXT' || upper(intentNode?.intent || '') === 'PACKAGE_DISCOVERY') {
-      return normalize(projectScan?.packageJsonPath || 'package.json');
+      if (projectScan?.packageJsonFound === true && projectScan?.packageJsonPath) {
+        return normalize(projectScan.packageJsonPath);
+      }
+      return '';
     }
     if (upper(intentNode?.intent || '') === 'ENTRY_DISCOVERY') {
       return normalize((Array.isArray(projectScan?.entryFiles) && projectScan.entryFiles[0]) || projectScan?.entryFile || '');
-    }
-    if (/react|vite|node/.test(projectType)) {
-      return normalize(projectScan?.packageJsonPath || 'package.json');
     }
   }
   return '';

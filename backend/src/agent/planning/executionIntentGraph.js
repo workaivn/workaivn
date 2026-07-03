@@ -164,7 +164,17 @@ export function createIntentEdge(from, to, relation = 'depends_on') {
   };
 }
 
-function detectFrameworkKey({ projectScanSnapshot = {}, projectIntent = {}, objective = '' } = {}) {
+function detectFrameworkKey({ projectScanSnapshot = {}, projectIntent = {}, planningContext = {}, objective = '' } = {}) {
+  const selectedVariantKey = String(
+    planningContext?.selectedImplementation?.selectedVariant?.frameworkKey ||
+    projectIntent?.selectedImplementation?.selectedVariant?.frameworkKey ||
+    projectIntent?.selectedVariant?.frameworkKey ||
+    planningContext?.requestedFramework ||
+    projectIntent?.requestedFramework ||
+    ''
+  ).trim().toLowerCase();
+  if (selectedVariantKey) return selectedVariantKey;
+
   const scanType = String(projectScanSnapshot?.projectType || '').toLowerCase();
   const text = String(objective || projectIntent?.prompt || projectIntent?.objective || '').toLowerCase();
   if (scanType.includes('next') || /\bnext\.?js\b/.test(text)) return 'nextjs-ts';
@@ -540,6 +550,7 @@ export function buildExecutionIntentGraph({
   const frameworkKey = detectFrameworkKey({
     projectScanSnapshot: sanitized.projectScanSnapshot,
     projectIntent: sanitized.projectIntent,
+    planningContext: sanitized.planningContext,
     objective: sanitized.objective
   });
   const verifiedFrameworkCapability = getVerifiedFrameworkCapability({

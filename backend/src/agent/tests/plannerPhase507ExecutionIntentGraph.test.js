@@ -144,6 +144,43 @@ test('Phase 5.07: unknown framework stops at framework discovery', () => {
   assert.equal(graph.nodes.some(node => node.intent.startsWith('RUN_')), false);
 });
 
+test('Phase 5.07: selected React + Custom variant suppresses package.json fallback', () => {
+  const context = makePlanningContext({
+    workspaceFiles: [],
+    projectType: 'generic',
+    packageJsonFound: false
+  });
+  context.selectedImplementation = {
+    selectedVariant: {
+      frameworkKey: 'react-custom'
+    }
+  };
+
+  const graph = buildExecutionIntentGraph({
+    objective: 'Create a React landing page.',
+    projectIntent: { prompt: 'Create a React landing page.' },
+    projectScanSnapshot: context.projectScan,
+    planningContext: context,
+    requestedFileDetails: [],
+    artifactCandidates: []
+  });
+
+  assert.equal(graph.frameworkKey, 'react-custom');
+  assert.equal(graph.nodes.some(node => node.intent === 'ENTRY_DISCOVERY'), false);
+
+  const resolution = resolveExecutionDependencies(graph, {
+    executionCandidates: [],
+    planningContext: context,
+    projectScanSnapshot: context.projectScan,
+    objective: 'Create a React landing page.'
+  });
+
+  assert.equal(
+    resolution.executionUnits.some(unit => Array.isArray(unit.targetFiles) && unit.targetFiles.some(file => String(file || '').toLowerCase() === 'package.json')),
+    false
+  );
+});
+
 test('Phase 5.07: independent assets share the same dependency level', () => {
   const context = makePlanningContext({
     workspaceFiles: ['package.json'],

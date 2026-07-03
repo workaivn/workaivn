@@ -4,9 +4,2791 @@
 
 [OllamaAdapter] initialized baseURL=http://localhost:11434/v1
 [SERVER_SOURCE_VERIFICATION] {
-  pid: 25408,
+  pid: 16636,
   runAgentLoopPath: 'G:\\langtuvn\\ai_local\\backend\\src\\agent\\runAgentLoop.js',
-  gitHash: '00fa7060'
+  gitHash: '4305f943'
 }
 ✅ Mongo connected
 🚀 Server running on port 3000
+[REQ] POST /api/agents/run
+[AGENT RUN] received {
+  workspaceId: '96ef3386-0d0b-444b-a81d-0f0ae20bad73',
+  agentId: '6a3b42eb133497c4445aec3b',
+  prompt: 'Create a realistic coding task and complete it fully using the WorkAIVN agent.\n' +
+    '\n' +
+    'Requirements:\n' +
+    '1. Create these files if they do not exist:\n' +
+    '   - src/math.js\n' +
+    '   - src/math.test.js\n' +
+    '\n' +
+    '2. Implement:\n' +
+    '   - add(a, b)\n' +
+    '   - subtract(a, b)\n' +
+    '   - multiply(a, b)\n' +
+    '   - divide(a, b)\n' +
+    '\n' +
+    'divide() must throw when divisor == 0.\n' +
+    '\n' +
+    '3. Write comprehensive unit tests covering:\n' +
+    '   - normal cases\n' +
+    '   - negative numbers\n' +
+    '   - decimals\n' +
+    '   - divide by zero\n' +
+    '\n' +
+    '4. Detect the project test framework automatically.\n' +
+    '   If package.json already contains a test framework, use it.\n' +
+    '   Do NOT modify package.json unless absolutely necessary.\n' +
+    '\n' +
+    '5. Execute the correct validation command from the workspace root.\n' +
+    '\n' +
+    '6. If validation fails:\n' +
+    '   - read the failure\n' +
+    '   - identify root cause\n' +
+    '   - repair only the necessary files\n' +
+    '   - rerun validation\n' +
+    '\n' +
+    'Repeat until validation passes or deterministic retry policy stops.\n' +
+    '\n' +
+    '7. Use parallel execution whenever dependencies allow.\n' +
+    '\n' +
+    'Example:\n' +
+    'WRITE_FILE src/math.js || WRITE_FILE src/math.test.js\n' +
+    '↓\n' +
+    'RUN_TERMINAL\n' +
+    '\n' +
+    '8. Preserve deterministic planner behavior.\n' +
+    '   Do not invent tools.\n' +
+    '   Do not skip validation.\n' +
+    '   Do not finish before validation succeeds.\n' +
+    '\n' +
+    'Expected observations after completion:\n' +
+    '- Planner creates parallel WRITE tasks.\n' +
+    '- Adaptive Planner schedules safe parallel execution.\n' +
+    '- Dependency graph is correct.\n' +
+    '- RUN_TERMINAL executes once files are ready.\n' +
+    '- Shared Validation Matcher matches.\n' +
+    '- Quality Gate = 100/100.\n' +
+    '- Planner COMPLETE.\n' +
+    '- RUN_FILE_METADATA populated.\n' +
+    '- plannerDebugSnapshot populated.\n' +
+    '- Planner Debug UI shows:\n' +
+    '  - DAG\n' +
+    '  - Dependencies\n' +
+    '  - Execution Memory\n' +
+    '  - Cost Summary\n' +
+    '  - Task Inspector\n' +
+    '  - Raw JSON\n' +
+    '\n' +
+    'Return the final completion summary only after deterministic validation succeeds.'
+}
+[TASK_MODE_CLASSIFIED] { taskMode: 'VALIDATION_ONLY', reason: 'validation signal detected' }
+[TASK_CLASSIFIER] {
+  prompt: 'Create a realistic coding task and complete it fully using the WorkAIVN agent.\n' +
+    '\n' +
+    'Requirements:\n' +
+    '1. Create these files if t',
+  taskClass: 'CODING',
+  taskType: 'CODING',
+  confidence: 'low',
+  matchedKeywords: []
+}
+[REQUESTED_FILE_CLASSIFIED] {
+  path: 'src/math.js',
+  kind: 'EXPLICIT_CREATE',
+  authoritySource: 'explicit_user_request',
+  conditional: false,
+  explicit: true
+}
+[REQUESTED_KIND] { path: 'src/math.js', kind: 'EXPLICIT_CREATE' }
+[REQUESTED_FILE_CLASSIFIED] {
+  path: 'src/math.test.js',
+  kind: 'EXPLICIT_CREATE',
+  authoritySource: 'explicit_user_request',
+  conditional: false,
+  explicit: true
+}
+[REQUESTED_KIND] { path: 'src/math.test.js', kind: 'EXPLICIT_CREATE' }
+[REQUESTED_FILE_CLASSIFIED] {
+  path: 'package.json',
+  kind: 'DISCOVER_IF_EXISTS',
+  authoritySource: 'explicit_user_request',
+  conditional: false,
+  explicit: true
+}
+[REQUESTED_KIND] { path: 'package.json', kind: 'DISCOVER_IF_EXISTS' }
+[AgentRun] executeAgentRun agent=llama.cpp Coding Agent (llamacpp_coding) provider=llamacpp model=qwen2.5-coder
+[AgentRun] workspace id=96ef3386-0d0b-444b-a81d-0f0ae20bad73 rootPath=G:\langtuvn\storage\workspaces\TEST sourceType=local
+[AgentRun] run=6a47e114be50826be0741030 task=6a47e114be50826be074102e continue=false autoMode=false
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[RUN START] {
+  runId: '6a47e114be50826be0741030',
+  provider: 'llamacpp',
+  model: 'qwen2.5-coder',
+  workspaceRoot: 'G:\\langtuvn\\storage\\workspaces\\TEST',
+  originalPrompt: 'Create a realistic coding task and complete it fully using the WorkAIVN agent.\n' +
+    '\n' +
+    'Requirements:\n' +
+    '1. Create these files if they do not exist:\n' +
+    '   - src/math.js\n' +
+    '   - src/math.test.js\n' +
+    '\n' +
+    '2. Implement:\n' +
+    '   - add(a, b)\n' +
+    '   - subtract(a, b)\n' +
+    '   - multiply(a, b)\n' +
+    '   - divide(a, b)\n' +
+    '\n' +
+    'divide() must throw when divisor == 0.\n' +
+    '\n' +
+    '3. Write comprehensive unit tests covering:\n' +
+    '   - normal cases\n' +
+    '   - negative numbers\n' +
+    '   - decimals\n' +
+    '   - divide by zero\n' +
+    '\n' +
+    '4. Detect the project test framework automatically.\n' +
+    '   If package.json already contains a test framework, use it.\n' +
+    '   Do NOT modify package.json unless absolutely necessary.\n' +
+    '\n' +
+    '5. Execute the correct validation command from the workspace root.\n' +
+    '\n' +
+    '6. If validation fails:\n' +
+    '   - read the failure\n' +
+    '   - identify root cause\n' +
+    '   - repair only the necessary files\n' +
+    '   - rerun validation\n' +
+    '\n' +
+    'Repeat until validation passes or deterministic retry policy stops.\n' +
+    '\n' +
+    '7. Use parallel execution whenever dependencies allow.\n' +
+    '\n' +
+    'Example:\n' +
+    'WRITE_FILE src/math.js || WRITE_FILE src/math.test.js\n' +
+    '↓\n' +
+    'RUN_TERMINAL\n' +
+    '\n' +
+    '8. Preserve deterministic planner behavior.\n' +
+    '   Do not invent tools.\n' +
+    '   Do not skip validation.\n' +
+    '   Do not finish before validation succeeds.\n' +
+    '\n' +
+    'Expected observations after completion:\n' +
+    '- Planner creates parallel WRITE tasks.\n' +
+    '- Adaptive Planner schedules safe parallel execution.\n' +
+    '- Dependency graph is correct.\n' +
+    '- RUN_TERMINAL executes once files are ready.\n' +
+    '- Shared Validation Matcher matches.\n' +
+    '- Quality Gate = 100/100.\n' +
+    '- Planner COMPLETE.\n' +
+    '- RUN_FILE_METADATA populated.\n' +
+    '- plannerDebugSnapshot populated.\n' +
+    '- Planner Debug UI shows:\n' +
+    '  - DAG\n' +
+    '  - Dependencies\n' +
+    '  - Execution Memory\n' +
+    '  - Cost Summary\n' +
+    '  - Task Inspector\n' +
+    '  - Raw JSON\n' +
+    '\n' +
+    'Return the final completion summary only after deterministic validation succeeds.',
+  promptLength: 1705,
+  timestamp: '2026-07-03T16:19:33.047Z'
+}
+[AgentRun] new run started
+[AgentRun] selected provider=llamacpp model=qwen2.5-coder
+[TASK_MODE_CLASSIFIED] { taskMode: 'VALIDATION_ONLY', reason: 'validation signal detected' }
+[RUN START] {
+  workspaceRoot: 'G:\\langtuvn\\storage\\workspaces\\TEST',
+  originalPrompt: 'Create a realistic coding task and complete it fully using the WorkAIVN agent.\n' +
+    '\n' +
+    'Requirements:\n' +
+    '1. Create these files if they do not exist:\n' +
+    '   - src/math.js\n' +
+    '   - src/math.test.js\n' +
+    '\n' +
+    '2. Implement:\n' +
+    '   - add(a, b)\n' +
+    '   - subtract(a, b)\n' +
+    '   - multiply(a, b)\n' +
+    '   - divide(a, b)\n' +
+    '\n' +
+    'divide() must throw when divisor == 0.\n' +
+    '\n' +
+    '3. Write comprehensive unit tests covering:\n' +
+    '   - normal cases\n' +
+    '   - negative numbers\n' +
+    '   - decimals\n' +
+    '   - divide by zero\n' +
+    '\n' +
+    '4. Detect the project test framework automatically.\n' +
+    '   If package.json already contains a test framework, use it.\n' +
+    '   Do NOT modify package.json unless absolutely necessary.\n' +
+    '\n' +
+    '5. Execute the correct validation command from the workspace root.\n' +
+    '\n' +
+    '6. If validation fails:\n' +
+    '   - read the failure\n' +
+    '   - identify root cause\n' +
+    '   - repair only the necessary files\n' +
+    '   - rerun validation\n' +
+    '\n' +
+    'Repeat until validation passes or deterministic retry policy stops.\n' +
+    '\n' +
+    '7. Use parallel execution whenever dependencies allow.\n' +
+    '\n' +
+    'Example:\n' +
+    'WRITE_FILE src/math.js || WRITE_FILE src/math.test.js\n' +
+    '↓\n' +
+    'RUN_TERMINAL\n' +
+    '\n' +
+    '8. Preserve deterministic planner behavior.\n' +
+    '   Do not invent tools.\n' +
+    '   Do not skip validation.\n' +
+    '   Do not finish before validation succeeds.\n' +
+    '\n' +
+    'Expected observations after completion:\n' +
+    '- Planner creates parallel WRITE tasks.\n' +
+    '- Adaptive Planner schedules safe parallel execution.\n' +
+    '- Dependency graph is correct.\n' +
+    '- RUN_TERMINAL executes once files are ready.\n' +
+    '- Shared Validation Matcher matches.\n' +
+    '- Quality Gate = 100/100.\n' +
+    '- Planner COMPLETE.\n' +
+    '- RUN_FILE_METADATA populated.\n' +
+    '- plannerDebugSnapshot populated.\n' +
+    '- Planner Debug UI shows:\n' +
+    '  - DAG\n' +
+    '  - Dependencies\n' +
+    '  - Execution Memory\n' +
+    '  - Cost Summary\n' +
+    '  - Task Inspector\n' +
+    '  - Raw JSON\n' +
+    '\n' +
+    'Return the final completion summary only after deterministic validation succeeds.',
+  promptLength: 1705,
+  timestamp: '2026-07-03T16:19:33.059Z'
+}
+[PROJECT_SCAN_ROOT] {
+  workspaceRoot: 'G:\\langtuvn\\storage\\workspaces\\TEST',
+  topLevelDirs: []
+}
+[PROJECT_SCAN_PACKAGE] {
+  packageJsonFound: false,
+  packageManager: null,
+  packageManagerVerified: false,
+  scripts: []
+}
+[PROJECT_SCAN_DETECTION] {
+  projectType: 'generic',
+  reactEvidence: false,
+  backendEvidence: false,
+  entryFiles: [],
+  testCommands: [],
+  buildCommands: [],
+  runCommands: []
+}
+[PROJECT_SCAN_SNAPSHOT_CREATED] {
+  scanId: '7570187d-5efc-43aa-a715-a19f90d0f72b',
+  projectType: 'generic',
+  packageJsonFound: false,
+  packageManagerVerified: false,
+  entryFileCount: 0,
+  buildCommandCount: 0,
+  runCommandCount: 0
+}
+[PROJECT_SCAN_SNAPSHOT_FROZEN] {
+  scanId: '7570187d-5efc-43aa-a715-a19f90d0f72b',
+  projectType: 'generic'
+}
+[PROJECT_SCAN_RESULT] {
+  workspaceRoot: 'G:\\langtuvn\\storage\\workspaces\\TEST',
+  projectType: 'generic',
+  packageManager: null,
+  packageManagerVerified: false,
+  packageManagerSource: null,
+  packageJsonFound: false,
+  packageJsonPath: null,
+  scripts: [],
+  entryFiles: [],
+  styleFiles: [],
+  testCommands: [],
+  buildCommands: [],
+  runCommands: [],
+  appRoots: [],
+  sourceRoots: [],
+  moduleRoots: [],
+  testRoots: [],
+  existingTopLevelDirs: [],
+  discoveredFiles: [],
+  explicitRequestedFiles: [],
+  plannerApprovedFiles: [],
+  generatedFiles: [],
+  dependencyReleasedFiles: [],
+  timestamp: '2026-07-03T16:19:33.066Z',
+  scanId: '7570187d-5efc-43aa-a715-a19f90d0f72b'
+}
+[REQUIRED_COMMANDS_EXTRACTED] { source: 'preClassifyToolPolicy', commands: [] }
+[TASK_INTENT_CREATED] {
+  taskMode: 'WRITE_AND_RUN',
+  goalType: 'WRITE_AND_RUN',
+  executionMode: 'WRITE_AND_RUN',
+  source: 'task-classifier'
+}
+[TASK_INTENT_FROZEN] {
+  taskMode: 'WRITE_AND_RUN',
+  goalType: 'WRITE_AND_RUN',
+  executionMode: 'WRITE_AND_RUN'
+}
+[WRITE_PATH_NORMALIZED] {
+  requestedPath: 'src/math.js',
+  normalizedPath: 'src/math.js',
+  workspaceRoot: 'G:\\langtuvn\\storage\\workspaces\\TEST'
+}
+[CANONICAL_PATH_RESOLVED_MISSING] {
+  requestedPath: 'src/math.js',
+  normalizedPath: 'src/math.js',
+  nearestExistingParent: '.',
+  allowMissing: true
+}
+[WRITE_PATH_NORMALIZED] {
+  requestedPath: 'src/math.js',
+  normalizedPath: 'src/math.js',
+  workspaceRoot: 'G:\\langtuvn\\storage\\workspaces\\TEST'
+}
+[CANONICAL_PATH_RESOLVED_MISSING] {
+  requestedPath: 'src/math.js',
+  normalizedPath: 'src/math.js',
+  nearestExistingParent: '.',
+  allowMissing: true
+}
+[WRITE_PATH_NORMALIZED] {
+  requestedPath: 'src/math.test.js',
+  normalizedPath: 'src/math.test.js',
+  workspaceRoot: 'G:\\langtuvn\\storage\\workspaces\\TEST'
+}
+[CANONICAL_PATH_RESOLVED_MISSING] {
+  requestedPath: 'src/math.test.js',
+  normalizedPath: 'src/math.test.js',
+  nearestExistingParent: '.',
+  allowMissing: true
+}
+[WRITE_PATH_NORMALIZED] {
+  requestedPath: 'package.json',
+  normalizedPath: 'package.json',
+  workspaceRoot: 'G:\\langtuvn\\storage\\workspaces\\TEST'
+}
+[CANONICAL_PATH_RESOLVED_MISSING] {
+  requestedPath: 'package.json',
+  normalizedPath: 'package.json',
+  nearestExistingParent: '.',
+  allowMissing: true
+}
+[TASK_INTENT_CONSUMED] {
+  stage: 'runAgentLoop:criteria',
+  taskMode: 'WRITE_AND_RUN',
+  goalType: 'WRITE_AND_RUN',
+  executionMode: 'WRITE_AND_RUN'
+}
+[GOAL_PRIORITY_ANALYSIS] {
+  missionSignals: [ 'mission' ],
+  goalSignals: [ 'goal' ],
+  deliverableSignals: [],
+  exampleSignals: [ 'example' ],
+  finalGoal: 'WRITE_AND_RUN'
+}
+[GOAL_CLASSIFICATION_RESULT] {
+  goalType: 'WRITE_AND_RUN',
+  confidence: 0.95,
+  matchedSignals: [],
+  blockedSignals: []
+}
+[TASK_INTENT_CONSUMED] {
+  stage: 'GoalClassifier',
+  taskMode: 'WRITE_AND_RUN',
+  goalType: 'WRITE_AND_RUN',
+  executionMode: 'WRITE_AND_RUN'
+}
+[TASK_INTENT_MATCH] {
+  stage: 'projectIntent',
+  taskMode: 'WRITE_AND_RUN',
+  goalType: 'WRITE_AND_RUN',
+  executionMode: 'WRITE_AND_RUN'
+}
+[TASK_INTENT_MATCH] {
+  stage: 'criteriaEffective',
+  taskMode: 'WRITE_AND_RUN',
+  goalType: 'WRITE_AND_RUN',
+  executionMode: 'WRITE_AND_RUN'
+}
+[PLANNER_RUNTIME_STATE_RESET] {
+  recommendationCandidates: 0,
+  blockedRecommendations: 0,
+  verifiedRecommendations: 0,
+  generatedFiles: 0,
+  dependencyReleasedFiles: 0,
+  plannerApprovedFiles: 0
+}
+[PROJECT_SCAN_ROOT] {
+  workspaceRoot: 'G:\\langtuvn\\storage\\workspaces\\TEST',
+  topLevelDirs: []
+}
+[PROJECT_SCAN_PACKAGE] {
+  packageJsonFound: false,
+  packageManager: null,
+  packageManagerVerified: false,
+  scripts: []
+}
+[PROJECT_SCAN_DETECTION] {
+  projectType: 'generic',
+  reactEvidence: false,
+  backendEvidence: false,
+  entryFiles: [],
+  testCommands: [],
+  buildCommands: [],
+  runCommands: []
+}
+[PROJECT_SCAN_SNAPSHOT_CREATED] {
+  scanId: 'e599ecde-7ab5-4cf2-8c3d-c9ec8f8fcc10',
+  projectType: 'generic',
+  packageJsonFound: false,
+  packageManagerVerified: false,
+  entryFileCount: 0,
+  buildCommandCount: 0,
+  runCommandCount: 0
+}
+[PROJECT_SCAN_SNAPSHOT_FROZEN] {
+  scanId: 'e599ecde-7ab5-4cf2-8c3d-c9ec8f8fcc10',
+  projectType: 'generic'
+}
+[BOOTSTRAP_RECOMMENDATION_RESOLVED] {
+  profile: 'generic-static-html',
+  label: 'generic-static-html',
+  resolvedBy: 'fallback',
+  goalType: 'WRITE_AND_RUN',
+  workspaceFiles: 0,
+  note: 'Bootstrap profile is recommendation-only; not used for execution candidate generation'
+}
+[PLANNER_ASSUMPTION_CREATED] {
+  path: 'src/math.js',
+  source: 'classifier',
+  requestedKind: 'EXPLICIT_CREATE',
+  authoritySource: 'explicit_user_request',
+  required: true,
+  optional: false,
+  conditional: false,
+  explicit: true
+}
+[PLANNER_ASSUMPTION_CREATED] {
+  path: 'src/math.test.js',
+  source: 'classifier',
+  requestedKind: 'EXPLICIT_CREATE',
+  authoritySource: 'explicit_user_request',
+  required: true,
+  optional: false,
+  conditional: false,
+  explicit: true
+}
+[PLANNER_ASSUMPTION_CREATED] {
+  path: 'package.json',
+  source: 'classifier',
+  requestedKind: 'DISCOVER_IF_EXISTS',
+  authoritySource: 'explicit_user_request',
+  required: true,
+  optional: false,
+  conditional: false,
+  explicit: true
+}
+[PLANNER_ASSUMPTION_BLOCKED_LEGACY_SOURCE] {
+  path: 'index.html',
+  source: 'bootstrap:generic-static-html',
+  reason: 'bootstrap/profile sources are recommendation-only'
+}
+[PLANNER_ASSUMPTION_BLOCKED_LEGACY_SOURCE] {
+  path: 'assets/css/style.css',
+  source: 'bootstrap:generic-static-html',
+  reason: 'bootstrap/profile sources are recommendation-only'
+}
+[PLANNER_ASSUMPTION_BLOCKED_LEGACY_SOURCE] {
+  path: 'assets/js/app.js',
+  source: 'bootstrap:generic-static-html',
+  reason: 'bootstrap/profile sources are recommendation-only'
+}
+[PLANNER_ASSUMPTION_BLOCKED_LEGACY_SOURCE] {
+  source: 'project_type:generic',
+  reason: 'project type hints are recommendation-only'
+}
+[PLANNER_ASSUMPTION_ACCEPTED_CREATE_MISSING] {
+  path: 'src/math.js',
+  requestedKind: 'EXPLICIT_CREATE',
+  authoritySource: 'explicit_user_request',
+  reason: 'Explicit create target may be missing from workspace'
+}
+[PLANNER_ASSUMPTION_ACCEPTED_CREATE_MISSING] {
+  path: 'src/math.test.js',
+  requestedKind: 'EXPLICIT_CREATE',
+  authoritySource: 'explicit_user_request',
+  reason: 'Explicit create target may be missing from workspace'
+}
+[DISCOVER_IF_EXISTS_ABSENT] {
+  path: 'package.json',
+  requestedKind: 'DISCOVER_IF_EXISTS',
+  reason: 'Optional discovery target not present'
+}
+[PLANNER_ASSUMPTION_FILTERED] {
+  original: 3,
+  unverified: [ 'src/math.js', 'src/math.test.js', 'package.json' ],
+  note: 'Filtering deferred to buildPlan (per-intent)'
+}
+[CLASSIFIER_RESULT] {
+  taskMode: 'WRITE_AND_RUN',
+  intentMode: 'WRITE_AND_RUN',
+  forbiddenTools: [],
+  requiredFiles: [ 'src/math.js', 'src/math.test.js', 'package.json' ],
+  requiredCommands: []
+}
+[PLANNED_FILE_EXTRACTED] {
+  count: 3,
+  files: [ 'src/math.js', 'src/math.test.js', 'package.js' ]
+}
+[EXPLICIT_USER_AUTHORITY_DETECTED] {
+  count: 2,
+  files: [ 'src/math.js', 'src/math.test.js' ],
+  note: 'Files explicitly requested by user for creation — not existing in workspace'
+}
+[TASK_INTENT_CONSUMED] {
+  stage: 'planner',
+  taskMode: 'WRITE_AND_RUN',
+  goalType: 'WRITE_AND_RUN',
+  executionMode: 'WRITE_AND_RUN'
+}
+[PLANNING_CONTEXT_BUILD_START] {
+  projectType: 'generic',
+  packageJsonFound: false,
+  existingFileCount: 0,
+  assumptionCount: 3,
+  bootstrapProfile: {
+    id: 'generic-static-html',
+    framework: 'generic-static-html',
+    note: 'recommendation-only'
+  }
+}
+[FILE_INTENT_INFERENCE] { plannerDerived: 0, workspaceDerived: 3, explicit: 3, blocked: 0 }
+[OBJECTIVE_CONSTRAINT_EXTRACTION_START] { objectiveLength: 1705, source: 'OBJECTIVE_TEXT' }
+[OBJECTIVE_CONSTRAINT_EXTRACTED] { count: 1, values: [ 'Tests' ] }
+[CONSTRAINT_SOURCE_VERIFIED] {
+  id: 'constraint:deliverable:deliverable',
+  category: 'DELIVERABLE',
+  type: 'Deliverable',
+  value: 'Tests',
+  source: 'OBJECTIVE_TEXT'
+}
+[OBJECTIVE_CONSTRAINT_GRAPH_CREATED] { nodeCount: 1, edgeCount: 0 }
+[OBJECTIVE_CONSTRAINT_GRAPH_COMPLETE] { nodeCount: 1, valid: true, errorCount: 0 }
+[CONSTRAINT_RESOLUTION_START] { objectiveLength: 1705, constraintCount: 1 }
+[PLANNING_STRATEGY_CREATED] {
+  strategy: 'Testing Strategy',
+  category: 'TESTING',
+  sourceConstraints: [ 'constraint:deliverable:deliverable' ],
+  executionEligible: false
+}
+[PLANNING_STRATEGY_MERGED] { before: 1, after: 1 }
+[PLANNING_STRATEGY_GRAPH_CREATED] {
+  strategyCount: 1,
+  initializationStrategyCount: 0,
+  nodeCount: 1,
+  edgeCount: 0
+}
+[PLANNING_STRATEGY_GRAPH_VALID] { nodeCount: 1, errorCount: 0 }
+[PLANNING_STRATEGY_GRAPH_COMPLETE] { nodeCount: 1, edgeCount: 0, valid: true }
+[CONSTRAINT_RESOLUTION_COMPLETE] { strategyCount: 1, initializationStrategyCount: 0, valid: true }
+[IMPLEMENTATION_STRATEGY_START] {
+  objectiveLength: 1705,
+  requirementCount: 0,
+  objectiveConstraintCount: 1,
+  planningStrategyCount: 1,
+  workspaceEmpty: true
+}
+[IMPLEMENTATION_ALTERNATIVES_CREATED] { strategyCount: 0, variantCount: 0, requirementCount: 0 }
+[IMPLEMENTATION_VARIANT_GRAPH_CREATED] { nodeCount: 0, edgeCount: 0 }
+[IMPLEMENTATION_STRATEGY_COMPLETE] {
+  strategyCount: 0,
+  variantCount: 0,
+  selected: null,
+  valid: true,
+  errorCount: 0
+}
+[PROJECT_SCAN_SNAPSHOT_CREATED] {
+  scanId: '7570187d-5efc-43aa-a715-a19f90d0f72b',
+  projectType: 'generic',
+  packageJsonFound: false,
+  packageManagerVerified: false,
+  entryFileCount: 0,
+  buildCommandCount: 0,
+  runCommandCount: 0
+}
+[PROJECT_SCAN_SNAPSHOT_FROZEN] {
+  scanId: '7570187d-5efc-43aa-a715-a19f90d0f72b',
+  projectType: 'generic'
+}
+[CANONICAL_FILE_INCLUDED] { path: 'src/math.js', source: 'explicitRequestedFiles' }
+[CANONICAL_PATH_NORMALIZED] {
+  original: 'src/math.js',
+  normalized: 'src/math.js',
+  source: 'explicitRequestedFiles'
+}
+[CANONICAL_FILE_INCLUDED] { path: 'src/math.test.js', source: 'explicitRequestedFiles' }
+[CANONICAL_PATH_NORMALIZED] {
+  original: 'src/math.test.js',
+  normalized: 'src/math.test.js',
+  source: 'explicitRequestedFiles'
+}
+[CANONICAL_FILE_INCLUDED] { path: 'package.js', source: 'plannerApprovedFiles' }
+[CANONICAL_PATH_NORMALIZED] {
+  original: 'package.js',
+  normalized: 'package.js',
+  source: 'plannerApprovedFiles'
+}
+[CANONICAL_FILE_UNIVERSE_CREATED] {
+  scanId: '7570187d-5efc-43aa-a715-a19f90d0f72b',
+  discoveredFiles: [],
+  explicitRequestedFiles: [ 'src/math.js', 'src/math.test.js' ],
+  plannerApprovedFiles: [ 'src/math.js', 'src/math.test.js', 'package.js' ],
+  generatedFiles: [],
+  dependencyReleasedFiles: [],
+  totalFiles: 3
+}
+[WORKSPACE_CAPABILITY_SCAN] {
+  fileCount: 0,
+  requestedFileCount: 4,
+  projectType: 'generic',
+  packageJsonFound: false
+}
+[CAPABILITY_REQUESTED_ARTIFACT] {
+  capability: 'TEST',
+  path: 'src/math.test.js',
+  source: 'requestedFileDetails',
+  note: 'Requested artifact, not existing workspace artifact'
+}
+[CAPABILITY_REQUESTED_ARTIFACT] {
+  capability: 'PROJECT_MANIFEST',
+  path: 'package.json',
+  source: 'requestedFileDetails',
+  note: 'Requested artifact, not existing workspace artifact'
+}
+[CAPABILITY_REQUESTED_ARTIFACT] {
+  capability: 'DEPENDENCY_MANIFEST',
+  path: 'package.json',
+  source: 'requestedFileDetails',
+  note: 'Requested artifact, not existing workspace artifact'
+}
+[CAPABILITY_DISCOVERED] {
+  id: 'workspace-capability:TEST',
+  capability: 'TEST',
+  confidence: 0.95,
+  existingArtifacts: [],
+  requestedArtifacts: [ 'src/math.test.js' ]
+}
+[CAPABILITY_EVIDENCE] {
+  id: 'workspace-capability:TEST',
+  capability: 'TEST',
+  evidence: [
+    'capability:TEST | source:requestedFileDetails | path:src/math.test.js | Requested artifact, not existing workspace artifact',
+    'capability:TEST | source:objective',
+    'capability:TEST | source:projectScan',
+    'capability:TEST | source:projectScan | packageJsonFound:false',
+    'capability:TEST | source:planningContext',
+    'capability:TEST | source:requirement'
+  ]
+}
+[CAPABILITY_DISCOVERED] {
+  id: 'workspace-capability:PROJECT_MANIFEST',
+  capability: 'PROJECT_MANIFEST',
+  confidence: 0.96,
+  existingArtifacts: [],
+  requestedArtifacts: [ 'package.json' ]
+}
+[CAPABILITY_EVIDENCE] {
+  id: 'workspace-capability:PROJECT_MANIFEST',
+  capability: 'PROJECT_MANIFEST',
+  evidence: [
+    'capability:PROJECT_MANIFEST | source:requestedFileDetails | path:package.json | Requested artifact, not existing workspace artifact',
+    'capability:PROJECT_MANIFEST | source:objective',
+    'capability:PROJECT_MANIFEST | source:projectScan',
+    'capability:PROJECT_MANIFEST | source:projectScan | packageJsonFound:false',
+    'capability:PROJECT_MANIFEST | source:planningContext',
+    'capability:PROJECT_MANIFEST | source:requirement'
+  ]
+}
+[CAPABILITY_DISCOVERED] {
+  id: 'workspace-capability:DEPENDENCY_MANIFEST',
+  capability: 'DEPENDENCY_MANIFEST',
+  confidence: 0.96,
+  existingArtifacts: [],
+  requestedArtifacts: [ 'package.json' ]
+}
+[CAPABILITY_EVIDENCE] {
+  id: 'workspace-capability:DEPENDENCY_MANIFEST',
+  capability: 'DEPENDENCY_MANIFEST',
+  evidence: [
+    'capability:DEPENDENCY_MANIFEST | source:requestedFileDetails | path:package.json | Requested artifact, not existing workspace artifact',
+    'capability:DEPENDENCY_MANIFEST | source:objective',
+    'capability:DEPENDENCY_MANIFEST | source:projectScan',
+    'capability:DEPENDENCY_MANIFEST | source:projectScan | packageJsonFound:false',
+    'capability:DEPENDENCY_MANIFEST | source:planningContext',
+    'capability:DEPENDENCY_MANIFEST | source:requirement'
+  ]
+}
+[PLANNED_FILE_REGISTERED] { path: 'src/math.js' }
+[PLANNED_FILE_REGISTERED] { path: 'src/math.test.js' }
+[PLANNED_FILE_REGISTERED] { path: 'package.js' }
+[EXPLICIT_USER_AUTHORITY_DETECTED] { path: 'src/math.js', authoritySource: 'workspace_authority' }
+[EXPLICIT_USER_AUTHORITY_DETECTED] { path: 'src/math.test.js', authoritySource: 'workspace_authority' }
+[EXPLICIT_USER_AUTHORITY_DETECTED] { path: 'package.js', authoritySource: 'workspace_authority' }
+[PLANNER_DERIVED_FILE] {
+  name: 'package.js',
+  authoritySource: 'workspace_authority',
+  plannerGoal: null
+}
+[PLANNER_FILE_AUTHORITY] { explicit: 4, plannerDerived: 0, workspaceDerived: 1, invented: 0 }
+[EXPLICIT_USER_PATH_APPROVED] {
+  path: 'src/math.js',
+  authoritySource: 'explicit_user_request',
+  note: 'Explicit user request — not blocked despite missing from workspace'
+}
+[EXPLICIT_USER_PATH_APPROVED] {
+  path: 'src/math.test.js',
+  authoritySource: 'explicit_user_request',
+  note: 'Explicit user request — not blocked despite missing from workspace'
+}
+[CANONICAL_FILE_INCLUDED] { path: 'src/math.js', source: 'explicitRequestedFiles' }
+[CANONICAL_PATH_NORMALIZED] {
+  original: 'src/math.js',
+  normalized: 'src/math.js',
+  source: 'explicitRequestedFiles'
+}
+[CANONICAL_FILE_INCLUDED] { path: 'src/math.test.js', source: 'explicitRequestedFiles' }
+[CANONICAL_PATH_NORMALIZED] {
+  original: 'src/math.test.js',
+  normalized: 'src/math.test.js',
+  source: 'explicitRequestedFiles'
+}
+[CANONICAL_FILE_INCLUDED] { path: 'package.js', source: 'plannerApprovedFiles' }
+[CANONICAL_PATH_NORMALIZED] {
+  original: 'package.js',
+  normalized: 'package.js',
+  source: 'plannerApprovedFiles'
+}
+[CANONICAL_FILE_UNIVERSE_CREATED] {
+  scanId: '7570187d-5efc-43aa-a715-a19f90d0f72b',
+  discoveredFiles: [],
+  explicitRequestedFiles: [ 'src/math.js', 'src/math.test.js' ],
+  plannerApprovedFiles: [ 'src/math.js', 'src/math.test.js', 'package.js' ],
+  generatedFiles: [],
+  dependencyReleasedFiles: [],
+  totalFiles: 3
+}
+[CONTEXT_INVARIANT_CHECK] {
+  scanId: '7570187d-5efc-43aa-a715-a19f90d0f72b',
+  packageJsonFound: false,
+  entryFiles: 0,
+  plannedFiles: 3
+}
+[CONTEXT_INVARIANT_CHECK] { valid: true, violationCount: 0, warningCount: 0 }
+[CONTEXT_INVARIANT_PASS] { scanId: '7570187d-5efc-43aa-a715-a19f90d0f72b' }
+[CONTEXT_FACTS_PRESERVED] {
+  scanId: '7570187d-5efc-43aa-a715-a19f90d0f72b',
+  packageJsonFound: false,
+  projectType: 'generic'
+}
+[CONTEXT_DERIVED_CREATED] {
+  scanId: '7570187d-5efc-43aa-a715-a19f90d0f72b',
+  verifiedCommandCount: 0,
+  verifiedFileCount: 0
+}
+[PLANNING_CONTEXT_CREATED] {
+  facts: {
+    workspaceRoot: 'G:\\langtuvn\\storage\\workspaces\\TEST',
+    projectType: 'generic',
+    packageManager: null,
+    packageManagerVerified: false,
+    packageManagerSource: null,
+    packageJsonFound: false,
+    packageJsonPath: null,
+    scripts: [],
+    entryFiles: [],
+    styleFiles: [],
+    testCommands: [],
+    buildCommands: [],
+    runCommands: [],
+    appRoots: [],
+    sourceRoots: [],
+    moduleRoots: [],
+    testRoots: [],
+    existingTopLevelDirs: [],
+    discoveredFiles: [],
+    explicitRequestedFiles: [ 'src/math.js', 'src/math.test.js' ],
+    plannerApprovedFiles: [ 'src/math.js', 'src/math.test.js', 'package.js' ],
+    generatedFiles: [],
+    dependencyReleasedFiles: [],
+    timestamp: '2026-07-03T16:19:33.066Z',
+    scanId: '7570187d-5efc-43aa-a715-a19f90d0f72b',
+    requestedFileDetails: [ [Object], [Object], [Object], [Object] ],
+    requestedFiles: [ 'src/math.js', 'src/math.test.js', 'package.json', 'package.js' ],
+    requestedFileKinds: [ 'EXPLICIT_CREATE', 'DISCOVER_IF_EXISTS' ],
+    explicitRequestedNewFiles: [ 'src/math.js', 'src/math.test.js', 'package.js' ],
+    conditionalRequestedFiles: [],
+    discoverIfExistsFiles: [ 'package.json' ],
+    referenceOnlyFiles: [],
+    derivedFiles: [],
+    plannedNewFiles: [ 'src/math.js', 'src/math.test.js', 'package.js' ],
+    executionCandidates: [],
+    recommendationCandidates: [],
+    blockedRecommendations: []
+  },
+  derived: {
+    verifiedFramework: 'generic',
+    verifiedPackageManager: null,
+    verifiedValidation: null,
+    requiredFramework: null,
+    planningStrategyGraph: {
+      objective: 'Create a realistic coding task and complete it fully using the WorkAIVN agent.\n' +
+        '\n' +
+        'Requirements:\n' +
+        '1. Create these files if they do not exist:\n' +
+        '   - src/math.js\n' +
+        '   - src/math.test.js\n' +
+        '\n' +
+        '2. Implement:\n' +
+        '   - add(a, b)\n' +
+        '   - subtract(a, b)\n' +
+        '   - multiply(a, b)\n' +
+        '   - divide(a, b)\n' +
+        '\n' +
+        'divide() must throw when divisor == 0.\n' +
+        '\n' +
+        '3. Write comprehensive unit tests covering:\n' +
+        '   - normal cases\n' +
+        '   - negative numbers\n' +
+        '   - decimals\n' +
+        '   - divide by zero\n' +
+        '\n' +
+        '4. Detect the project test framework automatically.\n' +
+        '   If package.json already contains a test framework, use it.\n' +
+        '   Do NOT modify package.json unless absolutely necessary.\n' +
+        '\n' +
+        '5. Execute the correct validation command from the workspace root.\n' +
+        '\n' +
+        '6. If validation fails:\n' +
+        '   - read the failure\n' +
+        '   - identify root cause\n' +
+        '   - repair only the necessary files\n' +
+        '   - rerun validation\n' +
+        '\n' +
+        'Repeat until validation passes or deterministic retry policy stops.\n' +
+        '\n' +
+        '7. Use parallel execution whenever dependencies allow.\n' +
+        '\n' +
+        'Example:\n' +
+        'WRITE_FILE src/math.js || WRITE_FILE src/math.test.js\n' +
+        '↓\n' +
+        'RUN_TERMINAL\n' +
+        '\n' +
+        '8. Preserve deterministic planner behavior.\n' +
+        '   Do not invent tools.\n' +
+        '   Do not skip validation.\n' +
+        '   Do not finish before validation succeeds.\n' +
+        '\n' +
+        'Expected observations after completion:\n' +
+        '- Planner creates parallel WRITE tasks.\n' +
+        '- Adaptive Planner schedules safe parallel execution.\n' +
+        '- Dependency graph is correct.\n' +
+        '- RUN_TERMINAL executes once files are ready.\n' +
+        '- Shared Validation Matcher matches.\n' +
+        '- Quality Gate = 100/100.\n' +
+        '- Planner COMPLETE.\n' +
+        '- RUN_FILE_METADATA populated.\n' +
+        '- plannerDebugSnapshot populated.\n' +
+        '- Planner Debug UI shows:\n' +
+        '  - DAG\n' +
+        '  - Dependencies\n' +
+        '  - Execution Memory\n' +
+        '  - Cost Summary\n' +
+        '  - Task Inspector\n' +
+        '  - Raw JSON\n' +
+        '\n' +
+        'Return the final completion summary only after deterministic validation succeeds.',
+      source: 'OBJECTIVE_TEXT',
+      constraintGraph: [Object],
+      strategies: [Array],
+      initializationStrategies: [],
+      nodes: [Array],
+      edges: [],
+      validation: [Object]
+    },
+    verifiedFiles: [],
+    verifiedCommands: [],
+    verifiedRecommendations: [],
+    blockedRecommendations: [ [Object] ],
+    workspaceCapabilities: [ [Object], [Object], [Object] ],
+    artifactCandidates: [],
+    artifactGraph: null,
+    artifactOperations: {},
+    plannerApprovedArtifacts: [],
+    artifactOwnership: {},
+    artifactLifecycle: {},
+    operationPlan: [],
+    capabilityEvidence: [
+      [Object], [Object], [Object],
+      [Object], [Object], [Object],
+      [Object], [Object], [Object],
+      [Object], [Object], [Object],
+      [Object], [Object], [Object],
+      [Object], [Object], [Object]
+    ],
+    objectiveConstraints: [ [Object] ],
+    planningStrategies: [ [Object] ],
+    initializationStrategies: [],
+    implementationStrategies: [],
+    implementationVariants: [],
+    selectedImplementation: null,
+    implementationEvidence: [],
+    implementationPolicyDecision: {
+      objectiveText: 'Create a realistic coding task and complete it fully using the WorkAIVN agent.\n' +
+        '\n' +
+        'Requirements:\n' +
+        '1. Create these files if they do not exist:\n' +
+        '   - src/math.js\n' +
+        '   - src/math.test.js\n' +
+        '\n' +
+        '2. Implement:\n' +
+        '   - add(a, b)\n' +
+        '   - subtract(a, b)\n' +
+        '   - multiply(a, b)\n' +
+        '   - divide(a, b)\n' +
+        '\n' +
+        'divide() must throw when divisor == 0.\n' +
+        '\n' +
+        '3. Write comprehensive unit tests covering:\n' +
+        '   - normal cases\n' +
+        '   - negative numbers\n' +
+        '   - decimals\n' +
+        '   - divide by zero\n' +
+        '\n' +
+        '4. Detect the project test framework automatically.\n' +
+        '   If package.json already contains a test framework, use it.\n' +
+        '   Do NOT modify package.json unless absolutely necessary.\n' +
+        '\n' +
+        '5. Execute the correct validation command from the workspace root.\n' +
+        '\n' +
+        '6. If validation fails:\n' +
+        '   - read the failure\n' +
+        '   - identify root cause\n' +
+        '   - repair only the necessary files\n' +
+        '   - rerun validation\n' +
+        '\n' +
+        'Repeat until validation passes or deterministic retry policy stops.\n' +
+        '\n' +
+        '7. Use parallel execution whenever dependencies allow.\n' +
+        '\n' +
+        'Example:\n' +
+        'WRITE_FILE src/math.js || WRITE_FILE src/math.test.js\n' +
+        '↓\n' +
+        'RUN_TERMINAL\n' +
+        '\n' +
+        '8. Preserve deterministic planner behavior.\n' +
+        '   Do not invent tools.\n' +
+        '   Do not skip validation.\n' +
+        '   Do not finish before validation succeeds.\n' +
+        '\n' +
+        'Expected observations after completion:\n' +
+        '- Planner creates parallel WRITE tasks.\n' +
+        '- Adaptive Planner schedules safe parallel execution.\n' +
+        '- Dependency graph is correct.\n' +
+        '- RUN_TERMINAL executes once files are ready.\n' +
+        '- Shared Validation Matcher matches.\n' +
+        '- Quality Gate = 100/100.\n' +
+        '- Planner COMPLETE.\n' +
+        '- RUN_FILE_METADATA populated.\n' +
+        '- plannerDebugSnapshot populated.\n' +
+        '- Planner Debug UI shows:\n' +
+        '  - DAG\n' +
+        '  - Dependencies\n' +
+        '  - Execution Memory\n' +
+        '  - Cost Summary\n' +
+        '  - Task Inspector\n' +
+        '  - Raw JSON\n' +
+        '\n' +
+        'Return the final completion summary only after deterministic validation succeeds.',
+      objectiveFamily: null,
+      workspaceHost: [Object],
+      workspaceEmpty: true,
+      initializationAllowed: false,
+      packageJsonFound: false,
+      packageManager: null,
+      packageManagerVerified: false,
+      buildSystem: 'generic',
+      plannerPolicies: {},
+      objectiveConstraintsCount: 1,
+      planningStrategiesCount: 1,
+      initializationStrategiesCount: 0,
+      workspaceFileCount: 0,
+      workspaceFiles: [],
+      objectiveFamilyKey: '',
+      objectiveVariantKey: null
+    },
+    implementationVariantGraph: {
+      nodes: [],
+      edges: [],
+      selectedVariantId: null,
+      source: 'implementation_strategy_resolution'
+    },
+    satisfiedCapabilities: [],
+    missingCapabilities: [],
+    capabilityCoverage: {
+      total: 0,
+      satisfied: 0,
+      partial: 0,
+      missing: 0,
+      blocked: 0,
+      unknown: 0,
+      coverage: 0
+    },
+    capabilityGapGraph: null,
+    satisfiedCapabilityGraph: null,
+    missingCapabilityGraph: null,
+    initializationCapabilities: [],
+    capabilitySatisfaction: null
+  },
+  packageJsonFound: false,
+  verifiedFileCount: 0,
+  blockedRecommendationCount: 1,
+  verifiedCommandCount: 0,
+  verifiedFramework: 'generic',
+  requiredFramework: null,
+  planningStrategyGraph: {
+    objective: 'Create a realistic coding task and complete it fully using the WorkAIVN agent.\n' +
+      '\n' +
+      'Requirements:\n' +
+      '1. Create these files if they do not exist:\n' +
+      '   - src/math.js\n' +
+      '   - src/math.test.js\n' +
+      '\n' +
+      '2. Implement:\n' +
+      '   - add(a, b)\n' +
+      '   - subtract(a, b)\n' +
+      '   - multiply(a, b)\n' +
+      '   - divide(a, b)\n' +
+      '\n' +
+      'divide() must throw when divisor == 0.\n' +
+      '\n' +
+      '3. Write comprehensive unit tests covering:\n' +
+      '   - normal cases\n' +
+      '   - negative numbers\n' +
+      '   - decimals\n' +
+      '   - divide by zero\n' +
+      '\n' +
+      '4. Detect the project test framework automatically.\n' +
+      '   If package.json already contains a test framework, use it.\n' +
+      '   Do NOT modify package.json unless absolutely necessary.\n' +
+      '\n' +
+      '5. Execute the correct validation command from the workspace root.\n' +
+      '\n' +
+      '6. If validation fails:\n' +
+      '   - read the failure\n' +
+      '   - identify root cause\n' +
+      '   - repair only the necessary files\n' +
+      '   - rerun validation\n' +
+      '\n' +
+      'Repeat until validation passes or deterministic retry policy stops.\n' +
+      '\n' +
+      '7. Use parallel execution whenever dependencies allow.\n' +
+      '\n' +
+      'Example:\n' +
+      'WRITE_FILE src/math.js || WRITE_FILE src/math.test.js\n' +
+      '↓\n' +
+      'RUN_TERMINAL\n' +
+      '\n' +
+      '8. Preserve deterministic planner behavior.\n' +
+      '   Do not invent tools.\n' +
+      '   Do not skip validation.\n' +
+      '   Do not finish before validation succeeds.\n' +
+      '\n' +
+      'Expected observations after completion:\n' +
+      '- Planner creates parallel WRITE tasks.\n' +
+      '- Adaptive Planner schedules safe parallel execution.\n' +
+      '- Dependency graph is correct.\n' +
+      '- RUN_TERMINAL executes once files are ready.\n' +
+      '- Shared Validation Matcher matches.\n' +
+      '- Quality Gate = 100/100.\n' +
+      '- Planner COMPLETE.\n' +
+      '- RUN_FILE_METADATA populated.\n' +
+      '- plannerDebugSnapshot populated.\n' +
+      '- Planner Debug UI shows:\n' +
+      '  - DAG\n' +
+      '  - Dependencies\n' +
+      '  - Execution Memory\n' +
+      '  - Cost Summary\n' +
+      '  - Task Inspector\n' +
+      '  - Raw JSON\n' +
+      '\n' +
+      'Return the final completion summary only after deterministic validation succeeds.',
+    source: 'OBJECTIVE_TEXT',
+    constraintGraph: {
+      objective: 'Create a realistic coding task and complete it fully using the WorkAIVN agent.\n' +
+        '\n' +
+        'Requirements:\n' +
+        '1. Create these files if they do not exist:\n' +
+        '   - src/math.js\n' +
+        '   - src/math.test.js\n' +
+        '\n' +
+        '2. Implement:\n' +
+        '   - add(a, b)\n' +
+        '   - subtract(a, b)\n' +
+        '   - multiply(a, b)\n' +
+        '   - divide(a, b)\n' +
+        '\n' +
+        'divide() must throw when divisor == 0.\n' +
+        '\n' +
+        '3. Write comprehensive unit tests covering:\n' +
+        '   - normal cases\n' +
+        '   - negative numbers\n' +
+        '   - decimals\n' +
+        '   - divide by zero\n' +
+        '\n' +
+        '4. Detect the project test framework automatically.\n' +
+        '   If package.json already contains a test framework, use it.\n' +
+        '   Do NOT modify package.json unless absolutely necessary.\n' +
+        '\n' +
+        '5. Execute the correct validation command from the workspace root.\n' +
+        '\n' +
+        '6. If validation fails:\n' +
+        '   - read the failure\n' +
+        '   - identify root cause\n' +
+        '   - repair only the necessary files\n' +
+        '   - rerun validation\n' +
+        '\n' +
+        'Repeat until validation passes or deterministic retry policy stops.\n' +
+        '\n' +
+        '7. Use parallel execution whenever dependencies allow.\n' +
+        '\n' +
+        'Example:\n' +
+        'WRITE_FILE src/math.js || WRITE_FILE src/math.test.js\n' +
+        '↓\n' +
+        'RUN_TERMINAL\n' +
+        '\n' +
+        '8. Preserve deterministic planner behavior.\n' +
+        '   Do not invent tools.\n' +
+        '   Do not skip validation.\n' +
+        '   Do not finish before validation succeeds.\n' +
+        '\n' +
+        'Expected observations after completion:\n' +
+        '- Planner creates parallel WRITE tasks.\n' +
+        '- Adaptive Planner schedules safe parallel execution.\n' +
+        '- Dependency graph is correct.\n' +
+        '- RUN_TERMINAL executes once files are ready.\n' +
+        '- Shared Validation Matcher matches.\n' +
+        '- Quality Gate = 100/100.\n' +
+        '- Planner COMPLETE.\n' +
+        '- RUN_FILE_METADATA populated.\n' +
+        '- plannerDebugSnapshot populated.\n' +
+        '- Planner Debug UI shows:\n' +
+        '  - DAG\n' +
+        '  - Dependencies\n' +
+        '  - Execution Memory\n' +
+        '  - Cost Summary\n' +
+        '  - Task Inspector\n' +
+        '  - Raw JSON\n' +
+        '\n' +
+        'Return the final completion summary only after deterministic validation succeeds.',
+      source: 'OBJECTIVE_TEXT',
+      constraints: [Array],
+      nodes: [Array],
+      edges: [],
+      validation: [Object]
+    },
+    strategies: [ [Object] ],
+    initializationStrategies: [],
+    nodes: [ [Object] ],
+    edges: [],
+    validation: { valid: true, errors: [] }
+  },
+  workspaceCapabilityCount: 3,
+  artifactCandidateCount: 0,
+  artifactOperationCount: 0,
+  plannerApprovedArtifactCount: 0,
+  artifactOwnershipCount: 0,
+  artifactLifecycleCount: 0,
+  operationPlanCount: 0,
+  capabilityEvidenceCount: 18,
+  implementationStrategyCount: 0,
+  implementationVariantCount: 0,
+  satisfiedCapabilityCount: 0,
+  missingCapabilityCount: 0,
+  verifiedPackageManager: null,
+  verifiedValidation: null,
+  hasVerifiedFiles: false,
+  hasBlockedRecommendations: true,
+  policies: {
+    ALLOW_PROJECT_BOOTSTRAP: true,
+    ALLOW_NEW_PROJECT_INITIALIZATION: true,
+    ALLOW_PROJECT_INITIALIZATION: true,
+    ALLOW_PACKAGE_CREATION: false,
+    ALLOW_VALIDATION_DERIVATION: true,
+    ALLOW_INSTALL_COMMAND: false,
+    ALLOW_BUILD_COMMAND: false,
+    initializationMode: 'PROJECT_MODIFICATION',
+    objectiveAuthorityEligible: false,
+    workspaceEmpty: true
+  },
+  verifiedFiles: [],
+  blockedFiles: [ 'package.json' ],
+  verifiedCommands: []
+}
+[PLANNING_CONTEXT_BLOCKED] {
+  count: 1,
+  files: [ 'package.json' ],
+  reasons: [ 'File not found in workspace' ]
+}
+[EXECUTION_PLANNER_AUTHORITY] {
+  objective: 'Create a realistic coding task and complete it fully using the WorkAIVN agent.\n' +
+    '\n' +
+    'Requirements:\n' +
+    '1. Create these files if t',
+  verifiedFileCount: 0,
+  verifiedCommandCount: 0,
+  requestedFileCount: 4,
+  explicitRequestedNewFileCount: 3
+}
+[PACKAGE_JSON_CANONICAL] {
+  original: 'package.js',
+  corrected: 'package.json',
+  note: 'Forced .json extension for known config file'
+}
+[PACKAGE_JSON_CANONICAL] {
+  original: 'package.js',
+  corrected: 'package.json',
+  note: 'Forced .json extension for known config file'
+}
+[PACKAGE_JSON_CANONICAL] {
+  original: 'package.js',
+  corrected: 'package.json',
+  note: 'Forced .json extension for known config file'
+}
+[REQUESTED_FILE_IMPORTED] {
+  path: 'src/math.js',
+  requestedKind: 'EXPLICIT_CREATE',
+  authoritySource: 'explicit_user_request',
+  plannedNewFile: true
+}
+[REQUESTED_FILE_IMPORTED] {
+  path: 'src/math.test.js',
+  requestedKind: 'EXPLICIT_CREATE',
+  authoritySource: 'explicit_user_request',
+  plannedNewFile: true
+}
+[REQUESTED_FILE_IMPORTED] {
+  path: 'package.json',
+  requestedKind: 'DISCOVER_IF_EXISTS',
+  authoritySource: 'explicit_user_request',
+  plannedNewFile: true
+}
+[REQUESTED_FILE_IMPORTED] {
+  path: 'package.json',
+  requestedKind: 'EXPLICIT_CREATE',
+  authoritySource: 'workspace_authority',
+  plannedNewFile: true
+}
+[WRITE_CANDIDATE_COUNT] {
+  explicitRequested: 3,
+  artifactTargets: 0,
+  readOnlyTargets: 1,
+  writeTargets: 3,
+  blockedTargets: 0
+}
+[WRITE_CANDIDATE_ALLOWED] {
+  path: 'src/math.js',
+  requestedKind: 'EXPLICIT_CREATE',
+  authoritySource: 'explicit_user_request'
+}
+[WRITE_CANDIDATE_ALLOWED] {
+  path: 'src/math.test.js',
+  requestedKind: 'EXPLICIT_CREATE',
+  authoritySource: 'explicit_user_request'
+}
+[WRITE_CANDIDATE_ALLOWED] {
+  path: 'package.json',
+  requestedKind: 'EXPLICIT_CREATE',
+  authoritySource: 'workspace_authority'
+}
+[INTENT_INPUT_SANITIZED] {
+  requestedFileDetails: 4,
+  artifactCandidates: 0,
+  plannerApprovedArtifacts: 0,
+  verifiedCommands: 0,
+  requestedFileDetailsApproved: 4,
+  requestedFileDetailsRejected: 0,
+  artifactCandidatesApproved: 0,
+  artifactCandidatesRejected: 0,
+  plannerApprovedArtifactsApproved: 0,
+  plannerApprovedArtifactsRejected: 0,
+  verifiedCommandsApproved: 0,
+  verifiedCommandsRejected: 0,
+  strippedFields: [
+    'bootstrapProfile',
+    'templateProfile',
+    'domainProfile',
+    'landingSignals',
+    'knowledgeGraph',
+    'projectTypeHint',
+    'frameworkCandidates',
+    'recommendationCandidates'
+  ]
+}
+[EXECUTION_INTENT_GRAPH_START] {
+  objectiveLength: 1705,
+  frameworkKey: null,
+  frameworkResolved: false,
+  generationTargets: true,
+  validationSignals: false
+}
+[EXECUTION_INTENT_CREATED] {
+  id: 'intent:read-context',
+  intent: 'READ_CONTEXT',
+  capability: 'DISCOVER_WORKSPACE',
+  dependencyCount: 0,
+  executionEligible: false
+}
+[EXECUTION_INTENT_CREATED] {
+  id: 'intent:framework-discovery',
+  intent: 'FRAMEWORK_DISCOVERY',
+  capability: null,
+  dependencyCount: 1,
+  executionEligible: false
+}
+[EXECUTION_INTENT_EDGE] {
+  from: 'intent:read-context',
+  to: 'intent:framework-discovery',
+  relation: 'depends_on'
+}
+[EXECUTION_INTENT_CREATED] {
+  id: 'intent:validation-discovery',
+  intent: 'VALIDATION_DISCOVERY',
+  capability: 'VALIDATION',
+  dependencyCount: 1,
+  executionEligible: false
+}
+[EXECUTION_INTENT_EDGE] {
+  from: 'intent:framework-discovery',
+  to: 'intent:validation-discovery',
+  relation: 'depends_on'
+}
+[EXECUTION_INTENT_CREATED] {
+  id: 'intent:generate_source:src/math.js',
+  intent: 'GENERATE_SOURCE',
+  capability: 'APPLICATION_ENTRY',
+  dependencyCount: 1,
+  executionEligible: false
+}
+[EXECUTION_INTENT_EDGE] {
+  from: 'intent:validation-discovery',
+  to: 'intent:generate_source:src/math.js',
+  relation: 'depends_on'
+}
+[EXECUTION_INTENT_CREATED] {
+  id: 'intent:generate_test:src/math.test.js',
+  intent: 'GENERATE_TEST',
+  capability: 'TEST',
+  dependencyCount: 1,
+  executionEligible: false
+}
+[EXECUTION_INTENT_EDGE] {
+  from: 'intent:validation-discovery',
+  to: 'intent:generate_test:src/math.test.js',
+  relation: 'depends_on'
+}
+[EXECUTION_INTENT_CREATED] {
+  id: 'intent:package_discovery:package.json',
+  intent: 'PACKAGE_DISCOVERY',
+  capability: 'BUILD',
+  dependencyCount: 1,
+  executionEligible: false
+}
+[EXECUTION_INTENT_EDGE] {
+  from: 'intent:validation-discovery',
+  to: 'intent:package_discovery:package.json',
+  relation: 'depends_on'
+}
+[INTENT_PURITY_CHECK_PASS] { nodeCount: 6, errorCount: 0 }
+[EXECUTION_INTENT_GRAPH_COMPLETE] { nodeCount: 6, edgeCount: 5, executableNodeCount: 0 }
+[DEPENDENCY_RESOLUTION_START] { intentNodeCount: 6, candidateCount: 5 }
+[EXECUTION_PROJECTION_START] { intentNodeCount: 6, edgeCount: 5 }
+[EXECUTION_PROJECTION_NODE] {
+  intentId: 'intent:read-context',
+  executionId: 'intent:read-context',
+  intent: 'READ_CONTEXT',
+  type: 'READ',
+  dependencies: []
+}
+[EXECUTION_PROJECTION_AUTHORITY] {
+  intentId: 'intent:read-context',
+  intentAuthority: 'verified_planning_context',
+  executionAuthority: 'verified_planning_context',
+  requestedKind: null
+}
+[EXECUTION_PROJECTION_NODE] {
+  intentId: 'intent:framework-discovery',
+  executionId: 'intent:framework-discovery',
+  intent: 'FRAMEWORK_DISCOVERY',
+  type: 'READ',
+  dependencies: [ 'intent:read-context' ]
+}
+[EXECUTION_PROJECTION_EDGE] { from: 'intent:read-context', to: 'intent:framework-discovery' }
+[EXECUTION_PROJECTION_AUTHORITY] {
+  intentId: 'intent:framework-discovery',
+  intentAuthority: 'verified_planning_context',
+  executionAuthority: 'verified_planning_context',
+  requestedKind: null
+}
+[EXECUTION_PROJECTION_NODE] {
+  intentId: 'intent:validation-discovery',
+  executionId: 'intent:validation-discovery',
+  intent: 'VALIDATION_DISCOVERY',
+  type: 'READ',
+  dependencies: [ 'intent:framework-discovery' ]
+}
+[EXECUTION_PROJECTION_EDGE] {
+  from: 'intent:framework-discovery',
+  to: 'intent:validation-discovery'
+}
+[EXECUTION_PROJECTION_AUTHORITY] {
+  intentId: 'intent:validation-discovery',
+  intentAuthority: 'verified_planning_context',
+  executionAuthority: 'verified_planning_context',
+  requestedKind: null
+}
+[EXECUTION_PROJECTION_NODE] {
+  intentId: 'intent:generate_source:src/math.js',
+  executionId: 'intent:generate_source:src/math.js',
+  intent: 'GENERATE_SOURCE',
+  type: 'WRITE',
+  dependencies: [ 'intent:validation-discovery' ]
+}
+[EXECUTION_PROJECTION_EDGE] {
+  from: 'intent:validation-discovery',
+  to: 'intent:generate_source:src/math.js'
+}
+[EXECUTION_PROJECTION_AUTHORITY] {
+  intentId: 'intent:generate_source:src/math.js',
+  intentAuthority: 'explicit_user_request',
+  executionAuthority: 'explicit_user_request',
+  requestedKind: 'EXPLICIT_CREATE'
+}
+[EXECUTION_PROJECTION_NODE] {
+  intentId: 'intent:generate_test:src/math.test.js',
+  executionId: 'intent:generate_test:src/math.test.js',
+  intent: 'GENERATE_TEST',
+  type: 'WRITE',
+  dependencies: [ 'intent:validation-discovery' ]
+}
+[EXECUTION_PROJECTION_EDGE] {
+  from: 'intent:validation-discovery',
+  to: 'intent:generate_test:src/math.test.js'
+}
+[EXECUTION_PROJECTION_AUTHORITY] {
+  intentId: 'intent:generate_test:src/math.test.js',
+  intentAuthority: 'explicit_user_request',
+  executionAuthority: 'explicit_user_request',
+  requestedKind: 'EXPLICIT_CREATE'
+}
+[EXECUTION_PROJECTION_NODE] {
+  intentId: 'intent:package_discovery:package.json',
+  executionId: 'intent:package_discovery:package.json',
+  intent: 'PACKAGE_DISCOVERY',
+  type: 'READ',
+  dependencies: [ 'intent:validation-discovery' ]
+}
+[EXECUTION_PROJECTION_EDGE] {
+  from: 'intent:validation-discovery',
+  to: 'intent:package_discovery:package.json'
+}
+[EXECUTION_PROJECTION_AUTHORITY] {
+  intentId: 'intent:package_discovery:package.json',
+  intentAuthority: 'explicit_user_request',
+  executionAuthority: 'explicit_user_request',
+  requestedKind: 'DISCOVER_IF_EXISTS'
+}
+[EXECUTION_GRAPH_FIDELITY_PASS] { nodeCount: 6, unitCount: 6, errorCount: 0 }
+[EXECUTION_PROJECTION_COMPLETE] { intentNodeCount: 6, executionUnitCount: 6, valid: true }
+[DEPENDENCY_LEVEL] { level: 0, unitIds: [ 'intent:read-context' ] }
+[DEPENDENCY_LEVEL] { level: 1, unitIds: [ 'intent:framework-discovery' ] }
+[DEPENDENCY_LEVEL] { level: 2, unitIds: [ 'intent:validation-discovery' ] }
+[DEPENDENCY_LEVEL] {
+  level: 3,
+  unitIds: [
+    'intent:generate_source:src/math.js',
+    'intent:generate_test:src/math.test.js',
+    'intent:package_discovery:package.json'
+  ]
+}
+[DEPENDENCY_PARALLEL_GROUP] {
+  level: 3,
+  unitIds: [
+    'intent:generate_source:src/math.js',
+    'intent:generate_test:src/math.test.js',
+    'intent:package_discovery:package.json'
+  ]
+}
+[DEPENDENCY_GRAPH_COMPLETE] { valid: true, errorCount: 0 }
+[EXECUTION_GRAPH_GENERATED] { unitCount: 6, levelCount: 4 }
+[EXECUTION_UNIT_READY] { id: 'intent:read-context', type: 'READ', dependencies: [] }
+[EXECUTION_GRAPH_READY] { readyCount: 1 }
+[EXECUTION_GRAPH_GENERATED] { unitCount: 6, levelCount: 4 }
+[EXECUTION_GRAPH_READY] { readyCount: 1 }
+[LEGACY_TARGET_LEAK_CHECK] { stage: 'execution_planner', recordCount: 18 }
+[AUTHORITY_FIREWALL_ENTER] {
+  candidateId: 'intent:read-context',
+  type: 'READ',
+  source: 'verified_planning_context',
+  requestedKind: 'RECOMMENDATION_ONLY'
+}
+[AUTHORITY_SOURCE] {
+  candidateId: 'intent:read-context',
+  source: 'verified_planning_context',
+  approvedByFirewall: false
+}
+[PROTECTED_SCOPE_CHECK] {
+  candidateId: 'intent:read-context',
+  targets: [],
+  hasProtectedViolation: false,
+  isExplicitRequest: false,
+  source: 'verified_planning_context'
+}
+[PROTECTED_SCOPE_ALLOWED] {
+  candidateId: 'intent:read-context',
+  targets: [],
+  reason: 'No protected file match'
+}
+[AUTHORITY_VALID] {
+  candidateId: 'intent:read-context',
+  source: 'verified_planning_context',
+  approvalId: null
+}
+[AUTHORITY_APPROVED] {
+  candidateId: 'intent:read-context',
+  source: 'verified_planning_context',
+  approvalId: null
+}
+[EXECUTION_UNIT_APPROVED] {
+  candidateId: 'intent:read-context',
+  source: 'verified_planning_context',
+  approvalId: 'approval:bfa0a891-6c02-4a82-8b04-738f3bbdb001'
+}
+[AUTHORITY_SOURCE_PRESERVED] { unitId: 'intent:read-context', source: 'verified_planning_context' }
+[AUTHORITY_SOURCE_UNCHANGED] {
+  unitId: 'intent:read-context',
+  source: 'verified_planning_context',
+  note: 'Authority source unchanged through firewall approval'
+}
+[AUTHORITY_FIREWALL_ENTER] {
+  candidateId: 'intent:framework-discovery',
+  type: 'READ',
+  source: 'verified_planning_context',
+  requestedKind: 'RECOMMENDATION_ONLY'
+}
+[AUTHORITY_SOURCE] {
+  candidateId: 'intent:framework-discovery',
+  source: 'verified_planning_context',
+  approvedByFirewall: false
+}
+[PROTECTED_SCOPE_CHECK] {
+  candidateId: 'intent:framework-discovery',
+  targets: [],
+  hasProtectedViolation: false,
+  isExplicitRequest: false,
+  source: 'verified_planning_context'
+}
+[PROTECTED_SCOPE_ALLOWED] {
+  candidateId: 'intent:framework-discovery',
+  targets: [],
+  reason: 'No protected file match'
+}
+[AUTHORITY_VALID] {
+  candidateId: 'intent:framework-discovery',
+  source: 'verified_planning_context',
+  approvalId: null
+}
+[AUTHORITY_APPROVED] {
+  candidateId: 'intent:framework-discovery',
+  source: 'verified_planning_context',
+  approvalId: null
+}
+[EXECUTION_UNIT_APPROVED] {
+  candidateId: 'intent:framework-discovery',
+  source: 'verified_planning_context',
+  approvalId: 'approval:3ffc1692-1932-4b74-869d-28fede2b3a8b'
+}
+[AUTHORITY_SOURCE_PRESERVED] {
+  unitId: 'intent:framework-discovery',
+  source: 'verified_planning_context'
+}
+[AUTHORITY_SOURCE_UNCHANGED] {
+  unitId: 'intent:framework-discovery',
+  source: 'verified_planning_context',
+  note: 'Authority source unchanged through firewall approval'
+}
+[AUTHORITY_FIREWALL_ENTER] {
+  candidateId: 'intent:validation-discovery',
+  type: 'READ',
+  source: 'verified_planning_context',
+  requestedKind: 'RECOMMENDATION_ONLY'
+}
+[AUTHORITY_SOURCE] {
+  candidateId: 'intent:validation-discovery',
+  source: 'verified_planning_context',
+  approvedByFirewall: false
+}
+[PROTECTED_SCOPE_CHECK] {
+  candidateId: 'intent:validation-discovery',
+  targets: [],
+  hasProtectedViolation: false,
+  isExplicitRequest: false,
+  source: 'verified_planning_context'
+}
+[PROTECTED_SCOPE_ALLOWED] {
+  candidateId: 'intent:validation-discovery',
+  targets: [],
+  reason: 'No protected file match'
+}
+[AUTHORITY_VALID] {
+  candidateId: 'intent:validation-discovery',
+  source: 'verified_planning_context',
+  approvalId: null
+}
+[AUTHORITY_APPROVED] {
+  candidateId: 'intent:validation-discovery',
+  source: 'verified_planning_context',
+  approvalId: null
+}
+[EXECUTION_UNIT_APPROVED] {
+  candidateId: 'intent:validation-discovery',
+  source: 'verified_planning_context',
+  approvalId: 'approval:1d3be314-473c-454e-a61a-d8aa5b503bf4'
+}
+[AUTHORITY_SOURCE_PRESERVED] {
+  unitId: 'intent:validation-discovery',
+  source: 'verified_planning_context'
+}
+[AUTHORITY_SOURCE_UNCHANGED] {
+  unitId: 'intent:validation-discovery',
+  source: 'verified_planning_context',
+  note: 'Authority source unchanged through firewall approval'
+}
+[EXPLICIT_USER_AUTHORITY_DETECTED] {
+  candidateId: 'intent:generate_source:src/math.js',
+  type: 'WRITE',
+  source: 'workspace_authority',
+  targets: [ 'src/math.js' ]
+}
+[PATH_EXTENSION_PRESERVED] {
+  candidateId: 'intent:generate_source:src/math.js',
+  paths: [ 'src/math.js' ],
+  note: 'Extensions preserved exactly as specified'
+}
+[AUTHORITY_FIREWALL_ENTER] {
+  candidateId: 'intent:generate_source:src/math.js',
+  type: 'WRITE',
+  source: 'workspace_authority',
+  requestedKind: 'EXPLICIT_CREATE'
+}
+[AUTHORITY_SOURCE] {
+  candidateId: 'intent:generate_source:src/math.js',
+  source: 'workspace_authority',
+  approvedByFirewall: false
+}
+[PROTECTED_SCOPE_CHECK] {
+  candidateId: 'intent:generate_source:src/math.js',
+  targets: [ 'src/math.js' ],
+  hasProtectedViolation: false,
+  isExplicitRequest: true,
+  source: 'workspace_authority'
+}
+[PROTECTED_SCOPE_ALLOWED] {
+  candidateId: 'intent:generate_source:src/math.js',
+  targets: [ 'src/math.js' ],
+  reason: 'No protected file match'
+}
+[EXPLICIT_USER_PATH_APPROVED] {
+  candidateId: 'intent:generate_source:src/math.js',
+  targets: [ 'src/math.js' ],
+  approvalId: null
+}
+[AUTHORITY_VALID] {
+  candidateId: 'intent:generate_source:src/math.js',
+  source: 'workspace_authority',
+  approvalId: null
+}
+[AUTHORITY_APPROVED] {
+  candidateId: 'intent:generate_source:src/math.js',
+  source: 'workspace_authority',
+  approvalId: null
+}
+[EXECUTION_UNIT_APPROVED] {
+  candidateId: 'intent:generate_source:src/math.js',
+  source: 'workspace_authority',
+  approvalId: 'approval:3a622592-9330-417b-a41b-b77799f99c16'
+}
+[EXPLICIT_WRITE_APPROVED] {
+  unitId: 'intent:generate_source:src/math.js',
+  path: 'src/math.js',
+  source: 'workspace_authority'
+}
+[EXPLICIT_USER_AUTHORITY_DETECTED] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  type: 'WRITE',
+  source: 'workspace_authority',
+  targets: [ 'src/math.test.js' ]
+}
+[PATH_EXTENSION_PRESERVED] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  paths: [ 'src/math.test.js' ],
+  note: 'Extensions preserved exactly as specified'
+}
+[AUTHORITY_FIREWALL_ENTER] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  type: 'WRITE',
+  source: 'workspace_authority',
+  requestedKind: 'EXPLICIT_CREATE'
+}
+[AUTHORITY_SOURCE] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  source: 'workspace_authority',
+  approvedByFirewall: false
+}
+[PROTECTED_SCOPE_CHECK] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  targets: [ 'src/math.test.js' ],
+  hasProtectedViolation: false,
+  isExplicitRequest: true,
+  source: 'workspace_authority'
+}
+[PROTECTED_SCOPE_ALLOWED] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  targets: [ 'src/math.test.js' ],
+  reason: 'No protected file match'
+}
+[EXPLICIT_USER_PATH_APPROVED] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  targets: [ 'src/math.test.js' ],
+  approvalId: null
+}
+[AUTHORITY_VALID] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  source: 'workspace_authority',
+  approvalId: null
+}
+[AUTHORITY_APPROVED] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  source: 'workspace_authority',
+  approvalId: null
+}
+[EXECUTION_UNIT_APPROVED] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  source: 'workspace_authority',
+  approvalId: 'approval:d00ac390-61ee-4ff3-b18a-210048700ae7'
+}
+[EXPLICIT_WRITE_APPROVED] {
+  unitId: 'intent:generate_test:src/math.test.js',
+  path: 'src/math.test.js',
+  source: 'workspace_authority'
+}
+[EXPLICIT_USER_AUTHORITY_DETECTED] {
+  candidateId: 'intent:package_discovery:package.json',
+  type: 'READ',
+  source: 'workspace_authority',
+  targets: [ 'package.json' ]
+}
+[PATH_EXTENSION_PRESERVED] {
+  candidateId: 'intent:package_discovery:package.json',
+  paths: [ 'package.json' ],
+  note: 'Extensions preserved exactly as specified'
+}
+[AUTHORITY_FIREWALL_ENTER] {
+  candidateId: 'intent:package_discovery:package.json',
+  type: 'READ',
+  source: 'workspace_authority',
+  requestedKind: 'DISCOVER_IF_EXISTS'
+}
+[AUTHORITY_SOURCE] {
+  candidateId: 'intent:package_discovery:package.json',
+  source: 'workspace_authority',
+  approvedByFirewall: false
+}
+[PROTECTED_SCOPE_CHECK] {
+  candidateId: 'intent:package_discovery:package.json',
+  targets: [ 'package.json' ],
+  hasProtectedViolation: true,
+  isExplicitRequest: true,
+  source: 'workspace_authority'
+}
+[PROTECTED_SCOPE_ALLOWED] {
+  candidateId: 'intent:package_discovery:package.json',
+  targets: [ 'package.json' ],
+  reason: 'Explicit request bypasses protected scope'
+}
+[EXPLICIT_USER_PATH_APPROVED] {
+  candidateId: 'intent:package_discovery:package.json',
+  targets: [ 'package.json' ],
+  approvalId: null
+}
+[AUTHORITY_VALID] {
+  candidateId: 'intent:package_discovery:package.json',
+  source: 'workspace_authority',
+  approvalId: null
+}
+[AUTHORITY_APPROVED] {
+  candidateId: 'intent:package_discovery:package.json',
+  source: 'workspace_authority',
+  approvalId: null
+}
+[EXECUTION_UNIT_APPROVED] {
+  candidateId: 'intent:package_discovery:package.json',
+  source: 'workspace_authority',
+  approvalId: 'approval:e78de3f0-c8e2-490d-8d62-a9beeb894b7d'
+}
+[EXPLICIT_WRITE_APPROVED] {
+  unitId: 'intent:package_discovery:package.json',
+  path: 'package.json',
+  source: 'workspace_authority'
+}
+[EXECUTION_INPUT_GUARD_ENTER] {
+  unitId: 'intent:read-context',
+  unitType: 'READ',
+  path: null,
+  toolName: null
+}
+[EXECUTION_INPUT_ACCEPTED] {
+  unitId: 'intent:read-context',
+  unitType: 'READ',
+  path: null,
+  toolName: null
+}
+[EXECUTION_INPUT_GUARD_ENTER] {
+  unitId: 'intent:framework-discovery',
+  unitType: 'READ',
+  path: null,
+  toolName: null
+}
+[EXECUTION_INPUT_ACCEPTED] {
+  unitId: 'intent:framework-discovery',
+  unitType: 'READ',
+  path: null,
+  toolName: null
+}
+[EXECUTION_INPUT_GUARD_ENTER] {
+  unitId: 'intent:validation-discovery',
+  unitType: 'READ',
+  path: null,
+  toolName: null
+}
+[EXECUTION_INPUT_ACCEPTED] {
+  unitId: 'intent:validation-discovery',
+  unitType: 'READ',
+  path: null,
+  toolName: null
+}
+[EXECUTION_INPUT_GUARD_ENTER] {
+  unitId: 'intent:generate_source:src/math.js',
+  unitType: 'WRITE',
+  path: null,
+  toolName: null
+}
+[EXECUTION_INPUT_ACCEPTED] {
+  unitId: 'intent:generate_source:src/math.js',
+  unitType: 'WRITE',
+  path: null,
+  toolName: null
+}
+[EXECUTION_INPUT_GUARD_ENTER] {
+  unitId: 'intent:generate_test:src/math.test.js',
+  unitType: 'WRITE',
+  path: null,
+  toolName: null
+}
+[EXECUTION_INPUT_ACCEPTED] {
+  unitId: 'intent:generate_test:src/math.test.js',
+  unitType: 'WRITE',
+  path: null,
+  toolName: null
+}
+[EXECUTION_INPUT_GUARD_ENTER] {
+  unitId: 'intent:package_discovery:package.json',
+  unitType: 'READ',
+  path: null,
+  toolName: null
+}
+[EXECUTION_INPUT_ACCEPTED] {
+  unitId: 'intent:package_discovery:package.json',
+  unitType: 'READ',
+  path: null,
+  toolName: null
+}
+[EXECUTION_GRAPH_CLEAN] { unitCount: 6 }
+[EXECUTION_CONTRACT_CREATED] {
+  unitId: 'intent:read-context',
+  unitType: 'READ',
+  requiredFileCount: 0,
+  verifiedCommandCount: 0
+}
+[EXECUTION_CONTRACT_CREATED] {
+  unitId: 'intent:read-context',
+  unitType: 'READ',
+  requiredFileCount: 0,
+  verifiedCommandCount: 0
+}
+[AUTHORITY_FIREWALL_ENTER] {
+  candidateId: 'intent:read-context',
+  type: 'READ',
+  source: 'verified_planning_context',
+  requestedKind: 'RECOMMENDATION_ONLY'
+}
+[AUTHORITY_SOURCE] {
+  candidateId: 'intent:read-context',
+  source: 'verified_planning_context',
+  approvedByFirewall: true
+}
+[PROTECTED_SCOPE_CHECK] {
+  candidateId: 'intent:read-context',
+  targets: [],
+  hasProtectedViolation: false,
+  isExplicitRequest: false,
+  source: 'verified_planning_context'
+}
+[PROTECTED_SCOPE_ALLOWED] {
+  candidateId: 'intent:read-context',
+  targets: [],
+  reason: 'No protected file match'
+}
+[AUTHORITY_VALID] {
+  candidateId: 'intent:read-context',
+  source: 'verified_planning_context',
+  approvalId: 'approval:bfa0a891-6c02-4a82-8b04-738f3bbdb001'
+}
+[AUTHORITY_APPROVED] {
+  candidateId: 'intent:read-context',
+  source: 'verified_planning_context',
+  approvalId: 'approval:bfa0a891-6c02-4a82-8b04-738f3bbdb001'
+}
+[EXECUTION_UNIT_APPROVED] {
+  candidateId: 'intent:read-context',
+  source: 'verified_planning_context',
+  approvalId: 'approval:bfa0a891-6c02-4a82-8b04-738f3bbdb001'
+}
+[AUTHORITY_APPROVED] {
+  unitId: 'intent:read-context',
+  unitType: 'READ',
+  source: 'verified_planning_context'
+}
+[EXECUTION_UNIT_TO_TASKNODE] {
+  unitId: 'intent:read-context',
+  unitType: 'READ',
+  tool: 'READ_FILE',
+  requestedKind: null
+}
+[TASKNODE_CREATED] {
+  taskId: 'intent:read-context',
+  tool: 'READ_FILE',
+  requestedKind: null,
+  targetFiles: []
+}
+[EXECUTION_CONTRACT_CREATED] {
+  unitId: 'intent:framework-discovery',
+  unitType: 'READ',
+  requiredFileCount: 0,
+  verifiedCommandCount: 0
+}
+[AUTHORITY_FIREWALL_ENTER] {
+  candidateId: 'intent:framework-discovery',
+  type: 'READ',
+  source: 'verified_planning_context',
+  requestedKind: 'RECOMMENDATION_ONLY'
+}
+[AUTHORITY_SOURCE] {
+  candidateId: 'intent:framework-discovery',
+  source: 'verified_planning_context',
+  approvedByFirewall: true
+}
+[PROTECTED_SCOPE_CHECK] {
+  candidateId: 'intent:framework-discovery',
+  targets: [],
+  hasProtectedViolation: false,
+  isExplicitRequest: false,
+  source: 'verified_planning_context'
+}
+[PROTECTED_SCOPE_ALLOWED] {
+  candidateId: 'intent:framework-discovery',
+  targets: [],
+  reason: 'No protected file match'
+}
+[AUTHORITY_VALID] {
+  candidateId: 'intent:framework-discovery',
+  source: 'verified_planning_context',
+  approvalId: 'approval:3ffc1692-1932-4b74-869d-28fede2b3a8b'
+}
+[AUTHORITY_APPROVED] {
+  candidateId: 'intent:framework-discovery',
+  source: 'verified_planning_context',
+  approvalId: 'approval:3ffc1692-1932-4b74-869d-28fede2b3a8b'
+}
+[EXECUTION_UNIT_APPROVED] {
+  candidateId: 'intent:framework-discovery',
+  source: 'verified_planning_context',
+  approvalId: 'approval:3ffc1692-1932-4b74-869d-28fede2b3a8b'
+}
+[AUTHORITY_APPROVED] {
+  unitId: 'intent:framework-discovery',
+  unitType: 'READ',
+  source: 'verified_planning_context'
+}
+[EXECUTION_UNIT_TO_TASKNODE] {
+  unitId: 'intent:framework-discovery',
+  unitType: 'READ',
+  tool: 'READ_FILE',
+  requestedKind: null
+}
+[TASKNODE_CREATED] {
+  taskId: 'intent:framework-discovery',
+  tool: 'READ_FILE',
+  requestedKind: null,
+  targetFiles: []
+}
+[EXECUTION_CONTRACT_CREATED] {
+  unitId: 'intent:validation-discovery',
+  unitType: 'READ',
+  requiredFileCount: 0,
+  verifiedCommandCount: 0
+}
+[AUTHORITY_FIREWALL_ENTER] {
+  candidateId: 'intent:validation-discovery',
+  type: 'READ',
+  source: 'verified_planning_context',
+  requestedKind: 'RECOMMENDATION_ONLY'
+}
+[AUTHORITY_SOURCE] {
+  candidateId: 'intent:validation-discovery',
+  source: 'verified_planning_context',
+  approvedByFirewall: true
+}
+[PROTECTED_SCOPE_CHECK] {
+  candidateId: 'intent:validation-discovery',
+  targets: [],
+  hasProtectedViolation: false,
+  isExplicitRequest: false,
+  source: 'verified_planning_context'
+}
+[PROTECTED_SCOPE_ALLOWED] {
+  candidateId: 'intent:validation-discovery',
+  targets: [],
+  reason: 'No protected file match'
+}
+[AUTHORITY_VALID] {
+  candidateId: 'intent:validation-discovery',
+  source: 'verified_planning_context',
+  approvalId: 'approval:1d3be314-473c-454e-a61a-d8aa5b503bf4'
+}
+[AUTHORITY_APPROVED] {
+  candidateId: 'intent:validation-discovery',
+  source: 'verified_planning_context',
+  approvalId: 'approval:1d3be314-473c-454e-a61a-d8aa5b503bf4'
+}
+[EXECUTION_UNIT_APPROVED] {
+  candidateId: 'intent:validation-discovery',
+  source: 'verified_planning_context',
+  approvalId: 'approval:1d3be314-473c-454e-a61a-d8aa5b503bf4'
+}
+[AUTHORITY_APPROVED] {
+  unitId: 'intent:validation-discovery',
+  unitType: 'READ',
+  source: 'verified_planning_context'
+}
+[EXECUTION_UNIT_TO_TASKNODE] {
+  unitId: 'intent:validation-discovery',
+  unitType: 'READ',
+  tool: 'READ_FILE',
+  requestedKind: null
+}
+[TASKNODE_CREATED] {
+  taskId: 'intent:validation-discovery',
+  tool: 'READ_FILE',
+  requestedKind: null,
+  targetFiles: []
+}
+[EXECUTION_CONTRACT_CREATED] {
+  unitId: 'intent:generate_source:src/math.js',
+  unitType: 'WRITE',
+  requiredFileCount: 1,
+  verifiedCommandCount: 0
+}
+[EXPLICIT_USER_AUTHORITY_DETECTED] {
+  candidateId: 'intent:generate_source:src/math.js',
+  type: 'WRITE',
+  source: 'workspace_authority',
+  targets: [ 'src/math.js' ]
+}
+[PATH_EXTENSION_PRESERVED] {
+  candidateId: 'intent:generate_source:src/math.js',
+  paths: [ 'src/math.js' ],
+  note: 'Extensions preserved exactly as specified'
+}
+[AUTHORITY_FIREWALL_ENTER] {
+  candidateId: 'intent:generate_source:src/math.js',
+  type: 'WRITE',
+  source: 'workspace_authority',
+  requestedKind: 'EXPLICIT_CREATE'
+}
+[AUTHORITY_SOURCE] {
+  candidateId: 'intent:generate_source:src/math.js',
+  source: 'workspace_authority',
+  approvedByFirewall: true
+}
+[PROTECTED_SCOPE_CHECK] {
+  candidateId: 'intent:generate_source:src/math.js',
+  targets: [ 'src/math.js' ],
+  hasProtectedViolation: false,
+  isExplicitRequest: true,
+  source: 'workspace_authority'
+}
+[PROTECTED_SCOPE_ALLOWED] {
+  candidateId: 'intent:generate_source:src/math.js',
+  targets: [ 'src/math.js' ],
+  reason: 'No protected file match'
+}
+[EXPLICIT_USER_PATH_APPROVED] {
+  candidateId: 'intent:generate_source:src/math.js',
+  targets: [ 'src/math.js' ],
+  approvalId: 'approval:3a622592-9330-417b-a41b-b77799f99c16'
+}
+[AUTHORITY_VALID] {
+  candidateId: 'intent:generate_source:src/math.js',
+  source: 'workspace_authority',
+  approvalId: 'approval:3a622592-9330-417b-a41b-b77799f99c16'
+}
+[AUTHORITY_APPROVED] {
+  candidateId: 'intent:generate_source:src/math.js',
+  source: 'workspace_authority',
+  approvalId: 'approval:3a622592-9330-417b-a41b-b77799f99c16'
+}
+[EXECUTION_UNIT_APPROVED] {
+  candidateId: 'intent:generate_source:src/math.js',
+  source: 'workspace_authority',
+  approvalId: 'approval:3a622592-9330-417b-a41b-b77799f99c16'
+}
+[AUTHORITY_APPROVED] {
+  unitId: 'intent:generate_source:src/math.js',
+  unitType: 'WRITE',
+  source: 'workspace_authority'
+}
+[EXECUTION_UNIT_TO_TASKNODE] {
+  unitId: 'intent:generate_source:src/math.js',
+  unitType: 'WRITE',
+  tool: 'WRITE_FILE',
+  requestedKind: 'EXPLICIT_CREATE'
+}
+[TASKNODE_CREATED] {
+  taskId: 'intent:generate_source:src/math.js',
+  tool: 'WRITE_FILE',
+  requestedKind: 'EXPLICIT_CREATE',
+  targetFiles: [ 'src/math.js' ]
+}
+[WRITE_CANDIDATE_PROMOTED] {
+  unitId: 'intent:generate_source:src/math.js',
+  path: 'src/math.js',
+  tool: 'WRITE_FILE',
+  source: 'workspace_authority',
+  plannedNewFile: false
+}
+[EXECUTION_CONTRACT_CREATED] {
+  unitId: 'intent:generate_test:src/math.test.js',
+  unitType: 'WRITE',
+  requiredFileCount: 1,
+  verifiedCommandCount: 0
+}
+[EXPLICIT_USER_AUTHORITY_DETECTED] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  type: 'WRITE',
+  source: 'workspace_authority',
+  targets: [ 'src/math.test.js' ]
+}
+[PATH_EXTENSION_PRESERVED] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  paths: [ 'src/math.test.js' ],
+  note: 'Extensions preserved exactly as specified'
+}
+[AUTHORITY_FIREWALL_ENTER] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  type: 'WRITE',
+  source: 'workspace_authority',
+  requestedKind: 'EXPLICIT_CREATE'
+}
+[AUTHORITY_SOURCE] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  source: 'workspace_authority',
+  approvedByFirewall: true
+}
+[PROTECTED_SCOPE_CHECK] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  targets: [ 'src/math.test.js' ],
+  hasProtectedViolation: false,
+  isExplicitRequest: true,
+  source: 'workspace_authority'
+}
+[PROTECTED_SCOPE_ALLOWED] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  targets: [ 'src/math.test.js' ],
+  reason: 'No protected file match'
+}
+[EXPLICIT_USER_PATH_APPROVED] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  targets: [ 'src/math.test.js' ],
+  approvalId: 'approval:d00ac390-61ee-4ff3-b18a-210048700ae7'
+}
+[AUTHORITY_VALID] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  source: 'workspace_authority',
+  approvalId: 'approval:d00ac390-61ee-4ff3-b18a-210048700ae7'
+}
+[AUTHORITY_APPROVED] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  source: 'workspace_authority',
+  approvalId: 'approval:d00ac390-61ee-4ff3-b18a-210048700ae7'
+}
+[EXECUTION_UNIT_APPROVED] {
+  candidateId: 'intent:generate_test:src/math.test.js',
+  source: 'workspace_authority',
+  approvalId: 'approval:d00ac390-61ee-4ff3-b18a-210048700ae7'
+}
+[AUTHORITY_APPROVED] {
+  unitId: 'intent:generate_test:src/math.test.js',
+  unitType: 'WRITE',
+  source: 'workspace_authority'
+}
+[EXECUTION_UNIT_TO_TASKNODE] {
+  unitId: 'intent:generate_test:src/math.test.js',
+  unitType: 'WRITE',
+  tool: 'WRITE_FILE',
+  requestedKind: 'EXPLICIT_CREATE'
+}
+[TASKNODE_CREATED] {
+  taskId: 'intent:generate_test:src/math.test.js',
+  tool: 'WRITE_FILE',
+  requestedKind: 'EXPLICIT_CREATE',
+  targetFiles: [ 'src/math.test.js' ]
+}
+[WRITE_CANDIDATE_PROMOTED] {
+  unitId: 'intent:generate_test:src/math.test.js',
+  path: 'src/math.test.js',
+  tool: 'WRITE_FILE',
+  source: 'workspace_authority',
+  plannedNewFile: false
+}
+[EXECUTION_CONTRACT_CREATED] {
+  unitId: 'intent:package_discovery:package.json',
+  unitType: 'READ',
+  requiredFileCount: 1,
+  verifiedCommandCount: 0
+}
+[EXPLICIT_USER_AUTHORITY_DETECTED] {
+  candidateId: 'intent:package_discovery:package.json',
+  type: 'READ',
+  source: 'workspace_authority',
+  targets: [ 'package.json' ]
+}
+[PATH_EXTENSION_PRESERVED] {
+  candidateId: 'intent:package_discovery:package.json',
+  paths: [ 'package.json' ],
+  note: 'Extensions preserved exactly as specified'
+}
+[AUTHORITY_FIREWALL_ENTER] {
+  candidateId: 'intent:package_discovery:package.json',
+  type: 'READ',
+  source: 'workspace_authority',
+  requestedKind: 'DISCOVER_IF_EXISTS'
+}
+[AUTHORITY_SOURCE] {
+  candidateId: 'intent:package_discovery:package.json',
+  source: 'workspace_authority',
+  approvedByFirewall: true
+}
+[PROTECTED_SCOPE_CHECK] {
+  candidateId: 'intent:package_discovery:package.json',
+  targets: [ 'package.json' ],
+  hasProtectedViolation: true,
+  isExplicitRequest: true,
+  source: 'workspace_authority'
+}
+[PROTECTED_SCOPE_ALLOWED] {
+  candidateId: 'intent:package_discovery:package.json',
+  targets: [ 'package.json' ],
+  reason: 'Explicit request bypasses protected scope'
+}
+[EXPLICIT_USER_PATH_APPROVED] {
+  candidateId: 'intent:package_discovery:package.json',
+  targets: [ 'package.json' ],
+  approvalId: 'approval:e78de3f0-c8e2-490d-8d62-a9beeb894b7d'
+}
+[AUTHORITY_VALID] {
+  candidateId: 'intent:package_discovery:package.json',
+  source: 'workspace_authority',
+  approvalId: 'approval:e78de3f0-c8e2-490d-8d62-a9beeb894b7d'
+}
+[AUTHORITY_APPROVED] {
+  candidateId: 'intent:package_discovery:package.json',
+  source: 'workspace_authority',
+  approvalId: 'approval:e78de3f0-c8e2-490d-8d62-a9beeb894b7d'
+}
+[EXECUTION_UNIT_APPROVED] {
+  candidateId: 'intent:package_discovery:package.json',
+  source: 'workspace_authority',
+  approvalId: 'approval:e78de3f0-c8e2-490d-8d62-a9beeb894b7d'
+}
+[AUTHORITY_APPROVED] {
+  unitId: 'intent:package_discovery:package.json',
+  unitType: 'READ',
+  source: 'workspace_authority'
+}
+[EXECUTION_UNIT_TO_TASKNODE] {
+  unitId: 'intent:package_discovery:package.json',
+  unitType: 'READ',
+  tool: 'READ_FILE',
+  requestedKind: 'DISCOVER_IF_EXISTS'
+}
+[TASKNODE_CREATED] {
+  taskId: 'intent:package_discovery:package.json',
+  tool: 'READ_FILE',
+  requestedKind: 'DISCOVER_IF_EXISTS',
+  targetFiles: [ 'package.json' ]
+}
+[TASK_GRAPH_FINALIZING] { taskCount: 6 }
+[TASK_GRAPH_FINALIZED] { taskCount: 6 }
+[EXECUTION_UNIT_STARTED] { id: 'intent:read-context', type: 'READ', dependencies: [] }
+[EXECUTION_UNITS_CREATED] { plannerDerivedWrites: 0, explicitWrites: 2, workspaceWrites: 2 }
+[EXECUTION_GRAPH_CREATED] {
+  graphId: 'd3f4497c-5f1a-4543-b919-74e1d82e707b',
+  unitCount: 6,
+  readyCount: 1
+}
+[EXECUTION_GRAPH_GENERATED] {
+  graphId: 'd3f4497c-5f1a-4543-b919-74e1d82e707b',
+  unitCount: 6,
+  levelCount: 4
+}
+[EXECUTION_GRAPH_READY] { graphId: 'd3f4497c-5f1a-4543-b919-74e1d82e707b', readyCount: 1 }
+[TASK_NODE_ADDED] {
+  id: 'intent:read-context',
+  kind: 'ANALYSIS',
+  goal: 'Read workspace and objective context before semantic discovery',
+  dependencies: []
+}
+[PLANNER_COST_ESTIMATE] {
+  taskId: 'intent:read-context',
+  tool: 'READ_FILE',
+  score: 3,
+  category: 'LOW',
+  estimates: {
+    time: 'LOW',
+    tokens: 'LOW',
+    io: 'LOW',
+    cpu: 'LOW',
+    memory: 'LOW',
+    risk: 'LOW'
+  }
+}
+[PLANNER_COST_BREAKDOWN] {
+  taskId: 'intent:read-context',
+  tool: 'READ_FILE',
+  time: 'LOW',
+  tokens: 'LOW',
+  io: 'LOW',
+  cpu: 'LOW',
+  memory: 'LOW',
+  risk: 'LOW',
+  score: 3,
+  category: 'LOW'
+}
+[TASK_NODE_ADDED] {
+  id: 'intent:framework-discovery',
+  kind: 'ANALYSIS',
+  goal: 'Infer the workspace framework and structural constraints',
+  dependencies: [ 'intent:read-context' ]
+}
+[TASK_EDGE_ADDED] { from: 'intent:read-context', to: 'intent:framework-discovery' }
+[PLANNER_COST_ESTIMATE] {
+  taskId: 'intent:framework-discovery',
+  tool: 'READ_FILE',
+  score: 3,
+  category: 'LOW',
+  estimates: {
+    time: 'LOW',
+    tokens: 'LOW',
+    io: 'LOW',
+    cpu: 'LOW',
+    memory: 'LOW',
+    risk: 'LOW'
+  }
+}
+[PLANNER_COST_BREAKDOWN] {
+  taskId: 'intent:framework-discovery',
+  tool: 'READ_FILE',
+  time: 'LOW',
+  tokens: 'LOW',
+  io: 'LOW',
+  cpu: 'LOW',
+  memory: 'LOW',
+  risk: 'LOW',
+  score: 3,
+  category: 'LOW'
+}
+[TASK_NODE_ADDED] {
+  id: 'intent:validation-discovery',
+  kind: 'ANALYSIS',
+  goal: 'Determine validation commands and guardrails',
+  dependencies: [ 'intent:framework-discovery' ]
+}
+[TASK_EDGE_ADDED] {
+  from: 'intent:framework-discovery',
+  to: 'intent:validation-discovery'
+}
+[PLANNER_COST_ESTIMATE] {
+  taskId: 'intent:validation-discovery',
+  tool: 'READ_FILE',
+  score: 3,
+  category: 'LOW',
+  estimates: {
+    time: 'LOW',
+    tokens: 'LOW',
+    io: 'LOW',
+    cpu: 'LOW',
+    memory: 'LOW',
+    risk: 'LOW'
+  }
+}
+[PLANNER_COST_BREAKDOWN] {
+  taskId: 'intent:validation-discovery',
+  tool: 'READ_FILE',
+  time: 'LOW',
+  tokens: 'LOW',
+  io: 'LOW',
+  cpu: 'LOW',
+  memory: 'LOW',
+  risk: 'LOW',
+  score: 3,
+  category: 'LOW'
+}
+[TASK_NODE_ADDED] {
+  id: 'intent:generate_source:src/math.js',
+  kind: 'GENERATE_CONTENT',
+  goal: 'Generate src/math.js',
+  dependencies: [ 'intent:validation-discovery' ]
+}
+[TASK_EDGE_ADDED] {
+  from: 'intent:validation-discovery',
+  to: 'intent:generate_source:src/math.js'
+}
+[PLANNER_COST_ESTIMATE] {
+  taskId: 'intent:generate_source:src/math.js',
+  tool: 'WRITE_FILE',
+  score: 7,
+  category: 'MEDIUM',
+  estimates: {
+    time: 'MEDIUM',
+    tokens: 'MEDIUM',
+    io: 'LOW',
+    cpu: 'LOW',
+    memory: 'MEDIUM',
+    risk: 'MEDIUM'
+  }
+}
+[PLANNER_COST_BREAKDOWN] {
+  taskId: 'intent:generate_source:src/math.js',
+  tool: 'WRITE_FILE',
+  time: 'MEDIUM',
+  tokens: 'MEDIUM',
+  io: 'LOW',
+  cpu: 'LOW',
+  memory: 'MEDIUM',
+  risk: 'MEDIUM',
+  score: 7,
+  category: 'MEDIUM'
+}
+[TASK_NODE_ADDED] {
+  id: 'intent:generate_test:src/math.test.js',
+  kind: 'GENERATE_CONTENT',
+  goal: 'Generate src/math.test.js',
+  dependencies: [ 'intent:validation-discovery' ]
+}
+[TASK_EDGE_ADDED] {
+  from: 'intent:validation-discovery',
+  to: 'intent:generate_test:src/math.test.js'
+}
+[PLANNER_COST_ESTIMATE] {
+  taskId: 'intent:generate_test:src/math.test.js',
+  tool: 'WRITE_FILE',
+  score: 7,
+  category: 'MEDIUM',
+  estimates: {
+    time: 'MEDIUM',
+    tokens: 'MEDIUM',
+    io: 'LOW',
+    cpu: 'LOW',
+    memory: 'MEDIUM',
+    risk: 'MEDIUM'
+  }
+}
+[PLANNER_COST_BREAKDOWN] {
+  taskId: 'intent:generate_test:src/math.test.js',
+  tool: 'WRITE_FILE',
+  time: 'MEDIUM',
+  tokens: 'MEDIUM',
+  io: 'LOW',
+  cpu: 'LOW',
+  memory: 'MEDIUM',
+  risk: 'MEDIUM',
+  score: 7,
+  category: 'MEDIUM'
+}
+[TASK_NODE_ADDED] {
+  id: 'intent:package_discovery:package.json',
+  kind: 'ANALYSIS',
+  goal: 'Generate package.json',
+  dependencies: [ 'intent:validation-discovery' ]
+}
+[TASK_EDGE_ADDED] {
+  from: 'intent:validation-discovery',
+  to: 'intent:package_discovery:package.json'
+}
+[PLANNER_COST_ESTIMATE] {
+  taskId: 'intent:package_discovery:package.json',
+  tool: 'READ_FILE',
+  score: 3,
+  category: 'LOW',
+  estimates: {
+    time: 'LOW',
+    tokens: 'LOW',
+    io: 'LOW',
+    cpu: 'LOW',
+    memory: 'LOW',
+    risk: 'LOW'
+  }
+}
+[PLANNER_COST_BREAKDOWN] {
+  taskId: 'intent:package_discovery:package.json',
+  tool: 'READ_FILE',
+  time: 'LOW',
+  tokens: 'LOW',
+  io: 'LOW',
+  cpu: 'LOW',
+  memory: 'LOW',
+  risk: 'LOW',
+  score: 3,
+  category: 'LOW'
+}
+[DEPENDENCY_READY] {
+  id: 'intent:read-context',
+  kind: 'ANALYSIS',
+  goal: 'Read workspace and objective context before semantic discovery'
+}
+[PLANNER_DEPENDENCY_STATUS] { ready: 1, blocked: 0 }
+[TASK_GRAPH_FINALIZING] { nodes: 6 }
+[TASK_GRAPH_NODE_COUNT] { nodes: 6 }
+[TASK_GRAPH_CREATED] { nodes: 6 }
+[TASK_GRAPH_FINALIZED] { nodes: 6 }
+[GRAPH_SYNC_COMPLETE] { nodes: 6 }
+[PLANNER_TOTAL_COST] { totalScore: 26, taskCount: 6, avgScore: 4, category: 'MEDIUM' }
+[EXECUTION_MEMORY_LOOKUP] {
+  executionKey: 'READ_FILE:@G:/langtuvn/storage/workspaces/TEST',
+  tool: 'READ_FILE',
+  status: 'NOT_EXECUTED'
+}
+[EXECUTION_MEMORY_LOOKUP] {
+  executionKey: 'READ_FILE:@G:/langtuvn/storage/workspaces/TEST',
+  tool: 'READ_FILE',
+  status: 'NOT_EXECUTED'
+}
+[PLANNER_NEXT] {
+  id: 'intent:read-context',
+  kind: 'ANALYSIS',
+  goal: 'Read workspace and objective context before semantic discovery',
+  priority: 50
+}
+[PlannerPriority] ready=1 selected=READ_FILE priority=50
+[PLANNER_EXECUTION_METADATA_NORMALIZED] {
+  plannerReadFiles: [ 'package.json' ],
+  plannerWriteFiles: [ 'src/math.js', 'src/math.test.js' ],
+  plannerRunCommands: [],
+  plannerProtectedFiles: [ 'package.json' ]
+}
+[TASK CLASSIFICATION] {
+  taskType: 'coding',
+  matchedKeywords: {
+    qa: [],
+    read_only: [ 'read', 'show', 'inspect', 'do not modify' ],
+    coding: [ 'add', 'modify', 'create', 'implement' ]
+  },
+  requestedFiles: [ 'src/math.js', 'src/math.test.js', 'package.json' ]
+}
+[LOCAL_MODEL_MODE] { value: true, promptStyle: 'single_action' }
+[KNOWLEDGE_GRAPH_START] {
+  workspaceRoot: 'G:\\langtuvn\\storage\\workspaces\\TEST',
+  fileCount: 0
+}
+[KNOWLEDGE_GRAPH_START] {
+  workspaceRoot: 'G:\\langtuvn\\storage\\workspaces\\TEST',
+  fileCount: 0
+}
+[KNOWLEDGE_GRAPH_COMPLETE] { nodeCount: 0, edgeCount: 0 }
+[KNOWLEDGE_GRAPH_COMPLETE] { nodeCount: 0, edgeCount: 0 }
+[runAgentLoop] start workspaceRoot=G:\langtuvn\storage\workspaces\TEST maxSteps=30 plan=free criteria=yes
+[runAgentLoop] conversation messages=2 initialToolCalls=0
+[runAgentLoop] step 1/30 conversation=5 toolCalls=0
+[EXECUTION_MEMORY_LOOKUP] {
+  executionKey: 'READ_FILE:@G:/langtuvn/storage/workspaces/TEST',
+  tool: 'READ_FILE',
+  status: 'NOT_EXECUTED'
+}
+[EXECUTION_MEMORY_LOOKUP] {
+  executionKey: 'READ_FILE:@G:/langtuvn/storage/workspaces/TEST',
+  tool: 'READ_FILE',
+  status: 'NOT_EXECUTED'
+}
+[PLANNER_NEXT] {
+  id: 'intent:read-context',
+  kind: 'ANALYSIS',
+  goal: 'Read workspace and objective context before semantic discovery',
+  priority: 50
+}
+[PlannerPriority] ready=1 selected=READ_FILE priority=50
+[EXECUTION_MEMORY_LOOKUP] {
+  executionKey: 'READ_FILE:@G:/langtuvn/storage/workspaces/TEST',
+  tool: 'READ_FILE',
+  status: 'NOT_EXECUTED'
+}
+[EXECUTION_MEMORY_LOOKUP] {
+  executionKey: 'READ_FILE:@G:/langtuvn/storage/workspaces/TEST',
+  tool: 'READ_FILE',
+  status: 'NOT_EXECUTED'
+}
+[PLANNER_NEXT] {
+  id: 'intent:read-context',
+  kind: 'ANALYSIS',
+  goal: 'Read workspace and objective context before semantic discovery',
+  priority: 50
+}
+[PlannerPriority] ready=1 selected=READ_FILE priority=50
+[PLANNER_DETERMINISTIC_FALLBACK] {
+  taskId: 'intent:read-context',
+  tool: 'READ_FILE',
+  reason: 'Missing required args for READ_FILE'
+}
+[runAgentLoop] step 0 calling generateResponse ...
+[AgentRun] calling provider adapter.run provider=llamacpp model=qwen2.5-coder messages=5
+[PROVIDER_HEALTH_OK] {
+  healthy: true,
+  provider: 'llamacpp',
+  model: 'qwen2.5-coder',
+  reason: null
+}
+[PROVIDER_SELECTED] {
+  provider: 'llamacpp',
+  model: 'qwen2.5-coder',
+  purpose: 'code_generation'
+}
+[PROVIDER_PROMPT_POLICY_APPLIED] {
+  provider: 'llamacpp',
+  isLocal: true,
+  purpose: 'code_generation',
+  compacted: true,
+  responseFormat: null,
+  promptLengthBefore: 0,
+  promptLengthAfter: 0,
+  messageCount: 5
+}
+[PROVIDER_TOKEN_BUDGET_RESOLVED] {
+  provider: 'llamacpp',
+  model: 'qwen2.5-coder',
+  purpose: 'code_generation',
+  requestedMaxTokens: 4096,
+  effectiveMaxTokens: 4096,
+  source: 'local_provider'
+}
+[PROVIDER_TIMEOUT_POLICY] {
+  provider: 'llamacpp',
+  purpose: 'code_generation',
+  timeoutMs: 180000,
+  source: 'request'
+}
+[PROVIDER_TOKEN_BUDGET_RESOLVED] {
+  provider: 'llamacpp',
+  model: 'qwen2.5-coder',
+  requestedMaxTokens: 4096,
+  effectiveMaxTokens: 4096,
+  source: 'requested'
+}
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
+[REQ] GET /api/ai/agent-runs/6a47e114be50826be0741030
